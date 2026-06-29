@@ -13,7 +13,7 @@ import sys
 import threading
 import traceback
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import date, datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -288,6 +288,7 @@ class ReceiptItem:
     status: str = "Empty"
     crop_box: Optional[List[float]] = None
     rotation_degrees: int = 0
+    receipt_images: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -304,6 +305,35 @@ class BankStatementItem:
     status: str = "Needs AI"
     crop_box: Optional[List[float]] = None
     rotation_degrees: int = 0
+
+
+def attachment_from_item(item: Any) -> Dict[str, Any]:
+    return {
+        "id": getattr(item, "item_id", uuid.uuid4().hex),
+        "path": getattr(item, "path", ""),
+        "filename": getattr(item, "filename", ""),
+        "source_path": getattr(item, "source_path", ""),
+        "source_page": getattr(item, "source_page", ""),
+        "crop_box": copy.deepcopy(getattr(item, "crop_box", None)),
+        "rotation_degrees": normalize_rotation(getattr(item, "rotation_degrees", 0)),
+    }
+
+
+def normalize_attachment(raw: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return None
+    path = str(raw.get("path") or "").strip()
+    if not path:
+        return None
+    return {
+        "id": str(raw.get("id") or uuid.uuid4().hex),
+        "path": path,
+        "filename": str(raw.get("filename") or Path(path).name),
+        "source_path": str(raw.get("source_path") or ""),
+        "source_page": str(raw.get("source_page") or ""),
+        "crop_box": raw.get("crop_box") if isinstance(raw.get("crop_box"), list) else None,
+        "rotation_degrees": normalize_rotation(raw.get("rotation_degrees", 0)),
+    }
 
 
 def appdata_daily_logger_key_file() -> Optional[Path]:
@@ -863,6 +893,112 @@ def resize_excel_image(
     return img
 
 
+def ensure_receipt_images(item: ReceiptItem) -> List[Dict[str, Any]]:
+    normalized = [attachment for attachment in (normalize_attachment(raw) for raw in item.receipt_images) if attachment]
+    if not normalized and item.path:
+        normalized = [attachment_from_item(item)]
+    item.receipt_images = normalized
+    if normalized:
+        primary = normalized[0]
+        item.path = primary["path"]
+        item.filename = primary["filename"]
+        item.source_path = primary.get("source_path", "")
+        item.source_page = primary.get("source_page", "")
+        item.crop_box = primary.get("crop_box")
+        item.rotation_degrees = normalize_rotation(primary.get("rotation_degrees", 0))
+    return item.receipt_images
+
+
+def attachment_file_key(attachment: Dict[str, Any]) -> Tuple[str, str]:
+    return selected_file_key(
+        Path(str(attachment.get("path") or "")),
+        str(attachment.get("source_path") or ""),
+        str(attachment.get("source_page") or ""),
+    )
+
+
+def merge_attachment_lists(
+    target: List[Dict[str, Any]],
+    source: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    seen = {attachment_file_key(attachment) for attachment in target}
+    for attachment in source:
+        key = attachment_file_key(attachment)
+        if key in seen:
+            continue
+        target.append(copy.deepcopy(attachment))
+        seen.add(key)
+    return target
+
+
+def prepare_attachment_image_file(attachment: Dict[str, Any]) -> Path:
+    return prepare_receipt_image_file(
+        Path(str(attachment.get("path") or "")),
+        attachment.get("crop_box"),
+        attachment.get("rotation_degrees", 0),
+    )
+
+
+def prepare_attachment_contact_sheet(
+    attachments: List[Dict[str, Any]],
+    max_width: int,
+    max_height: int,
+) -> Optional[Path]:
+    if Image is None:
+        return None
+    normalized = [attachment for attachment in (normalize_attachment(raw) for raw in attachments) if attachment]
+    if not normalized:
+        return None
+    if len(normalized) == 1:
+        return prepare_attachment_image_file(normalized[0])
+    target_dir = WORK_DIR / "prepared_images"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    prepared_images = []
+    for attachment in normalized:
+        path = Path(str(attachment.get("path") or ""))
+        if not path.exists():
+            continue
+        prepared = prepare_attachment_image_file(attachment)
+        with Image.open(prepared) as img:
+            prepared_images.append(img.convert("RGB").copy())
+    if not prepared_images:
+        return None
+    cols = min(2, len(prepared_images))
+    rows = (len(prepared_images) + cols - 1) // cols
+    gutter = 8
+    cell_width = max(1, (max_width - gutter * (cols - 1)) // cols)
+    cell_height = max(1, (max_height - gutter * (rows - 1)) // rows)
+    sheet = Image.new("RGB", (max_width, max_height), "white")
+    for index, img in enumerate(prepared_images):
+        tile = img.copy()
+        tile.thumbnail((cell_width, cell_height))
+        col = index % cols
+        row = index // cols
+        x = col * (cell_width + gutter) + max(0, (cell_width - tile.width) // 2)
+        y = row * (cell_height + gutter) + max(0, (cell_height - tile.height) // 2)
+        sheet.paste(tile, (x, y))
+    target = target_dir / f"{uuid.uuid4().hex}_contact.png"
+    sheet.save(target, "PNG")
+    return target
+
+
+def resize_attachment_contact_sheet(
+    attachments: List[Dict[str, Any]],
+    max_width: int,
+    max_height: int,
+) -> Optional[Any]:
+    contact_path = prepare_attachment_contact_sheet(attachments, max_width, max_height)
+    if contact_path is None:
+        return None
+    img = XLImage(str(contact_path))
+    with Image.open(contact_path) as pil_img:
+        width, height = pil_img.size
+    scale = min(max_width / max(1, width), max_height / max(1, height), 1.0)
+    img.width = max(1, int(width * scale))
+    img.height = max(1, int(height * scale))
+    return img
+
+
 def clear_images(sheet: Any) -> None:
     try:
         sheet._images = []
@@ -963,30 +1099,22 @@ def export_usa(
             receipts_ws[f"{col}{row}"] = None
     receipts_ws.column_dimensions["D"].width = 38
     receipts_ws.column_dimensions["E"].width = 26
-    proof_by_receipt_id: Dict[str, BankStatementItem] = {}
+    proof_by_receipt_id: Dict[str, List[Dict[str, Any]]] = {}
     for bank_item in bank_items or []:
-        if bank_item.matched_receipt_id and bank_item.matched_receipt_id not in proof_by_receipt_id:
-            proof_by_receipt_id[bank_item.matched_receipt_id] = bank_item
+        if bank_item.matched_receipt_id:
+            proof_by_receipt_id.setdefault(bank_item.matched_receipt_id, []).append(attachment_from_item(bank_item))
     for index, item in enumerate(items, start=1):
         row = index + 1
         receipts_ws[f"A{row}"] = index
         receipts_ws[f"B{row}"] = excel_date_formula_or_value(item.date)
         receipts_ws[f"C{row}"] = safe_float(item.amount)
         receipts_ws.row_dimensions[row].height = 126
-        image_path = Path(item.path)
-        if image_path.exists():
-            receipts_ws.add_image(
-                resize_excel_image(image_path, 260, 150, item.crop_box, item.rotation_degrees),
-                f"D{row}",
-            )
-        proof_item = proof_by_receipt_id.get(item.item_id)
-        if proof_item is not None:
-            proof_path = Path(proof_item.path)
-            if proof_path.exists():
-                receipts_ws.add_image(
-                    resize_excel_image(proof_path, 180, 150, proof_item.crop_box, proof_item.rotation_degrees),
-                    f"E{row}",
-                )
+        receipt_image = resize_attachment_contact_sheet(ensure_receipt_images(item), 260, 150)
+        if receipt_image is not None:
+            receipts_ws.add_image(receipt_image, f"D{row}")
+        proof_image = resize_attachment_contact_sheet(proof_by_receipt_id.get(item.item_id, []), 180, 150)
+        if proof_image is not None:
+            receipts_ws.add_image(proof_image, f"E{row}")
 
     wb.save(output_path)
 
@@ -1172,16 +1300,20 @@ class ReimbursementHelperApp:
         self.bank_items: List[BankStatementItem] = []
         self.selected_index: Optional[int] = None
         self.selected_bank_index: Optional[int] = None
+        self.bank_tree: Optional[Any] = None
         self.photo: Optional[Any] = None
         self.preview_canvas: Optional[Any] = None
         self.revert_crop_btn: Optional[Any] = None
         self.rotate_left_btn: Optional[Any] = None
         self.rotate_right_btn: Optional[Any] = None
-        self.bank_frame: Optional[Any] = None
-        self.bank_tree: Optional[Any] = None
-        self.move_to_bank_btn: Optional[Any] = None
-        self._drag_receipt_index: Optional[int] = None
-        self.preview_kind = "receipt"
+        self.delete_screenshot_btn: Optional[Any] = None
+        self.swap_proof_btn: Optional[Any] = None
+        self.unlink_proof_btn: Optional[Any] = None
+        self.select_payment_proof_btn: Optional[Any] = None
+        self.selected_attachment_kind = "receipt"
+        self.selected_attachment_index = 0
+        self.preview_tiles: List[Dict[str, Any]] = []
+        self.preview_photos: List[Any] = []
         self._preview_image_bounds: Tuple[int, int, int, int] = (0, 0, 0, 0)
         self._preview_original_size: Tuple[int, int] = (0, 0)
         self._crop_handle_centers: Dict[str, Tuple[float, float]] = {}
@@ -1247,6 +1379,12 @@ class ReimbursementHelperApp:
         form_combo.bind("<<ComboboxSelected>>", lambda _event: self._on_form_version_changed())
         self.upload_folder_btn = ttk.Button(controls, text="Select Files", command=self.select_files)
         self.upload_folder_btn.pack(side="left", padx=4)
+        self.select_payment_proof_btn = ttk.Button(
+            controls,
+            text="Select Payment Proof",
+            command=self.select_payment_proofs,
+        )
+        self.select_payment_proof_btn.pack(side="left", padx=4)
         self.generate_details_btn = ttk.Button(controls, text="Generate Details", command=self.generate_selected_details)
         self.generate_details_btn.pack(side="left", padx=4)
         self.generate_all_btn = ttk.Button(controls, text="Generate All", command=self.generate_all_details)
@@ -1288,18 +1426,12 @@ class ReimbursementHelperApp:
         self.tree.column("amount", width=70, stretch=False)
         self.tree.pack(fill="both", expand=True)
         self.tree.bind("<<TreeviewSelect>>", self._on_tree_select)
-        self.tree.bind("<ButtonPress-1>", self._on_receipt_drag_start)
-        self.tree.bind("<ButtonRelease-1>", self._on_receipt_drag_release, add="+")
+        self.tree.bind("<Delete>", self.remove_selected)
+        self.tree.bind("<BackSpace>", self.remove_selected)
         left_buttons = ttk.Frame(left, style="Panel.TFrame")
         left_buttons.pack(fill="x", pady=(10, 0))
         ttk.Button(left_buttons, text="Remove", command=self.remove_selected).pack(side="left")
         ttk.Button(left_buttons, text="Clear", command=self.clear_all).pack(side="left", padx=(8, 0))
-        self.move_to_bank_btn = ttk.Button(
-            left_buttons,
-            text="Move to bank statement",
-            command=self.move_selected_receipts_to_bank,
-        )
-        self.move_to_bank_btn.pack(side="left", padx=(8, 0))
 
         middle = ttk.Frame(manager, style="Panel.TFrame", padding=(10, 0, 0, 0))
         middle.grid(row=1, column=1, sticky="nsew")
@@ -1350,8 +1482,7 @@ class ReimbursementHelperApp:
 
         right = ttk.Frame(body, style="Panel.TFrame", padding=12)
         right.grid(row=0, column=1, sticky="nsew")
-        right.grid_rowconfigure(1, weight=3)
-        right.grid_rowconfigure(2, weight=1)
+        right.grid_rowconfigure(1, weight=1)
         right.grid_columnconfigure(0, weight=1)
         preview_header = ttk.Frame(right, style="Panel.TFrame")
         preview_header.grid(row=0, column=0, sticky="ew")
@@ -1373,6 +1504,27 @@ class ReimbursementHelperApp:
         self.rotate_right_btn.grid(row=0, column=2, sticky="e", padx=(0, 6))
         self.revert_crop_btn = ttk.Button(preview_header, text="Revert crop", command=self.revert_crop, state="disabled")
         self.revert_crop_btn.grid(row=0, column=3, sticky="e")
+        self.delete_screenshot_btn = ttk.Button(
+            preview_header,
+            text="Delete screenshot",
+            command=self.delete_selected_screenshot,
+            state="disabled",
+        )
+        self.delete_screenshot_btn.grid(row=0, column=4, sticky="e", padx=(6, 0))
+        self.swap_proof_btn = ttk.Button(
+            preview_header,
+            text="Swap proof",
+            command=self.swap_payment_proof,
+            state="disabled",
+        )
+        self.swap_proof_btn.grid(row=0, column=5, sticky="e", padx=(6, 0))
+        self.unlink_proof_btn = ttk.Button(
+            preview_header,
+            text="Unlink proof",
+            command=self.unlink_payment_proof,
+            state="disabled",
+        )
+        self.unlink_proof_btn.grid(row=0, column=6, sticky="e", padx=(6, 0))
         preview_frame = ttk.Frame(right, style="Panel.TFrame")
         preview_frame.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
         preview_frame.grid_rowconfigure(0, weight=1)
@@ -1390,37 +1542,6 @@ class ReimbursementHelperApp:
         self.preview_canvas.bind("<ButtonPress-1>", self._on_crop_press)
         self.preview_canvas.bind("<B1-Motion>", self._on_crop_drag)
         self.preview_canvas.bind("<ButtonRelease-1>", self._on_crop_release)
-
-        self.bank_frame = ttk.Frame(right, style="Panel.TFrame", padding=(0, 10, 0, 0))
-        self.bank_frame.grid(row=2, column=0, sticky="nsew")
-        self.bank_frame.grid_rowconfigure(1, weight=1)
-        self.bank_frame.grid_columnconfigure(0, weight=1)
-        ttk.Label(self.bank_frame, text="Bank account statement", style="Header.TLabel").grid(
-            row=0, column=0, sticky="w", pady=(0, 6)
-        )
-        self.bank_tree = ttk.Treeview(
-            self.bank_frame,
-            columns=("status", "date", "amount", "match"),
-            show="tree headings",
-            height=5,
-            selectmode="browse",
-        )
-        self.bank_tree.heading("#0", text="File")
-        self.bank_tree.heading("status", text="Status")
-        self.bank_tree.heading("date", text="Date")
-        self.bank_tree.heading("amount", text="Amount")
-        self.bank_tree.heading("match", text="Matched receipt")
-        self.bank_tree.column("#0", width=140, stretch=True)
-        self.bank_tree.column("status", width=110, stretch=False)
-        self.bank_tree.column("date", width=78, stretch=False)
-        self.bank_tree.column("amount", width=70, stretch=False)
-        self.bank_tree.column("match", width=120, stretch=True)
-        self.bank_tree.grid(row=1, column=0, sticky="nsew")
-        self.bank_tree.bind("<<TreeviewSelect>>", self._on_bank_tree_select)
-        bank_buttons = ttk.Frame(self.bank_frame, style="Panel.TFrame")
-        bank_buttons.grid(row=2, column=0, sticky="ew", pady=(8, 0))
-        ttk.Button(bank_buttons, text="Link selected receipt", command=self.link_selected_bank_to_receipt).pack(side="left")
-        ttk.Button(bank_buttons, text="Remove", command=self.remove_selected_bank).pack(side="left", padx=(8, 0))
 
         footer = ttk.Frame(self.root, padding=(18, 0, 18, 12))
         footer.pack(fill="x")
@@ -1685,10 +1806,8 @@ class ReimbursementHelperApp:
                 self.krw_rate_label.pack_forget()
             if self.krw_rate_entry is not None:
                 self.krw_rate_entry.pack_forget()
-            if self.bank_frame is not None:
-                self.bank_frame.grid()
-            if self.move_to_bank_btn is not None:
-                self.move_to_bank_btn.configure(state="normal")
+            if self.select_payment_proof_btn is not None:
+                self.select_payment_proof_btn.configure(state="normal")
         else:
             self.field_labels["amount"].configure(text="Original amount")
             self.field_labels["rmb_amount"].configure(text="RMB amount")
@@ -1704,10 +1823,8 @@ class ReimbursementHelperApp:
                 self.krw_rate_label.pack(side="left")
             if self.krw_rate_entry is not None:
                 self.krw_rate_entry.pack(side="left", padx=(6, 0))
-            if self.bank_frame is not None:
-                self.bank_frame.grid_remove()
-            if self.move_to_bank_btn is not None:
-                self.move_to_bank_btn.configure(state="disabled")
+            if self.select_payment_proof_btn is not None:
+                self.select_payment_proof_btn.configure(state="disabled")
 
     def _on_form_version_changed(self) -> None:
         version = self.form_version.get()
@@ -1785,6 +1902,17 @@ class ReimbursementHelperApp:
                             source_page=str(page_index),
                             currency="USD" if self.form_version.get() == "USA" else "KRW",
                             category="transportation",
+                            receipt_images=[
+                                {
+                                    "id": uuid.uuid4().hex,
+                                    "path": str(page_path),
+                                    "filename": f"{path.name} page {page_index}",
+                                    "source_path": str(path),
+                                    "source_page": str(page_index),
+                                    "crop_box": None,
+                                    "rotation_degrees": 0,
+                                }
+                            ],
                         )
                     )
                     existing.add(key)
@@ -1801,6 +1929,17 @@ class ReimbursementHelperApp:
                     source_path=str(path),
                     currency="USD" if self.form_version.get() == "USA" else "KRW",
                     category="transportation",
+                    receipt_images=[
+                        {
+                            "id": uuid.uuid4().hex,
+                            "path": str(path),
+                            "filename": path.name,
+                            "source_path": str(path),
+                            "source_page": "",
+                            "crop_box": None,
+                            "rotation_degrees": 0,
+                        }
+                    ],
                 )
             )
             existing.add(key)
@@ -1820,6 +1959,84 @@ class ReimbursementHelperApp:
 
     def upload_folder(self) -> None:
         self.select_files()
+
+    def select_payment_proofs(self) -> None:
+        if self.form_version.get() != "USA":
+            self.show_info("Payment proof images are only used for the USA form.")
+            return
+        ensure_runtime_folders()
+        if filedialog is None:
+            return
+        selected = filedialog.askopenfilenames(
+            title="Select payment proof files",
+            filetypes=[
+                ("Payment proof files", "*.png *.jpg *.jpeg *.webp *.bmp *.gif *.pdf"),
+                ("Image files", "*.png *.jpg *.jpeg *.webp *.bmp *.gif"),
+                ("PDF files", "*.pdf"),
+                ("All files", "*.*"),
+            ],
+        )
+        paths = [Path(path) for path in selected]
+        if not paths:
+            return
+        existing = {
+            selected_file_key(Path(item.path), item.source_path, item.source_page)
+            for item in self.bank_items
+            if item.path
+        }
+        added = 0
+        failed: List[str] = []
+        for path in paths:
+            suffix = path.suffix.lower()
+            if suffix not in SUPPORTED_UPLOAD_SUFFIXES:
+                continue
+            if suffix == ".pdf":
+                try:
+                    page_paths = render_pdf_pages(path)
+                except Exception as exc:
+                    log_exception(f"Could not import payment proof PDF: {path}")
+                    failed.append(f"{path.name}: {exc}")
+                    continue
+                for page_index, page_path in enumerate(page_paths, start=1):
+                    key = selected_file_key(page_path, str(path), str(page_index))
+                    if key in existing:
+                        continue
+                    self.bank_items.append(
+                        BankStatementItem(
+                            item_id=uuid.uuid4().hex,
+                            path=str(page_path),
+                            filename=f"{path.name} page {page_index}",
+                            source_path=str(path),
+                            source_page=str(page_index),
+                        )
+                    )
+                    existing.add(key)
+                    added += 1
+                continue
+            key = selected_file_key(path, str(path), "")
+            if key in existing:
+                continue
+            self.bank_items.append(
+                BankStatementItem(
+                    item_id=uuid.uuid4().hex,
+                    path=str(path),
+                    filename=path.name,
+                    source_path=str(path),
+                )
+            )
+            existing.add(key)
+            added += 1
+        self.save_session()
+        self.status_text.set(f"Added {added} payment proof file(s).")
+        if self.selected_item() is not None:
+            self.update_preview()
+        if failed and messagebox:
+            messagebox.showwarning(
+                "Select Payment Proof",
+                "Some files could not be imported.\n\n"
+                + "\n".join(failed[:5])
+                + f"\n\nLogged to:\n{LOG_DIR / 'app.log'}",
+            )
 
     def refresh_tree(self) -> None:
         current_selection = set(self.tree.selection())
@@ -1872,7 +2089,8 @@ class ReimbursementHelperApp:
         except Exception:
             self.selected_bank_index = None
         if self.selected_bank_index is not None:
-            self.preview_kind = "bank"
+            self.selected_attachment_kind = "proof"
+            self.selected_attachment_index = 0
             self.update_preview()
 
     def selected_bank_item(self) -> Optional[BankStatementItem]:
@@ -1883,78 +2101,19 @@ class ReimbursementHelperApp:
         return self.bank_items[self.selected_bank_index]
 
     def _on_receipt_drag_start(self, event: Any) -> None:
-        row_id = self.tree.identify_row(event.y)
-        try:
-            self._drag_receipt_index = int(row_id) if row_id else None
-        except Exception:
-            self._drag_receipt_index = None
+        return
 
     def _is_widget_inside_bank_section(self, widget: Any) -> bool:
-        target = self.bank_frame
-        while widget is not None:
-            if widget is target:
-                return True
-            try:
-                widget = widget.master
-            except Exception:
-                break
         return False
 
     def _on_receipt_drag_release(self, event: Any) -> None:
-        if self._drag_receipt_index is None or self.form_version.get() != "USA":
-            self._drag_receipt_index = None
-            return
-        try:
-            widget = self.root.winfo_containing(event.x_root, event.y_root)
-        except Exception:
-            widget = None
-        if widget is not None and self._is_widget_inside_bank_section(widget):
-            self.move_receipts_to_bank([self._drag_receipt_index])
-        self._drag_receipt_index = None
+        return
 
     def move_selected_receipts_to_bank(self) -> None:
-        if self.form_version.get() != "USA":
-            self.show_info("Bank account statements are only used for the USA form.")
-            return
-        indices = self.selected_indices()
-        if not indices:
-            self.show_info("Select one or more uploaded statement images first.")
-            return
-        self.move_receipts_to_bank(indices)
+        self.show_info("Use Select Payment Proof to add USA payment proof images.")
 
     def move_receipts_to_bank(self, indices: List[int]) -> None:
-        self.save_current_fields()
-        moved = 0
-        for index in sorted(set(indices), reverse=True):
-            if index < 0 or index >= len(self.items):
-                continue
-            item = self.items.pop(index)
-            self.bank_items.append(
-                BankStatementItem(
-                    item_id=uuid.uuid4().hex,
-                    path=item.path,
-                    filename=item.filename,
-                    source_path=item.source_path,
-                    source_page=item.source_page,
-                    date=item.date,
-                    amount=item.amount,
-                    place=item.place,
-                    status="Needs AI" if not (item.date and item.amount) else "Needs match",
-                    crop_box=item.crop_box,
-                    rotation_degrees=item.rotation_degrees,
-                )
-            )
-            moved += 1
-        self.selected_index = None
-        self.refresh_tree()
-        self.refresh_bank_tree()
-        if self.items:
-            self.select_index(0)
-        else:
-            self.load_selected_into_fields()
-            self.update_preview()
-        self.save_session()
-        self.status_text.set(f"Moved {moved} image(s) to bank account statement.")
+        self.show_info("Use Select Payment Proof to add USA payment proof images.")
 
     def remove_selected_bank(self) -> None:
         item = self.selected_bank_item()
@@ -1963,29 +2122,30 @@ class ReimbursementHelperApp:
         del self.bank_items[self.selected_bank_index]
         self.selected_bank_index = None
         self.refresh_bank_tree()
-        if self.preview_kind == "bank":
-            self.preview_kind = "receipt"
-            self.update_preview()
+        self.selected_attachment_kind = "receipt"
+        self.selected_attachment_index = 0
+        self.update_preview()
         self.save_session()
-        self.status_text.set("Removed selected bank statement image.")
+        self.status_text.set("Removed selected payment proof image.")
 
     def link_selected_bank_to_receipt(self) -> None:
         bank_item = self.selected_bank_item()
         receipt = self.selected_item()
         if bank_item is None or receipt is None:
-            self.show_info("Select a bank statement row and the matching receipt row first.")
+            self.show_info("Select a payment proof image and the matching receipt row first.")
             return
         bank_item.matched_receipt_id = receipt.item_id
         bank_item.status = "Matched manually"
         self.refresh_bank_tree()
         self.save_session()
-        self.status_text.set("Linked bank statement to selected receipt.")
+        self.status_text.set("Linked payment proof to selected receipt.")
 
     def _on_tree_select(self, _event: Any = None) -> None:
         selection = self.tree.selection()
         if not selection:
             return
-        self.preview_kind = "receipt"
+        self.selected_attachment_kind = "receipt"
+        self.selected_attachment_index = 0
         focus = self.tree.focus()
         chosen = focus if focus in selection else selection[-1]
         try:
@@ -2078,6 +2238,8 @@ class ReimbursementHelperApp:
             justify="center",
         )
         self.photo = None
+        self.preview_photos = []
+        self.preview_tiles = []
         self._preview_image_bounds = (0, 0, 0, 0)
         self._preview_original_size = (0, 0)
         self._crop_handle_centers = {}
@@ -2087,50 +2249,297 @@ class ReimbursementHelperApp:
             self.rotate_left_btn.configure(state="disabled")
         if self.rotate_right_btn is not None:
             self.rotate_right_btn.configure(state="disabled")
+        if self.delete_screenshot_btn is not None:
+            self.delete_screenshot_btn.configure(state="disabled")
+        if self.swap_proof_btn is not None:
+            self.swap_proof_btn.configure(state="disabled")
+        if self.unlink_proof_btn is not None:
+            self.unlink_proof_btn.configure(state="disabled")
 
-    def selected_preview_item(self) -> Optional[Any]:
-        if self.preview_kind == "bank":
-            return self.selected_bank_item()
-        return self.selected_item()
+    def payment_proofs_for_receipt(self, receipt: ReceiptItem) -> List[BankStatementItem]:
+        return [item for item in self.bank_items if item.matched_receipt_id == receipt.item_id]
+
+    def selected_preview_tile(self) -> Optional[Dict[str, Any]]:
+        for tile in self.preview_tiles:
+            if (
+                tile.get("kind") == self.selected_attachment_kind
+                and tile.get("index") == self.selected_attachment_index
+            ):
+                return tile
+        return None
+
+    def preview_tile_at(self, x: float, y: float) -> Optional[Dict[str, Any]]:
+        for tile in reversed(self.preview_tiles):
+            left, top, right, bottom = tile.get("bbox", (0, 0, 0, 0))
+            if left <= x <= right and top <= y <= bottom:
+                return tile
+        return None
+
+    def selected_image_state(self) -> Optional[Tuple[Path, Any, int, Optional[Dict[str, Any]], Optional[BankStatementItem]]]:
+        tile = self.selected_preview_tile()
+        if tile is None:
+            return None
+        if tile.get("kind") == "proof":
+            proof_item = tile.get("proof_item")
+            if not isinstance(proof_item, BankStatementItem):
+                return None
+            return (
+                Path(proof_item.path),
+                proof_item.crop_box,
+                normalize_rotation(proof_item.rotation_degrees),
+                None,
+                proof_item,
+            )
+        attachment = None
+        receipt = self.selected_item()
+        if receipt is not None:
+            images = ensure_receipt_images(receipt)
+            index = int(tile.get("index") or 0)
+            if 0 <= index < len(images):
+                attachment = images[index]
+        if attachment is None:
+            attachment = tile.get("attachment")
+        if not isinstance(attachment, dict):
+            return None
+        return (
+            Path(str(attachment.get("path") or "")),
+            attachment.get("crop_box"),
+            normalize_rotation(attachment.get("rotation_degrees", 0)),
+            attachment,
+            None,
+        )
+
+    def set_selected_image_state(self, crop_box: Any = None, rotation_degrees: Optional[int] = None) -> None:
+        state = self.selected_image_state()
+        if state is None:
+            return
+        _path, _crop, _rotation, attachment, proof_item = state
+        if proof_item is not None:
+            proof_item.crop_box = copy.deepcopy(crop_box)
+            if rotation_degrees is not None:
+                proof_item.rotation_degrees = normalize_rotation(rotation_degrees)
+            return
+        if attachment is None:
+            return
+        receipt = self.selected_item()
+        if receipt is not None:
+            images = ensure_receipt_images(receipt)
+            index = self.selected_attachment_index
+            if 0 <= index < len(images):
+                attachment = images[index]
+        attachment["crop_box"] = copy.deepcopy(crop_box)
+        if rotation_degrees is not None:
+            attachment["rotation_degrees"] = normalize_rotation(rotation_degrees)
+        if receipt is not None:
+            ensure_receipt_images(receipt)
 
     def update_preview(self) -> None:
         if self.preview_canvas is None:
             return
-        item = self.selected_preview_item()
-        if item is None:
+        receipt = self.selected_item()
+        if receipt is None:
             self.clear_preview("Select receipt image or PDF files to begin.")
             return
-        path = Path(item.path)
-        if not path.exists() or Image is None or ImageTk is None:
-            self.clear_preview(str(path))
+        if Image is None or ImageTk is None:
+            self.clear_preview("Image preview is unavailable. Install Pillow from requirements.txt.")
             return
+        receipt_images = ensure_receipt_images(receipt)
+        proof_items = self.payment_proofs_for_receipt(receipt) if self.form_version.get() == "USA" else []
+        if self.selected_attachment_kind == "proof" and not proof_items:
+            self.selected_attachment_kind = "receipt"
+            self.selected_attachment_index = 0
+        if self.selected_attachment_kind == "receipt" and self.selected_attachment_index >= len(receipt_images):
+            self.selected_attachment_index = 0
+        if self.selected_attachment_kind == "proof" and self.selected_attachment_index >= len(proof_items):
+            self.selected_attachment_index = 0
+        canvas_w = max(240, self.preview_canvas.winfo_width())
+        canvas_h = max(240, self.preview_canvas.winfo_height())
+        self.preview_canvas.delete("all")
+        self.preview_photos = []
+        self.preview_tiles = []
+        self.photo = None
+        self._preview_image_bounds = (0, 0, 0, 0)
+        self._preview_original_size = (0, 0)
+        self._crop_handle_centers = {}
         try:
-            image = oriented_image_from_path(path, item.rotation_degrees)
-            self._preview_original_size = (image.width, image.height)
-            canvas_w = max(240, self.preview_canvas.winfo_width())
-            canvas_h = max(240, self.preview_canvas.winfo_height())
-            max_w = max(1, canvas_w - 20)
-            max_h = max(1, canvas_h - 20)
-            image.thumbnail((max_w, max_h))
-            display_w, display_h = image.size
-            x = max(0, (canvas_w - display_w) // 2)
-            y = max(0, (canvas_h - display_h) // 2)
-            self.photo = ImageTk.PhotoImage(image)
-            self.preview_canvas.delete("all")
-            self.preview_canvas.create_image(x, y, anchor="nw", image=self.photo)
-            self._preview_image_bounds = (x, y, display_w, display_h)
+            if self.form_version.get() == "USA":
+                gap = 14
+                left_w = max(120, int((canvas_w - gap) * 0.56))
+                right_w = max(100, canvas_w - left_w - gap)
+                self.draw_preview_section(
+                    "Receipt screenshots",
+                    0,
+                    0,
+                    left_w,
+                    canvas_h,
+                    receipt_images,
+                    "receipt",
+                )
+                self.draw_preview_section(
+                    "Payment proof",
+                    left_w + gap,
+                    0,
+                    right_w,
+                    canvas_h,
+                    proof_items,
+                    "proof",
+                )
+            else:
+                self.draw_preview_section(
+                    "Receipt screenshots",
+                    0,
+                    0,
+                    canvas_w,
+                    canvas_h,
+                    receipt_images,
+                    "receipt",
+                )
+            if self.preview_tiles and self.selected_preview_tile() is None:
+                first_tile = self.preview_tiles[0]
+                self.selected_attachment_kind = str(first_tile.get("kind") or "receipt")
+                self.selected_attachment_index = int(first_tile.get("index") or 0)
             self.draw_crop_overlay()
-            if self.rotate_left_btn is not None:
-                self.rotate_left_btn.configure(state="normal")
-            if self.rotate_right_btn is not None:
-                self.rotate_right_btn.configure(state="normal")
+            self.update_preview_buttons()
         except Exception as exc:
             log_exception("Receipt preview failed")
             self.clear_preview(f"Could not preview image:\n{exc}")
 
-    def current_preview_crop_points(self, item: ReceiptItem) -> List[Tuple[float, float]]:
+    def draw_preview_section(
+        self,
+        title: str,
+        x: int,
+        y: int,
+        width: int,
+        height: int,
+        entries: Sequence[Any],
+        kind: str,
+    ) -> None:
+        if self.preview_canvas is None:
+            return
+        self.preview_canvas.create_text(
+            x + 8,
+            y + 8,
+            text=title,
+            anchor="nw",
+            fill="#222222",
+            font=("Segoe UI", 10, "bold"),
+        )
+        if kind == "proof":
+            self.preview_canvas.create_line(x - 7, y, x - 7, y + height, fill="#D8D8D8")
+        if not entries:
+            message = "Select Payment Proof, then Generate All." if kind == "proof" else "No receipt screenshot."
+            self.preview_canvas.create_text(
+                x + width / 2,
+                y + height / 2,
+                text=message,
+                fill="#777777",
+                width=max(120, width - 20),
+                justify="center",
+            )
+            return
+        columns = 1 if width < 360 or len(entries) == 1 else 2
+        rows = max(1, (len(entries) + columns - 1) // columns)
+        gap = 10
+        top = y + 34
+        cell_w = max(72, int((width - gap * (columns - 1) - 8) / columns))
+        cell_h = max(86, int((height - 42 - gap * (rows - 1)) / rows))
+        for index, entry in enumerate(entries):
+            col = index % columns
+            row = index // columns
+            cell_x = x + 4 + col * (cell_w + gap)
+            cell_y = top + row * (cell_h + gap)
+            bbox = (cell_x, cell_y, cell_x + cell_w, cell_y + cell_h)
+            attachment: Optional[Dict[str, Any]] = None
+            proof_item: Optional[BankStatementItem] = None
+            if kind == "proof":
+                proof_item = entry if isinstance(entry, BankStatementItem) else None
+                if proof_item is None:
+                    continue
+                attachment = attachment_from_item(proof_item)
+            else:
+                attachment = entry if isinstance(entry, dict) else None
+            if attachment is None:
+                continue
+            path = Path(str(attachment.get("path") or ""))
+            is_selected = kind == self.selected_attachment_kind and index == self.selected_attachment_index
+            outline = "#0078D7" if is_selected else "#D0D0D0"
+            self.preview_canvas.create_rectangle(*bbox, outline=outline, width=2 if is_selected else 1)
+            image_bounds = (cell_x + 6, cell_y + 26, 1, 1)
+            original_size = (0, 0)
+            filename = str(attachment.get("filename") or path.name)
+            self.preview_canvas.create_text(
+                cell_x + 8,
+                cell_y + 6,
+                text=filename,
+                anchor="nw",
+                fill="#444444",
+                font=("Segoe UI", 8),
+                width=max(60, cell_w - 16),
+            )
+            if path.exists():
+                try:
+                    image = oriented_image_from_path(path, attachment.get("rotation_degrees", 0))
+                    original_size = (image.width, image.height)
+                    max_w = max(1, cell_w - 14)
+                    max_h = max(1, cell_h - 34)
+                    image.thumbnail((max_w, max_h))
+                    photo = ImageTk.PhotoImage(image)
+                    self.preview_photos.append(photo)
+                    image_x = int(cell_x + (cell_w - image.width) / 2)
+                    image_y = int(cell_y + 28 + max(0, (max_h - image.height) / 2))
+                    self.preview_canvas.create_image(image_x, image_y, anchor="nw", image=photo)
+                    image_bounds = (image_x, image_y, image.width, image.height)
+                except Exception:
+                    log_exception(f"Could not draw preview tile: {path}")
+                    self.preview_canvas.create_text(
+                        cell_x + cell_w / 2,
+                        cell_y + cell_h / 2,
+                        text="Preview failed",
+                        fill="#777777",
+                    )
+            else:
+                self.preview_canvas.create_text(
+                    cell_x + cell_w / 2,
+                    cell_y + cell_h / 2,
+                    text="Missing file",
+                    fill="#777777",
+                )
+            self.preview_tiles.append(
+                {
+                    "kind": kind,
+                    "index": index,
+                    "bbox": bbox,
+                    "image_bounds": image_bounds,
+                    "original_size": original_size,
+                    "attachment": attachment,
+                    "proof_item": proof_item,
+                }
+            )
+
+    def update_preview_buttons(self) -> None:
+        has_tile = self.selected_preview_tile() is not None
+        state = "normal" if has_tile else "disabled"
+        if not has_tile and self.revert_crop_btn is not None:
+            self.revert_crop_btn.configure(state="disabled")
+        if self.rotate_left_btn is not None:
+            self.rotate_left_btn.configure(state=state)
+        if self.rotate_right_btn is not None:
+            self.rotate_right_btn.configure(state=state)
+        if self.delete_screenshot_btn is not None:
+            self.delete_screenshot_btn.configure(state=state)
+        receipt = self.selected_item()
+        has_proofs = bool(receipt and self.payment_proofs_for_receipt(receipt))
+        can_use_proofs = self.form_version.get() == "USA" and receipt is not None and bool(self.bank_items)
+        if self.swap_proof_btn is not None:
+            self.swap_proof_btn.configure(state="normal" if can_use_proofs else "disabled")
+        if self.unlink_proof_btn is not None:
+            self.unlink_proof_btn.configure(state="normal" if has_proofs else "disabled")
+
+    def current_preview_crop_points(self) -> List[Tuple[float, float]]:
+        state = self.selected_image_state()
         width, height = self._preview_original_size
-        crop = normalized_crop_points(item.crop_box, width, height)
+        crop_box = state[1] if state is not None else None
+        crop = normalized_crop_points(crop_box, width, height)
         if crop:
             return crop
         return default_crop_points(width, height)
@@ -2156,13 +2565,20 @@ class ReimbursementHelperApp:
     def draw_crop_overlay(self) -> None:
         if self.preview_canvas is None:
             return
-        item = self.selected_preview_item()
+        tile = self.selected_preview_tile()
+        state = self.selected_image_state()
+        if tile is None or state is None:
+            self.update_preview_buttons()
+            return
+        self._preview_image_bounds = tuple(tile.get("image_bounds", (0, 0, 0, 0)))  # type: ignore[assignment]
+        self._preview_original_size = tuple(tile.get("original_size", (0, 0)))  # type: ignore[assignment]
         original_w, original_h = self._preview_original_size
         image_x, image_y, display_w, display_h = self._preview_image_bounds
-        if item is None or original_w <= 0 or original_h <= 0 or display_w <= 0 or display_h <= 0:
+        if original_w <= 0 or original_h <= 0 or display_w <= 0 or display_h <= 0:
+            self.update_preview_buttons()
             return
         self.preview_canvas.delete("crop")
-        crop = self.current_preview_crop_points(item)
+        crop = self.current_preview_crop_points()
         canvas_points = [self.original_to_canvas(x, y) for x, y in crop]
         flattened_points = [coord for point in canvas_points for coord in point]
         self.preview_canvas.create_polygon(
@@ -2192,8 +2608,9 @@ class ReimbursementHelperApp:
                 tags=("crop", f"crop_{handle}"),
             )
         if self.revert_crop_btn is not None:
-            has_crop = normalized_crop_points(item.crop_box, original_w, original_h) is not None
+            has_crop = normalized_crop_points(state[1], original_w, original_h) is not None
             self.revert_crop_btn.configure(state="normal" if has_crop else "disabled")
+        self.preview_canvas.tag_raise("crop")
 
     def nearest_crop_handle(self, x: float, y: float) -> Optional[str]:
         nearest: Optional[str] = None
@@ -2206,19 +2623,28 @@ class ReimbursementHelperApp:
         return nearest
 
     def _on_crop_press(self, event: Any) -> None:
+        tile = self.preview_tile_at(event.x, event.y)
+        if tile is not None:
+            kind = str(tile.get("kind") or "receipt")
+            index = int(tile.get("index") or 0)
+            if kind != self.selected_attachment_kind or index != self.selected_attachment_index:
+                self.selected_attachment_kind = kind
+                self.selected_attachment_index = index
+                self.update_preview()
         self._dragging_crop_handle = self.nearest_crop_handle(event.x, event.y)
 
     def _on_crop_drag(self, event: Any) -> None:
-        item = self.selected_preview_item()
         handle = self._dragging_crop_handle
         original_w, original_h = self._preview_original_size
-        if item is None or handle is None or original_w <= 0 or original_h <= 0:
+        if self.selected_image_state() is None or handle is None or original_w <= 0 or original_h <= 0:
             return
-        points = self.current_preview_crop_points(item)
+        points = self.current_preview_crop_points()
         x, y = self.canvas_to_original(event.x, event.y)
         handle_indexes = {"nw": 0, "ne": 1, "se": 2, "sw": 3}
         points[handle_indexes[handle]] = (x, y)
-        item.crop_box = flatten_crop_points(points)
+        state = self.selected_image_state()
+        rotation = state[2] if state is not None else 0
+        self.set_selected_image_state(flatten_crop_points(points), rotation)
         self.draw_crop_overlay()
 
     def _on_crop_release(self, _event: Any) -> None:
@@ -2226,26 +2652,26 @@ class ReimbursementHelperApp:
             return
         self._dragging_crop_handle = None
         self.save_session()
-        self.status_text.set("Crop updated for selected receipt.")
+        self.status_text.set("Crop updated for selected screenshot.")
 
     def revert_crop(self) -> None:
-        item = self.selected_preview_item()
-        if item is None:
+        state = self.selected_image_state()
+        if state is None:
             return
-        item.crop_box = None
+        self.set_selected_image_state(None, state[2])
         self.draw_crop_overlay()
         self.save_session()
-        self.status_text.set("Crop reverted for selected receipt.")
+        self.status_text.set("Crop reverted for selected screenshot.")
 
     def rotate_selected(self, delta_degrees: int) -> None:
-        item = self.selected_preview_item()
-        if item is None:
+        state = self.selected_image_state()
+        if state is None:
             return
-        path = Path(item.path)
+        path, crop_box, rotation_degrees, _attachment, _proof_item = state
         try:
-            image = oriented_image_from_path(path, item.rotation_degrees)
+            image = oriented_image_from_path(path, rotation_degrees)
             transformed_crop = rotated_crop_points(
-                item.crop_box,
+                crop_box,
                 image.width,
                 image.height,
                 delta_degrees,
@@ -2253,17 +2679,140 @@ class ReimbursementHelperApp:
         except Exception:
             log_exception("Could not transform crop during rotation")
             transformed_crop = None
-        item.rotation_degrees = normalize_rotation(normalize_rotation(item.rotation_degrees) + delta_degrees)
-        item.crop_box = transformed_crop
+        new_rotation = normalize_rotation(normalize_rotation(rotation_degrees) + delta_degrees)
+        self.set_selected_image_state(transformed_crop, new_rotation)
         self.update_preview()
         self.save_session()
         direction = "right" if delta_degrees > 0 else "left"
-        self.status_text.set(f"Rotated selected receipt {direction}.")
+        self.status_text.set(f"Rotated selected screenshot {direction}.")
 
-    def remove_selected(self) -> None:
+    def delete_selected_screenshot(self) -> None:
+        tile = self.selected_preview_tile()
+        receipt = self.selected_item()
+        if tile is None or receipt is None:
+            return
+        kind = str(tile.get("kind") or "receipt")
+        index = int(tile.get("index") or 0)
+        if kind == "proof":
+            proof_item = tile.get("proof_item")
+            if not isinstance(proof_item, BankStatementItem):
+                return
+            if messagebox and not messagebox.askyesno(
+                "Delete screenshot",
+                f"Remove this payment proof image?\n\n{proof_item.filename}",
+            ):
+                return
+            self.bank_items = [item for item in self.bank_items if item.item_id != proof_item.item_id]
+            self.selected_attachment_kind = "receipt"
+            self.selected_attachment_index = 0
+            self.refresh_bank_tree()
+            self.update_preview()
+            self.save_session()
+            self.status_text.set("Deleted selected payment proof screenshot.")
+            return
+
+        images = ensure_receipt_images(receipt)
+        if index < 0 or index >= len(images):
+            return
+        filename = str(images[index].get("filename") or Path(str(images[index].get("path") or "")).name)
+        if messagebox and not messagebox.askyesno(
+            "Delete screenshot",
+            f"Remove this receipt screenshot?\n\n{filename}",
+        ):
+            return
+        del images[index]
+        if images:
+            receipt.receipt_images = images
+            ensure_receipt_images(receipt)
+            self.selected_attachment_index = max(0, min(index, len(images) - 1))
+            self.refresh_tree()
+            self.update_preview()
+            self.save_session()
+            self.status_text.set("Deleted selected receipt screenshot.")
+            return
+
+        removed_id = receipt.item_id
+        remove_index = self.selected_index
+        if remove_index is not None and 0 <= remove_index < len(self.items):
+            del self.items[remove_index]
+        for proof_item in self.bank_items:
+            if proof_item.matched_receipt_id == removed_id:
+                proof_item.matched_receipt_id = ""
+                proof_item.status = "Needs manual review"
+        self.selected_index = None
+        self.refresh_tree()
+        if self.items:
+            self.select_index(min(remove_index or 0, len(self.items) - 1))
+        else:
+            self.load_selected_into_fields()
+            self.update_preview()
+        self.save_session()
+        self.status_text.set("Deleted receipt row because its last screenshot was removed.")
+
+    def swap_payment_proof(self) -> None:
+        receipt = self.selected_item()
+        if receipt is None:
+            return
+        if self.form_version.get() != "USA":
+            self.show_info("Payment proof is only used for the USA form.")
+            return
+        if not self.bank_items:
+            self.show_info("Select payment proof files first.")
+            return
+        current_indexes = [
+            index for index, proof_item in enumerate(self.bank_items)
+            if proof_item.matched_receipt_id == receipt.item_id
+        ]
+        start = current_indexes[0] if current_indexes else -1
+        chosen_index: Optional[int] = None
+        for offset in range(1, len(self.bank_items) + 1):
+            candidate_index = (start + offset) % len(self.bank_items)
+            if candidate_index not in current_indexes:
+                chosen_index = candidate_index
+                break
+        if chosen_index is None:
+            self.show_info("No other payment proof is loaded.")
+            return
+        for index in current_indexes:
+            self.bank_items[index].matched_receipt_id = ""
+            self.bank_items[index].status = "Needs manual review"
+        chosen = self.bank_items[chosen_index]
+        chosen.matched_receipt_id = receipt.item_id
+        chosen.status = "Matched manually"
+        self.selected_attachment_kind = "proof"
+        self.selected_attachment_index = 0
+        self.refresh_bank_tree()
+        self.update_preview()
+        self.save_session()
+        self.status_text.set(f"Swapped payment proof to {chosen.filename}.")
+
+    def unlink_payment_proof(self) -> None:
+        receipt = self.selected_item()
+        if receipt is None:
+            return
+        changed = 0
+        for proof_item in self.bank_items:
+            if proof_item.matched_receipt_id == receipt.item_id:
+                proof_item.matched_receipt_id = ""
+                proof_item.status = "Needs manual review"
+                changed += 1
+        if changed:
+            self.selected_attachment_kind = "receipt"
+            self.selected_attachment_index = 0
+            self.refresh_bank_tree()
+            self.update_preview()
+            self.save_session()
+            self.status_text.set("Unlinked payment proof from selected receipt.")
+
+    def remove_selected(self, _event: Any = None) -> str:
         indices = self.selected_indices()
         if not indices:
-            return
+            return "break"
+        if messagebox and not messagebox.askyesno(
+            "Remove receipts",
+            f"Remove {len(indices)} selected receipt row(s)?",
+        ):
+            return "break"
         removed_ids = {self.items[index].item_id for index in indices if 0 <= index < len(self.items)}
         for index in sorted(indices, reverse=True):
             del self.items[index]
@@ -2281,6 +2830,7 @@ class ReimbursementHelperApp:
             self.update_preview()
         self.status_text.set(f"Removed {len(indices)} selected receipt(s).")
         self.save_session()
+        return "break"
 
     def clear_all(self) -> None:
         if not self.items:
@@ -2388,7 +2938,78 @@ class ReimbursementHelperApp:
     def match_all_bank_items(self) -> None:
         for bank_item in self.bank_items:
             self.match_bank_item(bank_item)
+        self.resolve_payment_proof_conflicts()
         self.refresh_bank_tree()
+
+    def resolve_payment_proof_conflicts(self) -> None:
+        grouped: Dict[str, List[BankStatementItem]] = {}
+        for bank_item in self.bank_items:
+            if bank_item.matched_receipt_id:
+                grouped.setdefault(bank_item.matched_receipt_id, []).append(bank_item)
+        for proofs in grouped.values():
+            if len(proofs) <= 1:
+                continue
+            keeper = proofs[0]
+            keeper.status = "Matched"
+            for proof_item in proofs[1:]:
+                proof_item.matched_receipt_id = ""
+                proof_item.status = "Needs manual review"
+
+    def receipt_merge_key(self, item: ReceiptItem) -> Optional[Tuple[str, float]]:
+        amount = safe_float(item.amount)
+        if amount is None:
+            return None
+        date_value = parse_date_value(item.date)
+        if isinstance(date_value, date):
+            date_key = date_value.isoformat()
+        else:
+            date_key = (item.date or "").strip()
+        if not date_key:
+            return None
+        return date_key, round(amount, 2)
+
+    def merge_same_usa_receipts(self) -> int:
+        if self.form_version.get() != "USA":
+            return 0
+        merged_count = 0
+        merged_items: List[ReceiptItem] = []
+        seen: Dict[Tuple[str, float], ReceiptItem] = {}
+        removed_to_target: Dict[str, str] = {}
+        for item in self.items:
+            ensure_receipt_images(item)
+            key = self.receipt_merge_key(item)
+            if key is None or key not in seen:
+                if key is not None:
+                    seen[key] = item
+                merged_items.append(item)
+                continue
+            target = seen[key]
+            merge_attachment_lists(ensure_receipt_images(target), ensure_receipt_images(item))
+            for attr in (
+                "place",
+                "purpose",
+                "details",
+                "project_number",
+                "category",
+                "payment_method",
+                "receipt_label",
+                "rmb_amount",
+            ):
+                if not str(getattr(target, attr, "") or "").strip() and str(getattr(item, attr, "") or "").strip():
+                    setattr(target, attr, getattr(item, attr))
+            if target.status not in {"Failed", "Processing"}:
+                target.status = "Merged"
+            removed_to_target[item.item_id] = target.item_id
+            merged_count += 1
+        if not merged_count:
+            return 0
+        self.items = merged_items
+        for proof_item in self.bank_items:
+            if proof_item.matched_receipt_id in removed_to_target:
+                proof_item.matched_receipt_id = removed_to_target[proof_item.matched_receipt_id]
+        if self.selected_index is not None and self.selected_index >= len(self.items):
+            self.selected_index = max(0, len(self.items) - 1) if self.items else None
+        return merged_count
 
     def generate_selected_details(self) -> None:
         self.save_current_fields()
@@ -2455,6 +3076,11 @@ class ReimbursementHelperApp:
                         lambda i=item, n=idx: self.mark_item_status(i, "Failed", n, total),
                     )
                     continue
+            if include_bank and form_version == "USA":
+                merged_count = self.merge_same_usa_receipts()
+                if merged_count:
+                    self.root.after(0, self.refresh_tree)
+                    self.set_status(f"Merged {merged_count} duplicate receipt screenshot(s).")
             offset = len(items)
             for bank_index, bank_item in enumerate(bank_items, start=1):
                 progress_index = offset + bank_index
@@ -2464,7 +3090,7 @@ class ReimbursementHelperApp:
                         i, f"Processing {n}/{total}", n - 1, total
                     ),
                 )
-                self.set_status(f"Reading bank statement {bank_index}/{len(bank_items)}: {bank_item.filename}")
+                self.set_status(f"Reading payment proof {bank_index}/{len(bank_items)}: {bank_item.filename}")
                 try:
                     temp = ReceiptItem(
                         item_id=bank_item.item_id,
@@ -2504,6 +3130,8 @@ class ReimbursementHelperApp:
                         ),
                     )
                     continue
+            if bank_items:
+                self.resolve_payment_proof_conflicts()
             self.root.after(0, lambda: self.after_ai_complete(successes, failures, total, reload_selected))
 
         threading.Thread(target=worker, daemon=True).start()
@@ -2550,6 +3178,12 @@ class ReimbursementHelperApp:
         ):
             try:
                 button.configure(state=state)
+            except Exception:
+                pass
+        if self.select_payment_proof_btn is not None:
+            proof_state = "normal" if not busy and self.form_version.get() == "USA" else "disabled"
+            try:
+                self.select_payment_proof_btn.configure(state=proof_state)
             except Exception:
                 pass
 
@@ -2725,8 +3359,12 @@ class ReimbursementHelperApp:
                 values["item_id"] = uuid.uuid4().hex
             if not isinstance(values.get("crop_box"), list):
                 values["crop_box"] = None
+            if not isinstance(values.get("receipt_images"), list):
+                values["receipt_images"] = []
             values["rotation_degrees"] = normalize_rotation(values.get("rotation_degrees", 0))
-            restored.append(ReceiptItem(**values))
+            item = ReceiptItem(**values)
+            ensure_receipt_images(item)
+            restored.append(item)
         if not restored:
             restored = []
         bank_fields = set(BankStatementItem.__dataclass_fields__.keys())
