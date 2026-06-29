@@ -265,6 +265,17 @@ def load_user_settings() -> Dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def save_user_settings(settings: Dict[str, Any]) -> None:
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        USER_SETTINGS_FILE.write_text(
+            json.dumps(settings, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        log_exception("Could not save user settings")
+
+
 def load_templates_config() -> Dict[str, Any]:
     if not TEMPLATES_CONFIG_FILE.exists():
         return {}
@@ -384,6 +395,8 @@ project_number, category, payment_method, receipt_label, confidence_notes.
 Rules:
 - date must be yyyy-mm-dd when visible, otherwise empty string.
 - amount should be the paid total. Preserve cents when visible.
+- currency must match the receipt symbol/text: USD for "$", KRW for won/KRW,
+  and RMB/CNY for yuan/RMB/CNY. Do not default to KRW just because the form is Korea.
 - category must be one of:
   transportation, lodging, meals, advertising, office, entertainment, physical_exam,
   nucleic_test, materials, courier, consumables, welfare, other.
@@ -477,6 +490,28 @@ def safe_float(value: Any) -> Optional[float]:
         return float(match.group(0))
     except ValueError:
         return None
+
+
+def normalize_currency(value: Any, default: str = "USD") -> str:
+    text = str(value or "").strip()
+    if not text:
+        return default
+    upper = text.upper()
+    if "$" in upper or "USD" in upper or "US DOLLAR" in upper or "DOLLAR" in upper:
+        return "USD"
+    if "KRW" in upper or "WON" in upper or "\u20a9" in upper or "\uffe6" in upper:
+        return "KRW"
+    if "RMB" in upper or "CNY" in upper or "YUAN" in upper or "CN\u00a5" in upper:
+        return "RMB"
+    if upper in {"USD", "KRW", "RMB", "CNY"}:
+        return upper
+    if upper in {"\u00a5", "\uffe5"}:
+        return "RMB"
+    return default
+
+
+def category_value_to_key(value: str, form_version: str) -> str:
+    return normalized_category((value or "").split(" - ", 1)[0], form_version)
 
 
 def format_amount(value: float) -> str:
@@ -699,21 +734,28 @@ def clone_sheet(source_ws: Any, target_wb: Any, title: str, index: Optional[int]
     return target_ws
 
 
-def korea_amounts(item: ReceiptItem, krw_to_rmb_rate: float) -> Tuple[Optional[float], Optional[float], str]:
+def korea_amounts(
+    item: ReceiptItem,
+    krw_to_rmb_rate: float,
+    usd_to_rmb_rate: float,
+) -> Tuple[Optional[float], Optional[float], str]:
     amount = safe_float(item.amount)
     krw = safe_float(item.krw_amount)
     rmb = safe_float(item.rmb_amount)
-    currency = (item.currency or "").strip().upper() or "KRW"
-    if krw is None and rmb is None and amount is not None:
-        if currency == "RMB" or currency == "CNY":
+    currency = normalize_currency(item.currency, "KRW")
+    if amount is not None:
+        if currency == "USD":
+            rmb = amount * usd_to_rmb_rate if usd_to_rmb_rate else rmb
+            krw = rmb / krw_to_rmb_rate if rmb is not None and krw_to_rmb_rate else krw
+        elif currency == "RMB" or currency == "CNY":
             rmb = amount
             krw = amount / krw_to_rmb_rate if krw_to_rmb_rate else None
         elif currency == "KRW":
             krw = amount
             rmb = amount * krw_to_rmb_rate if krw_to_rmb_rate else None
-    elif krw is None and rmb is not None and krw_to_rmb_rate:
+    if krw is None and rmb is not None and krw_to_rmb_rate:
         krw = rmb / krw_to_rmb_rate
-    elif rmb is None and krw is not None and krw_to_rmb_rate:
+    if rmb is None and krw is not None and krw_to_rmb_rate:
         rmb = krw * krw_to_rmb_rate
     note = ""
     if amount is not None and currency not in {"KRW", "RMB", "CNY"}:
@@ -733,7 +775,12 @@ def korea_cover_bucket(category: str) -> str:
     return "other"
 
 
-def export_korea(items: List[ReceiptItem], output_path: Path, krw_to_rmb_rate: float) -> None:
+def export_korea(
+    items: List[ReceiptItem],
+    output_path: Path,
+    krw_to_rmb_rate: float,
+    usd_to_rmb_rate: float,
+) -> None:
     cover_template = TEMPLATE_DIR / KOREA_COVER_TEMPLATE_NAME
     details_template = TEMPLATE_DIR / KOREA_DETAILS_TEMPLATE_NAME
     if not cover_template.exists():
@@ -774,7 +821,7 @@ def export_korea(items: List[ReceiptItem], output_path: Path, krw_to_rmb_rate: f
         category = normalized_category(item.category, "Korea")
         if category not in KOREA_CATEGORY_COLUMNS:
             category = "other"
-        krw, rmb, original_note = korea_amounts(item, krw_to_rmb_rate)
+        krw, rmb, original_note = korea_amounts(item, krw_to_rmb_rate, usd_to_rmb_rate)
         detail_ws[f"A{index}"] = excel_date_formula_or_value(item.date)
         detail_ws[f"B{index}"] = item.purpose.strip() or item.details.strip()
         detail_ws[f"C{index}"] = item.place.strip()
@@ -845,6 +892,7 @@ class ReimbursementHelperApp:
         self._loading_fields = False
         self._syncing_amounts = False
         self._last_amount_source = "amount"
+        self._last_form_version = self.form_version.get()
         self._busy = False
         self._build_ui()
         self._attach_amount_traces()
@@ -910,7 +958,13 @@ class ReimbursementHelperApp:
 
         left = ttk.Frame(manager, style="Panel.TFrame", padding=(0, 0, 10, 0))
         left.grid(row=1, column=0, sticky="nsew")
-        self.tree = ttk.Treeview(left, columns=("status", "date", "amount"), show="tree headings", height=20)
+        self.tree = ttk.Treeview(
+            left,
+            columns=("status", "date", "amount"),
+            show="tree headings",
+            height=20,
+            selectmode="extended",
+        )
         self.tree.heading("#0", text="File")
         self.tree.heading("status", text="Status")
         self.tree.heading("date", text="Date")
@@ -1009,54 +1063,221 @@ class ReimbursementHelperApp:
         ttk.Button(footer, text="Open output folder", command=self.open_output_folder).pack(side="right")
 
     def _attach_amount_traces(self) -> None:
-        for key in ("amount", "krw_amount", "rmb_amount"):
+        for key in ("amount", "currency", "krw_amount", "rmb_amount"):
             var = self.field_vars.get(key)
             if var is not None:
                 var.trace_add("write", lambda *_args, k=key: self._sync_amount_fields(k))
+        for key in (
+            "date",
+            "place",
+            "purpose",
+            "details",
+            "project_number",
+            "category",
+            "payment_method",
+            "receipt_label",
+        ):
+            var = self.field_vars.get(key)
+            if var is not None:
+                var.trace_add("write", lambda *_args, k=key: self._on_field_changed(k))
         self.exchange_rate.trace_add("write", lambda *_args: self._sync_amount_fields("rate"))
         self.krw_to_rmb_rate.trace_add("write", lambda *_args: self._sync_amount_fields("rate"))
+
+    def _on_field_changed(self, key: str) -> None:
+        if self._loading_fields or self._syncing_amounts:
+            return
+        self._save_field_to_selected(key, refresh=True)
 
     def _sync_amount_fields(self, changed_key: str) -> None:
         if self._loading_fields or self._syncing_amounts:
             return
         self._syncing_amounts = True
+        should_save = False
         try:
             version = self.form_version.get()
             amount_var = self.field_vars.get("amount")
+            currency_var = self.field_vars.get("currency")
             krw_var = self.field_vars.get("krw_amount")
             rmb_var = self.field_vars.get("rmb_amount")
-            if amount_var is None or krw_var is None or rmb_var is None:
-                return
-            if changed_key in {"amount", "krw_amount", "rmb_amount"}:
+            if amount_var is None or currency_var is None or krw_var is None or rmb_var is None:
+                should_save = False
+            if changed_key in {"amount", "currency", "krw_amount", "rmb_amount"}:
                 self._last_amount_source = changed_key
+
+            if amount_var is None or currency_var is None or krw_var is None or rmb_var is None:
+                return
 
             if version == "USA":
                 rate = safe_float(self.exchange_rate.get())
-                if not rate:
-                    return
-                if changed_key == "rmb_amount":
+                if rate:
+                    if currency_var.get() != "USD":
+                        currency_var.set("USD")
+                    source = self._last_amount_source if changed_key == "rate" else changed_key
+                    if source == "rmb_amount":
+                        rmb = safe_float(rmb_var.get())
+                        if rmb is not None:
+                            amount_var.set(format_amount(rmb / rate))
+                    else:
+                        usd = safe_float(amount_var.get())
+                        if usd is not None:
+                            rmb_var.set(format_amount(usd * rate))
+                    should_save = True
+            else:
+                krw_rate = safe_float(self.krw_to_rmb_rate.get())
+                usd_rate = safe_float(self.exchange_rate.get())
+                if krw_rate:
+                    currency = normalize_currency(currency_var.get(), "KRW")
+                    if currency_var.get() != currency:
+                        currency_var.set(currency)
+                    source = self._last_amount_source if changed_key == "rate" else changed_key
+                    amount = safe_float(amount_var.get())
+                    krw = safe_float(krw_var.get())
                     rmb = safe_float(rmb_var.get())
-                    if rmb is not None:
-                        amount_var.set(format_amount(rmb / rate))
-                    return
-                usd = safe_float(amount_var.get())
-                if usd is not None:
-                    rmb_var.set(format_amount(usd * rate))
-                return
+                    if source in {"amount", "currency", "rate"} and amount is not None:
+                        if currency == "USD":
+                            if usd_rate:
+                                rmb = amount * usd_rate
+                                krw = rmb / krw_rate
+                        elif currency in {"RMB", "CNY"}:
+                            rmb = amount
+                            krw = amount / krw_rate
+                        else:
+                            krw = amount
+                            rmb = amount * krw_rate
+                    elif source == "rmb_amount" and rmb is not None:
+                        krw = rmb / krw_rate
+                        if currency in {"RMB", "CNY"}:
+                            amount_var.set(format_amount(rmb))
+                        elif currency == "KRW":
+                            amount_var.set(format_amount(krw))
+                        elif currency == "USD" and usd_rate and not amount_var.get().strip():
+                            amount_var.set(format_amount(rmb / usd_rate))
+                    elif source == "krw_amount" and krw is not None:
+                        rmb = krw * krw_rate
+                        if currency == "KRW":
+                            amount_var.set(format_amount(krw))
+                        elif currency in {"RMB", "CNY"} and not amount_var.get().strip():
+                            amount_var.set(format_amount(rmb))
+                        elif currency == "USD" and usd_rate and not amount_var.get().strip():
+                            amount_var.set(format_amount(rmb / usd_rate))
 
-            rate = safe_float(self.krw_to_rmb_rate.get())
-            if not rate:
-                return
-            if changed_key == "rmb_amount":
-                rmb = safe_float(rmb_var.get())
-                if rmb is not None:
-                    krw_var.set(format_amount(rmb / rate))
-                return
-            krw = safe_float(krw_var.get())
-            if krw is not None:
-                rmb_var.set(format_amount(krw * rate))
+                    if krw is None and rmb is not None:
+                        krw = rmb / krw_rate
+                    if rmb is None and krw is not None:
+                        rmb = krw * krw_rate
+                    if krw is not None:
+                        krw_var.set(format_amount(krw))
+                    if rmb is not None:
+                        rmb_var.set(format_amount(rmb))
+                    should_save = True
         finally:
             self._syncing_amounts = False
+        if should_save:
+            self._save_amount_fields_to_selected(changed_key, refresh=True)
+
+    def update_item_amount_fields(self, item: ReceiptItem, source: str = "amount") -> None:
+        version = self.form_version.get()
+        if version == "USA":
+            item.currency = "USD"
+            rate = safe_float(self.exchange_rate.get()) or safe_float(DEFAULT_USD_TO_RMB_RATE)
+            if not rate:
+                return
+            amount = safe_float(item.amount)
+            rmb = safe_float(item.rmb_amount)
+            if source == "rmb_amount" and rmb is not None:
+                item.amount = format_amount(rmb / rate)
+            elif amount is not None:
+                item.rmb_amount = format_amount(amount * rate)
+            return
+
+        krw_rate = safe_float(self.krw_to_rmb_rate.get()) or safe_float(DEFAULT_KRW_TO_RMB_RATE)
+        usd_rate = safe_float(self.exchange_rate.get()) or safe_float(DEFAULT_USD_TO_RMB_RATE)
+        if not krw_rate:
+            return
+        item.currency = normalize_currency(item.currency, "KRW")
+        amount = safe_float(item.amount)
+        krw = safe_float(item.krw_amount)
+        rmb = safe_float(item.rmb_amount)
+        item_source = "amount" if source in {"currency", "rate"} and amount is not None else source
+        if item_source == "amount" and amount is not None:
+            if item.currency == "USD":
+                rmb = amount * usd_rate if usd_rate else rmb
+                krw = rmb / krw_rate if rmb is not None else krw
+            elif item.currency in {"RMB", "CNY"}:
+                rmb = amount
+                krw = amount / krw_rate
+            else:
+                krw = amount
+                rmb = amount * krw_rate
+        elif item_source == "rmb_amount" and rmb is not None:
+            krw = rmb / krw_rate
+            if item.currency in {"RMB", "CNY"}:
+                item.amount = format_amount(rmb)
+            elif item.currency == "KRW" and amount is None:
+                item.amount = format_amount(krw)
+            elif item.currency == "USD" and amount is None and usd_rate:
+                item.amount = format_amount(rmb / usd_rate)
+        elif item_source == "krw_amount" and krw is not None:
+            rmb = krw * krw_rate
+            if item.currency == "KRW":
+                item.amount = format_amount(krw)
+            elif item.currency in {"RMB", "CNY"} and amount is None:
+                item.amount = format_amount(rmb)
+            elif item.currency == "USD" and amount is None and usd_rate:
+                item.amount = format_amount(rmb / usd_rate)
+
+        if krw is None and rmb is not None:
+            krw = rmb / krw_rate
+        if rmb is None and krw is not None:
+            rmb = krw * krw_rate
+        if krw is not None:
+            item.krw_amount = format_amount(krw)
+        if rmb is not None:
+            item.rmb_amount = format_amount(rmb)
+
+    def _save_field_to_selected(self, key: str, refresh: bool = False) -> None:
+        var = self.field_vars.get(key)
+        if var is None:
+            return
+        value = var.get()
+        version = self.form_version.get()
+        for index in self.selected_indices():
+            item = self.items[index]
+            if key == "category":
+                setattr(item, key, category_value_to_key(value, version))
+            else:
+                setattr(item, key, value)
+        if refresh:
+            self.refresh_tree()
+
+    def _save_amount_fields_to_selected(self, source: str, refresh: bool = False) -> None:
+        version = self.form_version.get()
+        amount_value = self.field_vars["amount"].get()
+        currency_value = normalize_currency(self.field_vars["currency"].get(), "USD" if version == "USA" else "KRW")
+        krw_value = self.field_vars["krw_amount"].get()
+        rmb_value = self.field_vars["rmb_amount"].get()
+        indices = range(len(self.items)) if source == "rate" else self.selected_indices()
+        for index in indices:
+            item = self.items[index]
+            if source == "rate":
+                self.update_item_amount_fields(item, "amount")
+                continue
+            if source == "amount":
+                item.amount = amount_value
+                if version == "USA":
+                    item.currency = "USD"
+                self.update_item_amount_fields(item, "amount")
+            elif source == "currency":
+                item.currency = currency_value
+                self.update_item_amount_fields(item, "currency")
+            elif source == "krw_amount":
+                item.krw_amount = krw_value
+                self.update_item_amount_fields(item, "krw_amount")
+            elif source == "rmb_amount":
+                item.rmb_amount = rmb_value
+                self.update_item_amount_fields(item, "rmb_amount")
+        if refresh:
+            self.refresh_tree()
 
     def _set_field_visible(self, key: str, visible: bool) -> None:
         label = self.field_labels.get(key)
@@ -1108,6 +1329,7 @@ class ReimbursementHelperApp:
 
     def _on_form_version_changed(self) -> None:
         version = self.form_version.get()
+        form_changed = version != self._last_form_version
         labels = KOREA_CATEGORY_LABELS if version == "Korea" else USA_CATEGORY_LABELS
         self.category_values = [f"{key} - {label}" for key, label in labels.items()]
         cat_var = self.field_vars.get("category")
@@ -1116,28 +1338,28 @@ class ReimbursementHelperApp:
         cat = self.field_vars.get("category")
         if cat is not None and not cat.get():
             cat.set(self.category_values[0] if self.category_values else "transportation")
-        default_currency = "USD" if version == "USA" else "KRW"
         for item in self.items:
-            if item.currency != default_currency:
-                item.currency = default_currency
-                if item.status == "AI filled":
-                    item.status = "Needs regen"
+            if version == "USA":
+                item.currency = "USD"
+            else:
+                item.currency = normalize_currency(item.currency, "KRW")
+            self.update_item_amount_fields(item, "amount")
+            if form_changed and item.status == "AI filled":
+                item.status = "Needs regen"
         self._update_field_visibility()
         if self.selected_index is not None:
             self.load_selected_into_fields()
         self._sync_amount_fields("rate")
         self.refresh_tree()
+        self._last_form_version = version
 
     def upload_folder(self) -> None:
         ensure_runtime_folders()
         paths = supported_image_files(UNPROCESSED_DIR)
         if not paths:
             self.status_text.set(f"No images found in {UNPROCESSED_DIR}.")
-            if messagebox:
-                messagebox.showinfo(
-                    "Upload Folder",
-                    f"Put receipt images into this folder, then click Upload Folder again:\n\n{UNPROCESSED_DIR}",
-                )
+            if not self.settings.get("suppress_empty_upload_folder_prompt"):
+                self.show_empty_upload_folder_prompt()
             try:
                 open_path(UNPROCESSED_DIR)
             except Exception:
@@ -1171,20 +1393,75 @@ class ReimbursementHelperApp:
         self.save_session()
         self.status_text.set(f"Loaded {added} image(s) from Unprocessed.")
 
+    def show_empty_upload_folder_prompt(self) -> None:
+        if tk is None:
+            return
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Upload Folder")
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+        frame = ttk.Frame(dialog, padding=18)
+        frame.grid(row=0, column=0, sticky="nsew")
+        ttk.Label(
+            frame,
+            text="Put receipt images into this folder, then click Upload Folder again:",
+            wraplength=420,
+            justify="left",
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            frame,
+            text=str(UNPROCESSED_DIR),
+            wraplength=420,
+            justify="left",
+        ).grid(row=1, column=0, sticky="w", pady=(8, 12))
+        hide_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            frame,
+            text="Do not show this again",
+            variable=hide_var,
+        ).grid(row=2, column=0, sticky="w")
+
+        def close_dialog() -> None:
+            if hide_var.get():
+                self.settings["suppress_empty_upload_folder_prompt"] = True
+                save_user_settings(self.settings)
+            dialog.destroy()
+
+        ttk.Button(frame, text="OK", command=close_dialog).grid(row=3, column=0, sticky="e", pady=(14, 0))
+        dialog.bind("<Return>", lambda _event: close_dialog())
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        dialog.update_idletasks()
+        try:
+            x = self.root.winfo_rootx() + max(0, (self.root.winfo_width() - dialog.winfo_width()) // 2)
+            y = self.root.winfo_rooty() + max(0, (self.root.winfo_height() - dialog.winfo_height()) // 2)
+            dialog.geometry(f"+{x}+{y}")
+        except Exception:
+            pass
+        dialog.wait_window()
+
     def refresh_tree(self) -> None:
+        current_selection = set(self.tree.selection())
         self.tree.delete(*self.tree.get_children())
         for index, item in enumerate(self.items):
             values = (item.status, item.date, item.amount or item.krw_amount or item.rmb_amount)
             self.tree.insert("", "end", iid=str(index), text=item.filename, values=values)
-        if self.selected_index is not None and self.selected_index < len(self.items):
+        valid_selection = [iid for iid in current_selection if iid.isdigit() and int(iid) < len(self.items)]
+        if valid_selection:
+            self.tree.selection_set(*valid_selection)
+        elif self.selected_index is not None and self.selected_index < len(self.items):
             self.tree.selection_set(str(self.selected_index))
+        if self.selected_index is not None and self.selected_index < len(self.items):
+            self.tree.focus(str(self.selected_index))
 
     def _on_tree_select(self, _event: Any = None) -> None:
         selection = self.tree.selection()
         if not selection:
             return
+        focus = self.tree.focus()
+        chosen = focus if focus in selection else selection[-1]
         try:
-            index = int(selection[0])
+            index = int(chosen)
         except Exception:
             return
         self.select_index(index)
@@ -1194,8 +1471,27 @@ class ReimbursementHelperApp:
             return
         self.save_current_fields()
         self.selected_index = index
+        self.tree.focus(str(index))
+        if str(index) not in self.tree.selection():
+            self.tree.selection_set(str(index))
         self.load_selected_into_fields()
         self.update_preview()
+
+    def selected_indices(self) -> List[int]:
+        indices: List[int] = []
+        for iid in self.tree.selection():
+            try:
+                index = int(iid)
+            except Exception:
+                continue
+            if 0 <= index < len(self.items):
+                indices.append(index)
+        if not indices and self.selected_index is not None and 0 <= self.selected_index < len(self.items):
+            indices.append(self.selected_index)
+        return sorted(set(indices))
+
+    def selected_items(self) -> List[ReceiptItem]:
+        return [self.items[index] for index in self.selected_indices()]
 
     def selected_item(self) -> Optional[ReceiptItem]:
         if self.selected_index is None:
@@ -1211,8 +1507,11 @@ class ReimbursementHelperApp:
         for key, var in self.field_vars.items():
             value = var.get()
             if key == "category":
-                value = value.split(" - ", 1)[0]
+                value = category_value_to_key(value, self.form_version.get())
+            elif key == "currency":
+                value = normalize_currency(value, "USD" if self.form_version.get() == "USA" else "KRW")
             setattr(item, key, value)
+        self.update_item_amount_fields(item, self._last_amount_source)
 
     def load_selected_into_fields(self) -> None:
         item = self.selected_item()
@@ -1258,17 +1557,19 @@ class ReimbursementHelperApp:
             self.photo = None
 
     def remove_selected(self) -> None:
-        if self.selected_index is None:
+        indices = self.selected_indices()
+        if not indices:
             return
-        del self.items[self.selected_index]
+        for index in sorted(indices, reverse=True):
+            del self.items[index]
         self.selected_index = None
         self.refresh_tree()
         if self.items:
-            self.select_index(0)
+            self.select_index(min(indices[0], len(self.items) - 1))
         else:
             self.load_selected_into_fields()
             self.update_preview()
-        self.status_text.set("Removed selected receipt.")
+        self.status_text.set(f"Removed {len(indices)} selected receipt(s).")
         self.save_session()
 
     def clear_all(self) -> None:
@@ -1311,18 +1612,27 @@ class ReimbursementHelperApp:
                 continue
             if dest == "category":
                 text = normalized_category(text, self.form_version.get())
+            elif dest == "currency":
+                text = normalize_currency(text, "USD" if self.form_version.get() == "USA" else item.currency or "KRW")
+            elif dest == "amount":
+                hinted_currency = normalize_currency(text, "")
+                if hinted_currency:
+                    item.currency = hinted_currency
             setattr(item, dest, text)
         if self.form_version.get() == "USA":
             item.currency = "USD"
+        else:
+            item.currency = normalize_currency(item.currency, "KRW")
+        self.update_item_amount_fields(item, "amount")
         item.status = "AI filled"
 
     def generate_selected_details(self) -> None:
         self.save_current_fields()
-        item = self.selected_item()
-        if item is None:
+        items = self.selected_items()
+        if not items:
             self.show_info("Upload and select a receipt first.")
             return
-        self._run_ai_for_items([item], reload_selected=True)
+        self._run_ai_for_items(items, reload_selected=True)
 
     def generate_all_details(self) -> None:
         self.save_current_fields()
@@ -1489,7 +1799,8 @@ class ReimbursementHelperApp:
                 export_usa(self.items, output_path, exchange_rate)
             else:
                 krw_rate = safe_float(self.krw_to_rmb_rate.get()) or safe_float(DEFAULT_KRW_TO_RMB_RATE) or 0.0046
-                export_korea(self.items, output_path, krw_rate)
+                usd_rate = safe_float(self.exchange_rate.get()) or safe_float(DEFAULT_USD_TO_RMB_RATE) or 6.8
+                export_korea(self.items, output_path, krw_rate, usd_rate)
         except Exception as exc:
             log_path = log_exception("Excel export failed")
             if messagebox:
@@ -1588,6 +1899,7 @@ class ReimbursementHelperApp:
         self.exchange_rate.set(str(data.get("usa_exchange_rate") or DEFAULT_USD_TO_RMB_RATE))
         self.krw_to_rmb_rate.set(str(data.get("krw_to_rmb_rate") or DEFAULT_KRW_TO_RMB_RATE))
         self.items = restored
+        self._last_form_version = self.form_version.get()
         try:
             selected = int(data.get("selected_index", 0) or 0)
         except (TypeError, ValueError):
@@ -1599,6 +1911,9 @@ class ReimbursementHelperApp:
         self.status_text.set("Previous reimbursement session restored.")
 
     def on_close(self) -> None:
+        self.settings["usa_exchange_rate"] = self.exchange_rate.get()
+        self.settings["krw_to_rmb_rate"] = self.krw_to_rmb_rate.get()
+        save_user_settings(self.settings)
         self.save_session()
         self.root.destroy()
 
@@ -1629,7 +1944,12 @@ def smoke_test_export() -> None:
             img = Image.new("RGB", (360, 220), "#FFFFFF")
             img.save(sample_path)
     export_usa([sample], OUTPUT_DIR / "smoke_usa.xlsx", safe_float(DEFAULT_USD_TO_RMB_RATE) or 6.8)
-    export_korea([sample], OUTPUT_DIR / "smoke_korea.xlsx", safe_float(DEFAULT_KRW_TO_RMB_RATE) or 0.0046)
+    export_korea(
+        [sample],
+        OUTPUT_DIR / "smoke_korea.xlsx",
+        safe_float(DEFAULT_KRW_TO_RMB_RATE) or 0.0046,
+        safe_float(DEFAULT_USD_TO_RMB_RATE) or 6.8,
+    )
     print("Smoke exports created.")
 
 

@@ -10,7 +10,9 @@ The app supports:
 - receipt preview beside editable fields
 - manual entry when AI is not needed
 - one-click AI extraction when an OpenAI API key is available locally
-- live USD/RMB and KRW/RMB conversion using editable rate fields
+- live USD/RMB and Korea original-currency-to-KRW/RMB conversion using editable rate fields
+- currency correction for Korea receipts when AI detects the wrong receipt currency
+- multi-row editing for highlighted receipts, useful for shared fields like project number
 - USA and Korea Excel outputs from stored blank templates
 - local error logs for debugging without sharing private files
 - saved working session with restore prompt on reopen
@@ -54,6 +56,8 @@ run_reimbursement_helper.bat
 4. Files that successfully finish AI processing move to `Processed/`.
 5. Any remaining loaded files also move to `Processed/` after a successful Excel export.
 
+If `Unprocessed/` is empty, the helper shows the folder path and can open the folder for you. Check `Do not show this again` on that prompt to keep it quiet on your computer.
+
 ## AI Extraction
 
 AI extraction looks for an API key in this order:
@@ -73,7 +77,11 @@ The app has editable exchange-rate fields. Current defaults are:
 - USD to RMB: `6.8175`
 - KRW to RMB: `0.004433`
 
-Update the visible rate field before export whenever the reimbursement department needs a different rate.
+For Korea, `Original amount` plus `Currency` fills the KRW and RMB charged amounts. Change `Currency` to the receipt's real currency, such as `USD`, and the converted fields update immediately. Update the visible rate field before export whenever the reimbursement department needs a different rate.
+
+## Bulk Edits
+
+Highlight multiple receipt rows, then edit a field such as `Project number`, `Category`, or `Currency`. The edited field applies to every highlighted row while each row keeps its own receipt image and other details.
 
 ## Logs
 
