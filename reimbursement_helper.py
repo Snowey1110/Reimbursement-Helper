@@ -290,6 +290,22 @@ class ReceiptItem:
     rotation_degrees: int = 0
 
 
+@dataclass
+class BankStatementItem:
+    item_id: str
+    path: str
+    filename: str
+    source_path: str = ""
+    source_page: str = ""
+    date: str = ""
+    amount: str = ""
+    place: str = ""
+    matched_receipt_id: str = ""
+    status: str = "Needs AI"
+    crop_box: Optional[List[float]] = None
+    rotation_degrees: int = 0
+
+
 def appdata_daily_logger_key_file() -> Optional[Path]:
     appdata = os.getenv("APPDATA", "").strip()
     if not appdata:
@@ -900,7 +916,12 @@ def configure_korea_receipt_page(sheet: Any, item_count: int) -> None:
         pass
 
 
-def export_usa(items: List[ReceiptItem], output_path: Path, exchange_rate: float) -> None:
+def export_usa(
+    items: List[ReceiptItem],
+    output_path: Path,
+    exchange_rate: float,
+    bank_items: Optional[List[BankStatementItem]] = None,
+) -> None:
     template = TEMPLATE_DIR / USA_TEMPLATE_NAME
     if not template.exists():
         raise FileNotFoundError(f"Missing USA template: {template}")
@@ -942,6 +963,10 @@ def export_usa(items: List[ReceiptItem], output_path: Path, exchange_rate: float
             receipts_ws[f"{col}{row}"] = None
     receipts_ws.column_dimensions["D"].width = 38
     receipts_ws.column_dimensions["E"].width = 26
+    proof_by_receipt_id: Dict[str, BankStatementItem] = {}
+    for bank_item in bank_items or []:
+        if bank_item.matched_receipt_id and bank_item.matched_receipt_id not in proof_by_receipt_id:
+            proof_by_receipt_id[bank_item.matched_receipt_id] = bank_item
     for index, item in enumerate(items, start=1):
         row = index + 1
         receipts_ws[f"A{row}"] = index
@@ -954,6 +979,14 @@ def export_usa(items: List[ReceiptItem], output_path: Path, exchange_rate: float
                 resize_excel_image(image_path, 260, 150, item.crop_box, item.rotation_degrees),
                 f"D{row}",
             )
+        proof_item = proof_by_receipt_id.get(item.item_id)
+        if proof_item is not None:
+            proof_path = Path(proof_item.path)
+            if proof_path.exists():
+                receipts_ws.add_image(
+                    resize_excel_image(proof_path, 180, 150, proof_item.crop_box, proof_item.rotation_degrees),
+                    f"E{row}",
+                )
 
     wb.save(output_path)
 
@@ -1136,12 +1169,19 @@ class ReimbursementHelperApp:
     def __init__(self, root: Any) -> None:
         self.root = root
         self.items: List[ReceiptItem] = []
+        self.bank_items: List[BankStatementItem] = []
         self.selected_index: Optional[int] = None
+        self.selected_bank_index: Optional[int] = None
         self.photo: Optional[Any] = None
         self.preview_canvas: Optional[Any] = None
         self.revert_crop_btn: Optional[Any] = None
         self.rotate_left_btn: Optional[Any] = None
         self.rotate_right_btn: Optional[Any] = None
+        self.bank_frame: Optional[Any] = None
+        self.bank_tree: Optional[Any] = None
+        self.move_to_bank_btn: Optional[Any] = None
+        self._drag_receipt_index: Optional[int] = None
+        self.preview_kind = "receipt"
         self._preview_image_bounds: Tuple[int, int, int, int] = (0, 0, 0, 0)
         self._preview_original_size: Tuple[int, int] = (0, 0)
         self._crop_handle_centers: Dict[str, Tuple[float, float]] = {}
@@ -1248,10 +1288,18 @@ class ReimbursementHelperApp:
         self.tree.column("amount", width=70, stretch=False)
         self.tree.pack(fill="both", expand=True)
         self.tree.bind("<<TreeviewSelect>>", self._on_tree_select)
+        self.tree.bind("<ButtonPress-1>", self._on_receipt_drag_start)
+        self.tree.bind("<ButtonRelease-1>", self._on_receipt_drag_release, add="+")
         left_buttons = ttk.Frame(left, style="Panel.TFrame")
         left_buttons.pack(fill="x", pady=(10, 0))
         ttk.Button(left_buttons, text="Remove", command=self.remove_selected).pack(side="left")
         ttk.Button(left_buttons, text="Clear", command=self.clear_all).pack(side="left", padx=(8, 0))
+        self.move_to_bank_btn = ttk.Button(
+            left_buttons,
+            text="Move to bank statement",
+            command=self.move_selected_receipts_to_bank,
+        )
+        self.move_to_bank_btn.pack(side="left", padx=(8, 0))
 
         middle = ttk.Frame(manager, style="Panel.TFrame", padding=(10, 0, 0, 0))
         middle.grid(row=1, column=1, sticky="nsew")
@@ -1302,7 +1350,8 @@ class ReimbursementHelperApp:
 
         right = ttk.Frame(body, style="Panel.TFrame", padding=12)
         right.grid(row=0, column=1, sticky="nsew")
-        right.grid_rowconfigure(1, weight=1)
+        right.grid_rowconfigure(1, weight=3)
+        right.grid_rowconfigure(2, weight=1)
         right.grid_columnconfigure(0, weight=1)
         preview_header = ttk.Frame(right, style="Panel.TFrame")
         preview_header.grid(row=0, column=0, sticky="ew")
@@ -1341,6 +1390,37 @@ class ReimbursementHelperApp:
         self.preview_canvas.bind("<ButtonPress-1>", self._on_crop_press)
         self.preview_canvas.bind("<B1-Motion>", self._on_crop_drag)
         self.preview_canvas.bind("<ButtonRelease-1>", self._on_crop_release)
+
+        self.bank_frame = ttk.Frame(right, style="Panel.TFrame", padding=(0, 10, 0, 0))
+        self.bank_frame.grid(row=2, column=0, sticky="nsew")
+        self.bank_frame.grid_rowconfigure(1, weight=1)
+        self.bank_frame.grid_columnconfigure(0, weight=1)
+        ttk.Label(self.bank_frame, text="Bank account statement", style="Header.TLabel").grid(
+            row=0, column=0, sticky="w", pady=(0, 6)
+        )
+        self.bank_tree = ttk.Treeview(
+            self.bank_frame,
+            columns=("status", "date", "amount", "match"),
+            show="tree headings",
+            height=5,
+            selectmode="browse",
+        )
+        self.bank_tree.heading("#0", text="File")
+        self.bank_tree.heading("status", text="Status")
+        self.bank_tree.heading("date", text="Date")
+        self.bank_tree.heading("amount", text="Amount")
+        self.bank_tree.heading("match", text="Matched receipt")
+        self.bank_tree.column("#0", width=140, stretch=True)
+        self.bank_tree.column("status", width=110, stretch=False)
+        self.bank_tree.column("date", width=78, stretch=False)
+        self.bank_tree.column("amount", width=70, stretch=False)
+        self.bank_tree.column("match", width=120, stretch=True)
+        self.bank_tree.grid(row=1, column=0, sticky="nsew")
+        self.bank_tree.bind("<<TreeviewSelect>>", self._on_bank_tree_select)
+        bank_buttons = ttk.Frame(self.bank_frame, style="Panel.TFrame")
+        bank_buttons.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        ttk.Button(bank_buttons, text="Link selected receipt", command=self.link_selected_bank_to_receipt).pack(side="left")
+        ttk.Button(bank_buttons, text="Remove", command=self.remove_selected_bank).pack(side="left", padx=(8, 0))
 
         footer = ttk.Frame(self.root, padding=(18, 0, 18, 12))
         footer.pack(fill="x")
@@ -1605,6 +1685,10 @@ class ReimbursementHelperApp:
                 self.krw_rate_label.pack_forget()
             if self.krw_rate_entry is not None:
                 self.krw_rate_entry.pack_forget()
+            if self.bank_frame is not None:
+                self.bank_frame.grid()
+            if self.move_to_bank_btn is not None:
+                self.move_to_bank_btn.configure(state="normal")
         else:
             self.field_labels["amount"].configure(text="Original amount")
             self.field_labels["rmb_amount"].configure(text="RMB amount")
@@ -1620,6 +1704,10 @@ class ReimbursementHelperApp:
                 self.krw_rate_label.pack(side="left")
             if self.krw_rate_entry is not None:
                 self.krw_rate_entry.pack(side="left", padx=(6, 0))
+            if self.bank_frame is not None:
+                self.bank_frame.grid_remove()
+            if self.move_to_bank_btn is not None:
+                self.move_to_bank_btn.configure(state="disabled")
 
     def _on_form_version_changed(self) -> None:
         version = self.form_version.get()
@@ -1645,6 +1733,7 @@ class ReimbursementHelperApp:
             self.load_selected_into_fields()
         self._sync_amount_fields("rate")
         self.refresh_tree()
+        self.refresh_bank_tree()
         self._last_form_version = version
 
     def select_files(self) -> None:
@@ -1666,7 +1755,7 @@ class ReimbursementHelperApp:
         self.save_current_fields()
         existing = {
             selected_file_key(Path(item.path), item.source_path, item.source_page)
-            for item in self.items
+            for item in [*self.items, *self.bank_items]
             if item.path
         }
         added = 0
@@ -1746,10 +1835,157 @@ class ReimbursementHelperApp:
         if self.selected_index is not None and self.selected_index < len(self.items):
             self.tree.focus(str(self.selected_index))
 
+    def receipt_label_by_id(self, item_id: str) -> str:
+        for item in self.items:
+            if item.item_id == item_id:
+                return item.receipt_label.strip() or item.filename
+        return ""
+
+    def refresh_bank_tree(self) -> None:
+        if self.bank_tree is None:
+            return
+        current_selection = set(self.bank_tree.selection())
+        self.bank_tree.delete(*self.bank_tree.get_children())
+        for index, item in enumerate(self.bank_items):
+            values = (
+                item.status,
+                item.date,
+                item.amount,
+                self.receipt_label_by_id(item.matched_receipt_id),
+            )
+            self.bank_tree.insert("", "end", iid=str(index), text=item.filename, values=values)
+        valid_selection = [iid for iid in current_selection if iid.isdigit() and int(iid) < len(self.bank_items)]
+        if valid_selection:
+            self.bank_tree.selection_set(*valid_selection)
+        elif self.selected_bank_index is not None and self.selected_bank_index < len(self.bank_items):
+            self.bank_tree.selection_set(str(self.selected_bank_index))
+
+    def _on_bank_tree_select(self, _event: Any = None) -> None:
+        if self.bank_tree is None:
+            return
+        selection = self.bank_tree.selection()
+        if not selection:
+            self.selected_bank_index = None
+            return
+        try:
+            self.selected_bank_index = int(selection[0])
+        except Exception:
+            self.selected_bank_index = None
+        if self.selected_bank_index is not None:
+            self.preview_kind = "bank"
+            self.update_preview()
+
+    def selected_bank_item(self) -> Optional[BankStatementItem]:
+        if self.selected_bank_index is None:
+            return None
+        if self.selected_bank_index < 0 or self.selected_bank_index >= len(self.bank_items):
+            return None
+        return self.bank_items[self.selected_bank_index]
+
+    def _on_receipt_drag_start(self, event: Any) -> None:
+        row_id = self.tree.identify_row(event.y)
+        try:
+            self._drag_receipt_index = int(row_id) if row_id else None
+        except Exception:
+            self._drag_receipt_index = None
+
+    def _is_widget_inside_bank_section(self, widget: Any) -> bool:
+        target = self.bank_frame
+        while widget is not None:
+            if widget is target:
+                return True
+            try:
+                widget = widget.master
+            except Exception:
+                break
+        return False
+
+    def _on_receipt_drag_release(self, event: Any) -> None:
+        if self._drag_receipt_index is None or self.form_version.get() != "USA":
+            self._drag_receipt_index = None
+            return
+        try:
+            widget = self.root.winfo_containing(event.x_root, event.y_root)
+        except Exception:
+            widget = None
+        if widget is not None and self._is_widget_inside_bank_section(widget):
+            self.move_receipts_to_bank([self._drag_receipt_index])
+        self._drag_receipt_index = None
+
+    def move_selected_receipts_to_bank(self) -> None:
+        if self.form_version.get() != "USA":
+            self.show_info("Bank account statements are only used for the USA form.")
+            return
+        indices = self.selected_indices()
+        if not indices:
+            self.show_info("Select one or more uploaded statement images first.")
+            return
+        self.move_receipts_to_bank(indices)
+
+    def move_receipts_to_bank(self, indices: List[int]) -> None:
+        self.save_current_fields()
+        moved = 0
+        for index in sorted(set(indices), reverse=True):
+            if index < 0 or index >= len(self.items):
+                continue
+            item = self.items.pop(index)
+            self.bank_items.append(
+                BankStatementItem(
+                    item_id=uuid.uuid4().hex,
+                    path=item.path,
+                    filename=item.filename,
+                    source_path=item.source_path,
+                    source_page=item.source_page,
+                    date=item.date,
+                    amount=item.amount,
+                    place=item.place,
+                    status="Needs AI" if not (item.date and item.amount) else "Needs match",
+                    crop_box=item.crop_box,
+                    rotation_degrees=item.rotation_degrees,
+                )
+            )
+            moved += 1
+        self.selected_index = None
+        self.refresh_tree()
+        self.refresh_bank_tree()
+        if self.items:
+            self.select_index(0)
+        else:
+            self.load_selected_into_fields()
+            self.update_preview()
+        self.save_session()
+        self.status_text.set(f"Moved {moved} image(s) to bank account statement.")
+
+    def remove_selected_bank(self) -> None:
+        item = self.selected_bank_item()
+        if item is None:
+            return
+        del self.bank_items[self.selected_bank_index]
+        self.selected_bank_index = None
+        self.refresh_bank_tree()
+        if self.preview_kind == "bank":
+            self.preview_kind = "receipt"
+            self.update_preview()
+        self.save_session()
+        self.status_text.set("Removed selected bank statement image.")
+
+    def link_selected_bank_to_receipt(self) -> None:
+        bank_item = self.selected_bank_item()
+        receipt = self.selected_item()
+        if bank_item is None or receipt is None:
+            self.show_info("Select a bank statement row and the matching receipt row first.")
+            return
+        bank_item.matched_receipt_id = receipt.item_id
+        bank_item.status = "Matched manually"
+        self.refresh_bank_tree()
+        self.save_session()
+        self.status_text.set("Linked bank statement to selected receipt.")
+
     def _on_tree_select(self, _event: Any = None) -> None:
         selection = self.tree.selection()
         if not selection:
             return
+        self.preview_kind = "receipt"
         focus = self.tree.focus()
         chosen = focus if focus in selection else selection[-1]
         try:
@@ -1852,10 +2088,15 @@ class ReimbursementHelperApp:
         if self.rotate_right_btn is not None:
             self.rotate_right_btn.configure(state="disabled")
 
+    def selected_preview_item(self) -> Optional[Any]:
+        if self.preview_kind == "bank":
+            return self.selected_bank_item()
+        return self.selected_item()
+
     def update_preview(self) -> None:
         if self.preview_canvas is None:
             return
-        item = self.selected_item()
+        item = self.selected_preview_item()
         if item is None:
             self.clear_preview("Select receipt image or PDF files to begin.")
             return
@@ -1915,7 +2156,7 @@ class ReimbursementHelperApp:
     def draw_crop_overlay(self) -> None:
         if self.preview_canvas is None:
             return
-        item = self.selected_item()
+        item = self.selected_preview_item()
         original_w, original_h = self._preview_original_size
         image_x, image_y, display_w, display_h = self._preview_image_bounds
         if item is None or original_w <= 0 or original_h <= 0 or display_w <= 0 or display_h <= 0:
@@ -1968,7 +2209,7 @@ class ReimbursementHelperApp:
         self._dragging_crop_handle = self.nearest_crop_handle(event.x, event.y)
 
     def _on_crop_drag(self, event: Any) -> None:
-        item = self.selected_item()
+        item = self.selected_preview_item()
         handle = self._dragging_crop_handle
         original_w, original_h = self._preview_original_size
         if item is None or handle is None or original_w <= 0 or original_h <= 0:
@@ -1988,7 +2229,7 @@ class ReimbursementHelperApp:
         self.status_text.set("Crop updated for selected receipt.")
 
     def revert_crop(self) -> None:
-        item = self.selected_item()
+        item = self.selected_preview_item()
         if item is None:
             return
         item.crop_box = None
@@ -1997,7 +2238,7 @@ class ReimbursementHelperApp:
         self.status_text.set("Crop reverted for selected receipt.")
 
     def rotate_selected(self, delta_degrees: int) -> None:
-        item = self.selected_item()
+        item = self.selected_preview_item()
         if item is None:
             return
         path = Path(item.path)
@@ -2023,10 +2264,16 @@ class ReimbursementHelperApp:
         indices = self.selected_indices()
         if not indices:
             return
+        removed_ids = {self.items[index].item_id for index in indices if 0 <= index < len(self.items)}
         for index in sorted(indices, reverse=True):
             del self.items[index]
+        for bank_item in self.bank_items:
+            if bank_item.matched_receipt_id in removed_ids:
+                bank_item.matched_receipt_id = ""
+                bank_item.status = "Needs manual review"
         self.selected_index = None
         self.refresh_tree()
+        self.refresh_bank_tree()
         if self.items:
             self.select_index(min(indices[0], len(self.items) - 1))
         else:
@@ -2041,8 +2288,11 @@ class ReimbursementHelperApp:
         if messagebox and not messagebox.askyesno("Clear receipts", "Remove all uploaded receipt rows?"):
             return
         self.items.clear()
+        self.bank_items.clear()
         self.selected_index = None
+        self.selected_bank_index = None
         self.refresh_tree()
+        self.refresh_bank_tree()
         self.load_selected_into_fields()
         self.update_preview()
         self.status_text.set("Cleared receipt list.")
@@ -2089,6 +2339,57 @@ class ReimbursementHelperApp:
         self.update_item_amount_fields(item, "amount")
         item.status = "AI filled"
 
+    def apply_ai_data_to_bank_item(self, item: BankStatementItem, data: Dict[str, Any]) -> None:
+        for source_key, dest_key in {
+            "date": "date",
+            "amount": "amount",
+            "place": "place",
+            "vendor": "place",
+            "details": "place",
+        }.items():
+            value = data.get(source_key)
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text:
+                setattr(item, dest_key, text)
+        item.status = "Needs match"
+
+    def same_expense_date(self, left: str, right: str) -> bool:
+        left_value = parse_date_value(left)
+        right_value = parse_date_value(right)
+        if isinstance(left_value, date) and isinstance(right_value, date):
+            return left_value == right_value
+        return (left or "").strip() == (right or "").strip()
+
+    def match_bank_item(self, bank_item: BankStatementItem) -> None:
+        bank_amount = safe_float(bank_item.amount)
+        if bank_amount is None or not bank_item.date:
+            bank_item.matched_receipt_id = ""
+            bank_item.status = "Needs manual review"
+            return
+        matches: List[ReceiptItem] = []
+        for receipt in self.items:
+            receipt_amount = safe_float(receipt.amount)
+            if receipt_amount is None:
+                continue
+            if abs(receipt_amount - bank_amount) > 0.01:
+                continue
+            if not self.same_expense_date(receipt.date, bank_item.date):
+                continue
+            matches.append(receipt)
+        if len(matches) == 1:
+            bank_item.matched_receipt_id = matches[0].item_id
+            bank_item.status = "Matched"
+        else:
+            bank_item.matched_receipt_id = ""
+            bank_item.status = "Needs manual review"
+
+    def match_all_bank_items(self) -> None:
+        for bank_item in self.bank_items:
+            self.match_bank_item(bank_item)
+        self.refresh_bank_tree()
+
     def generate_selected_details(self) -> None:
         self.save_current_fields()
         items = self.selected_items()
@@ -2102,19 +2403,25 @@ class ReimbursementHelperApp:
         if not self.items:
             self.show_info("Upload receipts first.")
             return
-        self._run_ai_for_items(list(self.items), reload_selected=True)
+        self._run_ai_for_items(list(self.items), reload_selected=True, include_bank=True)
 
-    def _run_ai_for_items(self, items: List[ReceiptItem], reload_selected: bool) -> None:
+    def _run_ai_for_items(
+        self,
+        items: List[ReceiptItem],
+        reload_selected: bool,
+        include_bank: bool = False,
+    ) -> None:
         if self._busy:
             self.show_info("A batch is already running.")
             return
-        total = len(items)
+        bank_items = list(self.bank_items) if include_bank and self.form_version.get() == "USA" else []
+        total = len(items) + len(bank_items)
         if total <= 0:
             return
         form_version = self.form_version.get()
         self.set_busy(True)
         self.set_progress(0, total, f"0/{total}")
-        self.status_text.set(f"Generating details for {total} receipt(s)...")
+        self.status_text.set(f"Generating details for {total} image(s)...")
 
         def worker() -> None:
             successes = 0
@@ -2148,6 +2455,55 @@ class ReimbursementHelperApp:
                         lambda i=item, n=idx: self.mark_item_status(i, "Failed", n, total),
                     )
                     continue
+            offset = len(items)
+            for bank_index, bank_item in enumerate(bank_items, start=1):
+                progress_index = offset + bank_index
+                self.root.after(
+                    0,
+                    lambda i=bank_item, n=progress_index: self.mark_bank_item_status(
+                        i, f"Processing {n}/{total}", n - 1, total
+                    ),
+                )
+                self.set_status(f"Reading bank statement {bank_index}/{len(bank_items)}: {bank_item.filename}")
+                try:
+                    temp = ReceiptItem(
+                        item_id=bank_item.item_id,
+                        path=bank_item.path,
+                        filename=bank_item.filename,
+                        source_path=bank_item.source_path,
+                        source_page=bank_item.source_page,
+                        date=bank_item.date,
+                        place=bank_item.place,
+                        amount=bank_item.amount,
+                        currency="USD",
+                        crop_box=bank_item.crop_box,
+                        rotation_degrees=bank_item.rotation_degrees,
+                    )
+                    data = call_openai_receipt_extraction(
+                        Path(bank_item.path),
+                        "USA",
+                        temp,
+                        progress=self.set_status,
+                    )
+                    self.apply_ai_data_to_bank_item(bank_item, data)
+                    self.match_bank_item(bank_item)
+                    successes += 1
+                    self.root.after(
+                        0,
+                        lambda i=bank_item, n=progress_index: self.mark_bank_item_status(i, i.status, n, total),
+                    )
+                except Exception as exc:
+                    setup_logging()
+                    LOGGER.exception("Bank statement extraction failed for %s", bank_item.filename)
+                    bank_item.status = "Needs manual review"
+                    failures.append(f"{bank_item.filename}: {exc}")
+                    self.root.after(
+                        0,
+                        lambda i=bank_item, n=progress_index: self.mark_bank_item_status(
+                            i, "Needs manual review", n, total
+                        ),
+                    )
+                    continue
             self.root.after(0, lambda: self.after_ai_complete(successes, failures, total, reload_selected))
 
         threading.Thread(target=worker, daemon=True).start()
@@ -2162,6 +2518,7 @@ class ReimbursementHelperApp:
         self.set_busy(False)
         self.set_progress(total, total, f"{total}/{total}")
         self.refresh_tree()
+        self.refresh_bank_tree()
         if reload_selected:
             self.load_selected_into_fields()
             self.update_preview()
@@ -2213,6 +2570,11 @@ class ReimbursementHelperApp:
             self.load_selected_into_fields()
             self.update_preview()
 
+    def mark_bank_item_status(self, item: BankStatementItem, status: str, done: int, total: int) -> None:
+        item.status = status
+        self.refresh_bank_tree()
+        self.set_progress(done, total, f"{done}/{total}")
+
     def move_item_to_processed(self, item: ReceiptItem) -> bool:
         source = Path(item.path)
         if not source.exists() or not same_folder(source, UNPROCESSED_DIR):
@@ -2259,7 +2621,7 @@ class ReimbursementHelperApp:
         try:
             if self.form_version.get() == "USA":
                 exchange_rate = safe_float(self.exchange_rate.get()) or safe_float(DEFAULT_USD_TO_RMB_RATE) or 6.8
-                export_usa(self.items, output_path, exchange_rate)
+                export_usa(self.items, output_path, exchange_rate, self.bank_items)
             else:
                 krw_rate = safe_float(self.krw_to_rmb_rate.get()) or safe_float(DEFAULT_KRW_TO_RMB_RATE) or 0.0046
                 usd_rate = safe_float(self.exchange_rate.get()) or safe_float(DEFAULT_USD_TO_RMB_RATE) or 6.8
@@ -2314,6 +2676,7 @@ class ReimbursementHelperApp:
             "krw_to_rmb_rate": self.krw_to_rmb_rate.get(),
             "selected_index": self.selected_index,
             "items": [asdict(item) for item in self.items],
+            "bank_items": [asdict(item) for item in self.bank_items],
         }
 
     def save_session(self) -> None:
@@ -2335,7 +2698,12 @@ class ReimbursementHelperApp:
             log_exception("Could not read previous session state")
             return
         raw_items = data.get("items")
-        if not isinstance(raw_items, list) or not raw_items:
+        raw_bank_items = data.get("bank_items")
+        if not isinstance(raw_items, list):
+            raw_items = []
+        if not isinstance(raw_bank_items, list):
+            raw_bank_items = []
+        if not raw_items and not raw_bank_items:
             return
         should_restore = True
         if messagebox:
@@ -2360,11 +2728,24 @@ class ReimbursementHelperApp:
             values["rotation_degrees"] = normalize_rotation(values.get("rotation_degrees", 0))
             restored.append(ReceiptItem(**values))
         if not restored:
-            return
+            restored = []
+        bank_fields = set(BankStatementItem.__dataclass_fields__.keys())
+        restored_bank: List[BankStatementItem] = []
+        for raw in raw_bank_items:
+            if not isinstance(raw, dict):
+                continue
+            values = {key: raw.get(key, "") for key in bank_fields}
+            if not values.get("item_id"):
+                values["item_id"] = uuid.uuid4().hex
+            if not isinstance(values.get("crop_box"), list):
+                values["crop_box"] = None
+            values["rotation_degrees"] = normalize_rotation(values.get("rotation_degrees", 0))
+            restored_bank.append(BankStatementItem(**values))
         self.form_version.set(str(data.get("form_version") or "USA"))
         self.exchange_rate.set(str(data.get("usa_exchange_rate") or DEFAULT_USD_TO_RMB_RATE))
         self.krw_to_rmb_rate.set(str(data.get("krw_to_rmb_rate") or DEFAULT_KRW_TO_RMB_RATE))
         self.items = restored
+        self.bank_items = restored_bank
         self._last_form_version = self.form_version.get()
         try:
             selected = int(data.get("selected_index", 0) or 0)
@@ -2373,7 +2754,9 @@ class ReimbursementHelperApp:
         self.selected_index = None
         self._on_form_version_changed()
         self.refresh_tree()
-        self.select_index(max(0, min(selected, len(self.items) - 1)))
+        self.refresh_bank_tree()
+        if self.items:
+            self.select_index(max(0, min(selected, len(self.items) - 1)))
         self.status_text.set("Previous reimbursement session restored.")
 
     def on_close(self) -> None:

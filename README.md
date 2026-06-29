@@ -10,6 +10,7 @@ The app supports:
 - receipt preview beside editable fields
 - receipt screenshot rotation for sideways images
 - manual receipt image perspective cropping with four independent corner points and revert
+- USA bank account statement proof images for the payment-proof column
 - manual entry when AI is not needed
 - one-click AI extraction when an OpenAI API key is available locally
 - live USD/RMB and Korea original-currency-to-KRW/RMB conversion using editable rate fields
@@ -82,6 +83,10 @@ For Korea, `Original amount` plus `Currency` fills the KRW and RMB charged amoun
 ## Bulk Edits
 
 Highlight multiple receipt rows, then edit a field such as `Project number`, `Category`, or `Currency`. The edited field applies to every highlighted row while each row keeps its own receipt image and other details.
+
+## USA Payment Proof
+
+For the USA form, drag a selected statement image from the receipt list into `Bank account statement`, or use `Move to bank statement`. `Generate All` reads the proof image and matches it to a receipt only when the date and charge amount have exactly one match. Unclear or duplicate matches are marked `Needs manual review`; select the proof row and the correct receipt row, then click `Link selected receipt`.
 
 ## Receipt Cropping
 
