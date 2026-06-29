@@ -4,6 +4,7 @@ import base64
 import copy
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -59,6 +60,7 @@ USER_API_KEY_FILE = CONFIG_DIR / "api_key.txt"
 TEMPLATES_CONFIG_FILE = CONFIG_DIR / "templates.json"
 SESSION_FILE = CONFIG_DIR / "session_state.json"
 SUPPORTED_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
+SUPPORTED_UPLOAD_SUFFIXES = SUPPORTED_IMAGE_SUFFIXES | {".pdf"}
 OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions"
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
 DEFAULT_USD_TO_RMB_RATE = "6.8175"
@@ -115,6 +117,42 @@ def supported_image_files(folder: Path) -> List[Path]:
         ],
         key=lambda path: path.name.lower(),
     )
+
+
+def render_pdf_pages(pdf_path: Path) -> List[Path]:
+    try:
+        import fitz  # type: ignore[import-not-found]
+    except Exception as exc:
+        raise RuntimeError(
+            "PDF support requires PyMuPDF. Run `python -m pip install -r requirements.txt`, then try again."
+        ) from exc
+
+    target_dir = WORK_DIR / "pdf_pages" / f"{pdf_path.stem}_{uuid.uuid4().hex[:8]}"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    rendered: List[Path] = []
+    try:
+        document = fitz.open(str(pdf_path))
+    except Exception as exc:
+        raise RuntimeError(f"Could not open PDF: {pdf_path}") from exc
+    try:
+        for page_index in range(document.page_count):
+            page = document.load_page(page_index)
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+            output = target_dir / f"{pdf_path.stem}_page_{page_index + 1}.png"
+            pixmap.save(str(output))
+            rendered.append(output)
+    finally:
+        document.close()
+    return rendered
+
+
+def selected_file_key(path: Path, source_path: str = "", source_page: str = "") -> Tuple[str, str]:
+    key_path = source_path or str(path)
+    try:
+        key_path = str(Path(key_path).resolve()).lower()
+    except Exception:
+        key_path = str(key_path).lower()
+    return key_path, str(source_page or "")
 
 
 def unique_path(folder: Path, filename: str) -> Path:
@@ -233,6 +271,8 @@ class ReceiptItem:
     item_id: str
     path: str
     filename: str
+    source_path: str = ""
+    source_page: str = ""
     date: str = ""
     place: str = ""
     amount: str = ""
@@ -591,22 +631,126 @@ def normalized_category(category: str, form_version: str) -> str:
     return "other"
 
 
-def normalized_crop_box(crop_box: Any, width: int, height: int) -> Optional[Tuple[int, int, int, int]]:
-    if not isinstance(crop_box, (list, tuple)) or len(crop_box) != 4:
+def default_crop_points(width: int, height: int) -> List[Tuple[float, float]]:
+    return [
+        (0.0, 0.0),
+        (float(width), 0.0),
+        (float(width), float(height)),
+        (0.0, float(height)),
+    ]
+
+
+def normalized_crop_points(crop_box: Any, width: int, height: int) -> Optional[List[Tuple[float, float]]]:
+    if width <= 0 or height <= 0:
         return None
+    if not isinstance(crop_box, (list, tuple)) or len(crop_box) != 4:
+        if not isinstance(crop_box, (list, tuple)) or len(crop_box) != 8:
+            return None
     try:
-        x1, y1, x2, y2 = [float(value) for value in crop_box]
+        values = [float(value) for value in crop_box]
     except (TypeError, ValueError):
         return None
-    left = max(0, min(width, min(x1, x2)))
-    right = max(0, min(width, max(x1, x2)))
-    top = max(0, min(height, min(y1, y2)))
-    bottom = max(0, min(height, max(y1, y2)))
-    if right - left < 5 or bottom - top < 5:
+    if len(values) == 4:
+        x1, y1, x2, y2 = values
+        points = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
+    else:
+        points = [
+            (values[0], values[1]),
+            (values[2], values[3]),
+            (values[4], values[5]),
+            (values[6], values[7]),
+        ]
+    clamped = [
+        (max(0.0, min(float(width), x)), max(0.0, min(float(height), y)))
+        for x, y in points
+    ]
+    top_width = math.dist(clamped[0], clamped[1])
+    bottom_width = math.dist(clamped[3], clamped[2])
+    left_height = math.dist(clamped[0], clamped[3])
+    right_height = math.dist(clamped[1], clamped[2])
+    if max(top_width, bottom_width) < 5 or max(left_height, right_height) < 5:
         return None
-    if left <= 0 and top <= 0 and right >= width and bottom >= height:
+    default = default_crop_points(width, height)
+    if all(math.dist(point, default_point) < 1.0 for point, default_point in zip(clamped, default)):
         return None
-    return int(round(left)), int(round(top)), int(round(right)), int(round(bottom))
+    return clamped
+
+
+def normalized_crop_box(crop_box: Any, width: int, height: int) -> Optional[Tuple[int, int, int, int]]:
+    points = normalized_crop_points(crop_box, width, height)
+    if not points:
+        return None
+    xs = [point[0] for point in points]
+    ys = [point[1] for point in points]
+    return (
+        int(round(max(0.0, min(xs)))),
+        int(round(max(0.0, min(ys)))),
+        int(round(min(float(width), max(xs)))),
+        int(round(min(float(height), max(ys)))),
+    )
+
+
+def solve_linear_system(matrix: List[List[float]], vector: List[float]) -> List[float]:
+    size = len(vector)
+    rows = [matrix[index][:] + [vector[index]] for index in range(size)]
+    for pivot_index in range(size):
+        pivot_row = max(range(pivot_index, size), key=lambda row: abs(rows[row][pivot_index]))
+        if abs(rows[pivot_row][pivot_index]) < 1e-9:
+            raise ValueError("Perspective crop points are too close together.")
+        rows[pivot_index], rows[pivot_row] = rows[pivot_row], rows[pivot_index]
+        pivot = rows[pivot_index][pivot_index]
+        rows[pivot_index] = [value / pivot for value in rows[pivot_index]]
+        for row_index in range(size):
+            if row_index == pivot_index:
+                continue
+            factor = rows[row_index][pivot_index]
+            rows[row_index] = [
+                value - factor * rows[pivot_index][col_index]
+                for col_index, value in enumerate(rows[row_index])
+            ]
+    return [rows[index][-1] for index in range(size)]
+
+
+def perspective_coefficients(
+    source_points: List[Tuple[float, float]],
+    width: int,
+    height: int,
+) -> List[float]:
+    destination_points = [
+        (0.0, 0.0),
+        (float(width), 0.0),
+        (float(width), float(height)),
+        (0.0, float(height)),
+    ]
+    matrix: List[List[float]] = []
+    vector: List[float] = []
+    for (u, v), (x, y) in zip(destination_points, source_points):
+        matrix.append([u, v, 1.0, 0.0, 0.0, 0.0, -u * x, -v * x])
+        vector.append(x)
+        matrix.append([0.0, 0.0, 0.0, u, v, 1.0, -u * y, -v * y])
+        vector.append(y)
+    return solve_linear_system(matrix, vector)
+
+
+def perspective_crop_image(image: Any, crop_box: Any) -> Any:
+    points = normalized_crop_points(crop_box, image.width, image.height)
+    if not points:
+        return image
+    top_width = math.dist(points[0], points[1])
+    bottom_width = math.dist(points[3], points[2])
+    left_height = math.dist(points[0], points[3])
+    right_height = math.dist(points[1], points[2])
+    output_width = max(1, int(round(max(top_width, bottom_width))))
+    output_height = max(1, int(round(max(left_height, right_height))))
+    try:
+        coefficients = perspective_coefficients(points, output_width, output_height)
+    except Exception:
+        setup_logging()
+        LOGGER.exception("Could not solve perspective crop; using original image")
+        return image
+    transform_mode = getattr(Image, "Transform", Image).PERSPECTIVE
+    resample = getattr(getattr(Image, "Resampling", Image), "BICUBIC", Image.BICUBIC)
+    return image.transform((output_width, output_height), transform_mode, coefficients, resample)
 
 
 def prepare_excel_image_file(path: Path, crop_box: Any = None) -> Path:
@@ -617,9 +761,7 @@ def prepare_excel_image_file(path: Path, crop_box: Any = None) -> Path:
     target = target_dir / f"{uuid.uuid4().hex}.png"
     with Image.open(path) as source:
         image = ImageOps.exif_transpose(source) if ImageOps is not None else source.copy()
-        crop = normalized_crop_box(crop_box, image.width, image.height)
-        if crop:
-            image = image.crop(crop)
+        image = perspective_crop_image(image, crop_box)
         if image.mode not in {"RGB", "RGBA"}:
             image = image.convert("RGB")
         image.save(target, "PNG")
@@ -995,7 +1137,7 @@ class ReimbursementHelperApp:
         )
         form_combo.pack(side="left", padx=(0, 12))
         form_combo.bind("<<ComboboxSelected>>", lambda _event: self._on_form_version_changed())
-        self.upload_folder_btn = ttk.Button(controls, text="Upload Folder", command=self.upload_folder)
+        self.upload_folder_btn = ttk.Button(controls, text="Select Files", command=self.select_files)
         self.upload_folder_btn.pack(side="left", padx=4)
         self.generate_details_btn = ttk.Button(controls, text="Generate Details", command=self.generate_selected_details)
         self.generate_details_btn.pack(side="left", padx=4)
@@ -1423,92 +1565,90 @@ class ReimbursementHelperApp:
         self.refresh_tree()
         self._last_form_version = version
 
-    def upload_folder(self) -> None:
+    def select_files(self) -> None:
         ensure_runtime_folders()
-        paths = supported_image_files(UNPROCESSED_DIR)
+        if filedialog is None:
+            return
+        selected = filedialog.askopenfilenames(
+            title="Select receipt files",
+            filetypes=[
+                ("Receipt files", "*.png *.jpg *.jpeg *.webp *.bmp *.gif *.pdf"),
+                ("Image files", "*.png *.jpg *.jpeg *.webp *.bmp *.gif"),
+                ("PDF files", "*.pdf"),
+                ("All files", "*.*"),
+            ],
+        )
+        paths = [Path(path) for path in selected]
         if not paths:
-            self.status_text.set(f"No images found in {UNPROCESSED_DIR}.")
-            if not self.settings.get("suppress_empty_upload_folder_prompt"):
-                self.show_empty_upload_folder_prompt()
-            try:
-                open_path(UNPROCESSED_DIR)
-            except Exception:
-                log_exception("Could not open Unprocessed folder")
             return
         self.save_current_fields()
-        existing = {str(Path(item.path).resolve()).lower() for item in self.items if item.path}
+        existing = {
+            selected_file_key(Path(item.path), item.source_path, item.source_page)
+            for item in self.items
+            if item.path
+        }
         added = 0
+        failed: List[str] = []
+        first_new_index = len(self.items)
         for path in paths:
-            if path.suffix.lower() not in SUPPORTED_IMAGE_SUFFIXES:
+            suffix = path.suffix.lower()
+            if suffix not in SUPPORTED_UPLOAD_SUFFIXES:
                 continue
-            try:
-                resolved = str(path.resolve()).lower()
-            except Exception:
-                resolved = str(path).lower()
-            if resolved in existing:
+            if suffix == ".pdf":
+                try:
+                    page_paths = render_pdf_pages(path)
+                except Exception as exc:
+                    log_exception(f"Could not import PDF: {path}")
+                    failed.append(f"{path.name}: {exc}")
+                    continue
+                for page_index, page_path in enumerate(page_paths, start=1):
+                    key = selected_file_key(page_path, str(path), str(page_index))
+                    if key in existing:
+                        continue
+                    self.items.append(
+                        ReceiptItem(
+                            item_id=uuid.uuid4().hex,
+                            path=str(page_path),
+                            filename=f"{path.name} page {page_index}",
+                            source_path=str(path),
+                            source_page=str(page_index),
+                            currency="USD" if self.form_version.get() == "USA" else "KRW",
+                            category="transportation",
+                        )
+                    )
+                    existing.add(key)
+                    added += 1
+                continue
+            key = selected_file_key(path, str(path), "")
+            if key in existing:
                 continue
             self.items.append(
                 ReceiptItem(
                     item_id=uuid.uuid4().hex,
                     path=str(path),
                     filename=path.name,
+                    source_path=str(path),
                     currency="USD" if self.form_version.get() == "USA" else "KRW",
                     category="transportation",
                 )
             )
+            existing.add(key)
             added += 1
         self.refresh_tree()
-        if self.items and self.selected_index is None:
-            self.select_index(0)
+        if added and self.items and self.selected_index is None:
+            self.select_index(first_new_index)
         self.save_session()
-        self.status_text.set(f"Loaded {added} image(s) from Unprocessed.")
+        self.status_text.set(f"Added {added} receipt file(s).")
+        if failed and messagebox:
+            messagebox.showwarning(
+                "Select Files",
+                "Some files could not be imported.\n\n"
+                + "\n".join(failed[:5])
+                + f"\n\nLogged to:\n{LOG_DIR / 'app.log'}",
+            )
 
-    def show_empty_upload_folder_prompt(self) -> None:
-        if tk is None:
-            return
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Upload Folder")
-        dialog.resizable(False, False)
-        dialog.transient(self.root)
-        dialog.grab_set()
-        frame = ttk.Frame(dialog, padding=18)
-        frame.grid(row=0, column=0, sticky="nsew")
-        ttk.Label(
-            frame,
-            text="Put receipt images into this folder, then click Upload Folder again:",
-            wraplength=420,
-            justify="left",
-        ).grid(row=0, column=0, sticky="w")
-        ttk.Label(
-            frame,
-            text=str(UNPROCESSED_DIR),
-            wraplength=420,
-            justify="left",
-        ).grid(row=1, column=0, sticky="w", pady=(8, 12))
-        hide_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            frame,
-            text="Do not show this again",
-            variable=hide_var,
-        ).grid(row=2, column=0, sticky="w")
-
-        def close_dialog() -> None:
-            if hide_var.get():
-                self.settings["suppress_empty_upload_folder_prompt"] = True
-                save_user_settings(self.settings)
-            dialog.destroy()
-
-        ttk.Button(frame, text="OK", command=close_dialog).grid(row=3, column=0, sticky="e", pady=(14, 0))
-        dialog.bind("<Return>", lambda _event: close_dialog())
-        dialog.bind("<Escape>", lambda _event: dialog.destroy())
-        dialog.update_idletasks()
-        try:
-            x = self.root.winfo_rootx() + max(0, (self.root.winfo_width() - dialog.winfo_width()) // 2)
-            y = self.root.winfo_rooty() + max(0, (self.root.winfo_height() - dialog.winfo_height()) // 2)
-            dialog.geometry(f"+{x}+{y}")
-        except Exception:
-            pass
-        dialog.wait_window()
+    def upload_folder(self) -> None:
+        self.select_files()
 
     def refresh_tree(self) -> None:
         current_selection = set(self.tree.selection())
@@ -1631,7 +1771,7 @@ class ReimbursementHelperApp:
             return
         item = self.selected_item()
         if item is None:
-            self.clear_preview("Drop images into Unprocessed, then click Upload Folder.")
+            self.clear_preview("Select receipt image or PDF files to begin.")
             return
         path = Path(item.path)
         if not path.exists() or Image is None or ImageTk is None:
@@ -1658,12 +1798,12 @@ class ReimbursementHelperApp:
             log_exception("Receipt preview failed")
             self.clear_preview(f"Could not preview image:\n{exc}")
 
-    def current_preview_crop_box(self, item: ReceiptItem) -> Tuple[float, float, float, float]:
+    def current_preview_crop_points(self, item: ReceiptItem) -> List[Tuple[float, float]]:
         width, height = self._preview_original_size
-        crop = normalized_crop_box(item.crop_box, width, height)
+        crop = normalized_crop_points(item.crop_box, width, height)
         if crop:
-            return tuple(float(value) for value in crop)
-        return 0.0, 0.0, float(width), float(height)
+            return crop
+        return default_crop_points(width, height)
 
     def original_to_canvas(self, x: float, y: float) -> Tuple[float, float]:
         image_x, image_y, display_w, display_h = self._preview_image_bounds
@@ -1692,24 +1832,22 @@ class ReimbursementHelperApp:
         if item is None or original_w <= 0 or original_h <= 0 or display_w <= 0 or display_h <= 0:
             return
         self.preview_canvas.delete("crop")
-        crop = self.current_preview_crop_box(item)
-        x1, y1 = self.original_to_canvas(crop[0], crop[1])
-        x2, y2 = self.original_to_canvas(crop[2], crop[3])
-        self.preview_canvas.create_rectangle(
-            x1,
-            y1,
-            x2,
-            y2,
+        crop = self.current_preview_crop_points(item)
+        canvas_points = [self.original_to_canvas(x, y) for x, y in crop]
+        flattened_points = [coord for point in canvas_points for coord in point]
+        self.preview_canvas.create_polygon(
+            *flattened_points,
             outline="#0078D7",
+            fill="",
             width=2,
             tags=("crop",),
         )
         handle_size = 8
         centers = {
-            "nw": (x1, y1),
-            "ne": (x2, y1),
-            "sw": (x1, y2),
-            "se": (x2, y2),
+            "nw": canvas_points[0],
+            "ne": canvas_points[1],
+            "se": canvas_points[2],
+            "sw": canvas_points[3],
         }
         self._crop_handle_centers = centers
         for handle, (hx, hy) in centers.items():
@@ -1724,7 +1862,7 @@ class ReimbursementHelperApp:
                 tags=("crop", f"crop_{handle}"),
             )
         if self.revert_crop_btn is not None:
-            has_crop = normalized_crop_box(item.crop_box, original_w, original_h) is not None
+            has_crop = normalized_crop_points(item.crop_box, original_w, original_h) is not None
             self.revert_crop_btn.configure(state="normal" if has_crop else "disabled")
 
     def nearest_crop_handle(self, x: float, y: float) -> Optional[str]:
@@ -1746,18 +1884,15 @@ class ReimbursementHelperApp:
         original_w, original_h = self._preview_original_size
         if item is None or handle is None or original_w <= 0 or original_h <= 0:
             return
-        x1, y1, x2, y2 = self.current_preview_crop_box(item)
+        points = self.current_preview_crop_points(item)
         x, y = self.canvas_to_original(event.x, event.y)
-        min_size = 10.0
-        if "n" in handle:
-            y1 = min(max(0.0, y), y2 - min_size)
-        if "s" in handle:
-            y2 = max(min(float(original_h), y), y1 + min_size)
-        if "w" in handle:
-            x1 = min(max(0.0, x), x2 - min_size)
-        if "e" in handle:
-            x2 = max(min(float(original_w), x), x1 + min_size)
-        item.crop_box = [round(x1, 2), round(y1, 2), round(x2, 2), round(y2, 2)]
+        handle_indexes = {"nw": 0, "ne": 1, "se": 2, "sw": 3}
+        points[handle_indexes[handle]] = (x, y)
+        item.crop_box = [
+            round(value, 2)
+            for point in points
+            for value in point
+        ]
         self.draw_crop_overlay()
 
     def _on_crop_release(self, _event: Any) -> None:

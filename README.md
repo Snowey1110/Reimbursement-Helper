@@ -4,11 +4,11 @@ Lightweight Windows desktop app for preparing VisionNav reimbursement workbooks 
 
 The app supports:
 
-- bulk receipt image upload
-- folder intake from `Unprocessed/` with finished files moved to `Processed/`
+- bulk receipt image/PDF selection
+- additive uploads so more files can be selected later without clearing the list
 - one combined receipt/details manager section
 - receipt preview beside editable fields
-- manual receipt image cropping with four draggable corner points and revert
+- manual receipt image perspective cropping with four independent corner points and revert
 - manual entry when AI is not needed
 - one-click AI extraction when an OpenAI API key is available locally
 - live USD/RMB and Korea original-currency-to-KRW/RMB conversion using editable rate fields
@@ -49,15 +49,13 @@ Or double-click:
 run_reimbursement_helper.bat
 ```
 
-## Folder Workflow
+## File Workflow
 
-1. Put receipt images into `Unprocessed/`.
-2. Open the app and click `Upload Folder`.
+1. Open the app and click `Select Files`.
+2. Choose one or more receipt images or PDFs.
 3. Review or generate details.
-4. Files that successfully finish AI processing move to `Processed/`.
-5. Any remaining loaded files also move to `Processed/` after a successful Excel export.
-
-If `Unprocessed/` is empty, the helper shows the folder path and can open the folder for you. Check `Do not show this again` on that prompt to keep it quiet on your computer.
+4. Click `Select Files` again later to add more receipts without clearing the current list.
+5. Each PDF page is imported as its own receipt image.
 
 ## AI Extraction
 
@@ -86,7 +84,7 @@ Highlight multiple receipt rows, then edit a field such as `Project number`, `Ca
 
 ## Receipt Cropping
 
-Each preview image has four draggable crop points. Drag the corners to keep only the receipt area before export. `Revert crop` resets the selected receipt, and cropped images are used in the generated Excel workbook.
+Each preview image has four independent draggable crop points. Drag the corners to match the receipt edges; the app straightens that shape into a rectangle for the generated Excel workbook. `Revert crop` resets the selected receipt.
 
 ## Logs
 
@@ -108,7 +106,7 @@ The app copies these templates on export and fills the copy only. Original templ
 
 ## Notes
 
-- Receipt upload currently supports image files: PNG, JPG, JPEG, WEBP, BMP, and GIF.
+- Receipt upload currently supports PNG, JPG, JPEG, WEBP, BMP, GIF, and PDF.
 - Korea output is one workbook with three sheets: cover, details, and receipts.
 - Korea receipts are placed without text labels in the left printable page area only; overflow continues on the next printed page below.
 - USA output preserves the provided workbook format and leaves proof-of-payment cells blank.
