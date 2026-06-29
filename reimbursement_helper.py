@@ -287,6 +287,7 @@ class ReceiptItem:
     receipt_label: str = ""
     status: str = "Empty"
     crop_box: Optional[List[float]] = None
+    rotation_degrees: int = 0
 
 
 def appdata_daily_logger_key_file() -> Optional[Path]:
@@ -425,7 +426,12 @@ def call_openai_receipt_extraction(
                 pass
 
     notify("Reading receipt image")
-    data_url = image_data_url(image_path)
+    prepared_image = prepare_receipt_image_file(
+        image_path,
+        existing.crop_box,
+        existing.rotation_degrees,
+    )
+    data_url = image_data_url(prepared_image)
     form_hint = "USA VisionNav reimbursement form" if form_version == "USA" else "Korea VisionNav reimbursement form"
     prompt = f"""
 Extract reimbursement fields from this receipt image for a {form_hint}.
@@ -631,6 +637,23 @@ def normalized_category(category: str, form_version: str) -> str:
     return "other"
 
 
+def normalize_rotation(value: Any) -> int:
+    try:
+        degrees = int(float(value))
+    except (TypeError, ValueError):
+        degrees = 0
+    return degrees % 360 // 90 * 90
+
+
+def oriented_image_from_path(path: Path, rotation_degrees: Any = 0) -> Any:
+    with Image.open(path) as source:
+        image = ImageOps.exif_transpose(source) if ImageOps is not None else source.copy()
+    rotation = normalize_rotation(rotation_degrees)
+    if rotation:
+        image = image.rotate(-rotation, expand=True)
+    return image
+
+
 def default_crop_points(width: int, height: int) -> List[Tuple[float, float]]:
     return [
         (0.0, 0.0),
@@ -753,23 +776,60 @@ def perspective_crop_image(image: Any, crop_box: Any) -> Any:
     return image.transform((output_width, output_height), transform_mode, coefficients, resample)
 
 
-def prepare_excel_image_file(path: Path, crop_box: Any = None) -> Path:
+def flatten_crop_points(points: List[Tuple[float, float]]) -> List[float]:
+    return [round(value, 2) for point in points for value in point]
+
+
+def rotated_crop_points(
+    crop_box: Any,
+    width: int,
+    height: int,
+    delta_degrees: int,
+) -> Optional[List[float]]:
+    points = normalized_crop_points(crop_box, width, height)
+    if not points:
+        return None
+    delta = normalize_rotation(delta_degrees)
+    if delta == 90:
+        transformed = [(height - y, x) for x, y in points]
+        ordered = [transformed[index] for index in (3, 0, 1, 2)]
+    elif delta == 270:
+        transformed = [(y, width - x) for x, y in points]
+        ordered = [transformed[index] for index in (1, 2, 3, 0)]
+    elif delta == 180:
+        transformed = [(width - x, height - y) for x, y in points]
+        ordered = [transformed[index] for index in (2, 3, 0, 1)]
+    else:
+        ordered = points
+    return flatten_crop_points(ordered)
+
+
+def prepare_receipt_image_file(path: Path, crop_box: Any = None, rotation_degrees: Any = 0) -> Path:
     if Image is None:
         return path
-    target_dir = WORK_DIR / "excel_images"
+    target_dir = WORK_DIR / "prepared_images"
     target_dir.mkdir(parents=True, exist_ok=True)
     target = target_dir / f"{uuid.uuid4().hex}.png"
-    with Image.open(path) as source:
-        image = ImageOps.exif_transpose(source) if ImageOps is not None else source.copy()
-        image = perspective_crop_image(image, crop_box)
-        if image.mode not in {"RGB", "RGBA"}:
-            image = image.convert("RGB")
-        image.save(target, "PNG")
+    image = oriented_image_from_path(path, rotation_degrees)
+    image = perspective_crop_image(image, crop_box)
+    if image.mode not in {"RGB", "RGBA"}:
+        image = image.convert("RGB")
+    image.save(target, "PNG")
     return target
 
 
-def resize_excel_image(path: Path, max_width: int, max_height: int, crop_box: Any = None) -> Any:
-    excel_path = prepare_excel_image_file(path, crop_box)
+def prepare_excel_image_file(path: Path, crop_box: Any = None, rotation_degrees: Any = 0) -> Path:
+    return prepare_receipt_image_file(path, crop_box, rotation_degrees)
+
+
+def resize_excel_image(
+    path: Path,
+    max_width: int,
+    max_height: int,
+    crop_box: Any = None,
+    rotation_degrees: Any = 0,
+) -> Any:
+    excel_path = prepare_excel_image_file(path, crop_box, rotation_degrees)
     img = XLImage(str(excel_path))
     if Image is None:
         img.width = max_width
@@ -890,7 +950,10 @@ def export_usa(items: List[ReceiptItem], output_path: Path, exchange_rate: float
         receipts_ws.row_dimensions[row].height = 126
         image_path = Path(item.path)
         if image_path.exists():
-            receipts_ws.add_image(resize_excel_image(image_path, 260, 150, item.crop_box), f"D{row}")
+            receipts_ws.add_image(
+                resize_excel_image(image_path, 260, 150, item.crop_box, item.rotation_degrees),
+                f"D{row}",
+            )
 
     wb.save(output_path)
 
@@ -1061,7 +1124,10 @@ def export_korea(
         image_row = (page * page_height) + row_offsets[row_group]
         image_path = Path(item.path)
         if image_path.exists():
-            receipts_ws.add_image(resize_excel_image(image_path, 215, 300, item.crop_box), f"{col}{image_row}")
+            receipts_ws.add_image(
+                resize_excel_image(image_path, 215, 300, item.crop_box, item.rotation_degrees),
+                f"{col}{image_row}",
+            )
 
     wb.save(output_path)
 
@@ -1074,6 +1140,8 @@ class ReimbursementHelperApp:
         self.photo: Optional[Any] = None
         self.preview_canvas: Optional[Any] = None
         self.revert_crop_btn: Optional[Any] = None
+        self.rotate_left_btn: Optional[Any] = None
+        self.rotate_right_btn: Optional[Any] = None
         self._preview_image_bounds: Tuple[int, int, int, int] = (0, 0, 0, 0)
         self._preview_original_size: Tuple[int, int] = (0, 0)
         self._crop_handle_centers: Dict[str, Tuple[float, float]] = {}
@@ -1240,8 +1308,22 @@ class ReimbursementHelperApp:
         preview_header.grid(row=0, column=0, sticky="ew")
         preview_header.grid_columnconfigure(0, weight=1)
         ttk.Label(preview_header, text="Receipt preview", style="Header.TLabel").grid(row=0, column=0, sticky="w")
+        self.rotate_left_btn = ttk.Button(
+            preview_header,
+            text="Rotate left",
+            command=lambda: self.rotate_selected(-90),
+            state="disabled",
+        )
+        self.rotate_left_btn.grid(row=0, column=1, sticky="e", padx=(0, 6))
+        self.rotate_right_btn = ttk.Button(
+            preview_header,
+            text="Rotate right",
+            command=lambda: self.rotate_selected(90),
+            state="disabled",
+        )
+        self.rotate_right_btn.grid(row=0, column=2, sticky="e", padx=(0, 6))
         self.revert_crop_btn = ttk.Button(preview_header, text="Revert crop", command=self.revert_crop, state="disabled")
-        self.revert_crop_btn.grid(row=0, column=1, sticky="e")
+        self.revert_crop_btn.grid(row=0, column=3, sticky="e")
         preview_frame = ttk.Frame(right, style="Panel.TFrame")
         preview_frame.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
         preview_frame.grid_rowconfigure(0, weight=1)
@@ -1765,6 +1847,10 @@ class ReimbursementHelperApp:
         self._crop_handle_centers = {}
         if self.revert_crop_btn is not None:
             self.revert_crop_btn.configure(state="disabled")
+        if self.rotate_left_btn is not None:
+            self.rotate_left_btn.configure(state="disabled")
+        if self.rotate_right_btn is not None:
+            self.rotate_right_btn.configure(state="disabled")
 
     def update_preview(self) -> None:
         if self.preview_canvas is None:
@@ -1778,8 +1864,7 @@ class ReimbursementHelperApp:
             self.clear_preview(str(path))
             return
         try:
-            with Image.open(path) as source:
-                image = ImageOps.exif_transpose(source) if ImageOps is not None else source.copy()
+            image = oriented_image_from_path(path, item.rotation_degrees)
             self._preview_original_size = (image.width, image.height)
             canvas_w = max(240, self.preview_canvas.winfo_width())
             canvas_h = max(240, self.preview_canvas.winfo_height())
@@ -1794,6 +1879,10 @@ class ReimbursementHelperApp:
             self.preview_canvas.create_image(x, y, anchor="nw", image=self.photo)
             self._preview_image_bounds = (x, y, display_w, display_h)
             self.draw_crop_overlay()
+            if self.rotate_left_btn is not None:
+                self.rotate_left_btn.configure(state="normal")
+            if self.rotate_right_btn is not None:
+                self.rotate_right_btn.configure(state="normal")
         except Exception as exc:
             log_exception("Receipt preview failed")
             self.clear_preview(f"Could not preview image:\n{exc}")
@@ -1888,11 +1977,7 @@ class ReimbursementHelperApp:
         x, y = self.canvas_to_original(event.x, event.y)
         handle_indexes = {"nw": 0, "ne": 1, "se": 2, "sw": 3}
         points[handle_indexes[handle]] = (x, y)
-        item.crop_box = [
-            round(value, 2)
-            for point in points
-            for value in point
-        ]
+        item.crop_box = flatten_crop_points(points)
         self.draw_crop_overlay()
 
     def _on_crop_release(self, _event: Any) -> None:
@@ -1910,6 +1995,29 @@ class ReimbursementHelperApp:
         self.draw_crop_overlay()
         self.save_session()
         self.status_text.set("Crop reverted for selected receipt.")
+
+    def rotate_selected(self, delta_degrees: int) -> None:
+        item = self.selected_item()
+        if item is None:
+            return
+        path = Path(item.path)
+        try:
+            image = oriented_image_from_path(path, item.rotation_degrees)
+            transformed_crop = rotated_crop_points(
+                item.crop_box,
+                image.width,
+                image.height,
+                delta_degrees,
+            )
+        except Exception:
+            log_exception("Could not transform crop during rotation")
+            transformed_crop = None
+        item.rotation_degrees = normalize_rotation(normalize_rotation(item.rotation_degrees) + delta_degrees)
+        item.crop_box = transformed_crop
+        self.update_preview()
+        self.save_session()
+        direction = "right" if delta_degrees > 0 else "left"
+        self.status_text.set(f"Rotated selected receipt {direction}.")
 
     def remove_selected(self) -> None:
         indices = self.selected_indices()
@@ -2249,6 +2357,7 @@ class ReimbursementHelperApp:
                 values["item_id"] = uuid.uuid4().hex
             if not isinstance(values.get("crop_box"), list):
                 values["crop_box"] = None
+            values["rotation_degrees"] = normalize_rotation(values.get("rotation_degrees", 0))
             restored.append(ReceiptItem(**values))
         if not restored:
             return

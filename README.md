@@ -8,6 +8,7 @@ The app supports:
 - additive uploads so more files can be selected later without clearing the list
 - one combined receipt/details manager section
 - receipt preview beside editable fields
+- receipt screenshot rotation for sideways images
 - manual receipt image perspective cropping with four independent corner points and revert
 - manual entry when AI is not needed
 - one-click AI extraction when an OpenAI API key is available locally
@@ -84,7 +85,7 @@ Highlight multiple receipt rows, then edit a field such as `Project number`, `Ca
 
 ## Receipt Cropping
 
-Each preview image has four independent draggable crop points. Drag the corners to match the receipt edges; the app straightens that shape into a rectangle for the generated Excel workbook. `Revert crop` resets the selected receipt.
+Use `Rotate left` or `Rotate right` when a screenshot is sideways. Each preview image also has four independent draggable crop points. Drag the corners to match the receipt edges; the app straightens that shape into a rectangle for the generated Excel workbook. `Revert crop` resets the selected receipt.
 
 ## Logs
 
