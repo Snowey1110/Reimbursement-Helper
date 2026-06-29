@@ -666,6 +666,38 @@ def fit_columns_for_receipts(sheet: Any) -> None:
         sheet.column_dimensions[col].width = 16
 
 
+def configure_korea_receipt_page(sheet: Any, item_count: int) -> None:
+    page_height = 50
+    receipts_per_page = 4
+    page_count = max(1, (item_count + receipts_per_page - 1) // receipts_per_page)
+    last_row = page_count * page_height
+    sheet.print_area = f"A1:E{last_row}"
+    if sheet.sheet_properties.pageSetUpPr is None:
+        try:
+            from openpyxl.worksheet.properties import PageSetupProperties
+
+            sheet.sheet_properties.pageSetUpPr = PageSetupProperties()
+        except Exception:
+            pass
+    if sheet.sheet_properties.pageSetUpPr is not None:
+        sheet.sheet_properties.pageSetUpPr.fitToPage = True
+    sheet.page_setup.orientation = "portrait"
+    sheet.page_setup.fitToWidth = 1
+    sheet.page_setup.fitToHeight = 0
+    sheet.page_margins.left = 0.45
+    sheet.page_margins.right = 0.45
+    sheet.page_margins.top = 0.45
+    sheet.page_margins.bottom = 0.45
+    try:
+        from openpyxl.worksheet.pagebreak import Break
+
+        sheet.row_breaks.brk = []
+        for row in range(page_height, last_row, page_height):
+            sheet.row_breaks.append(Break(id=row))
+    except Exception:
+        pass
+
+
 def export_usa(items: List[ReceiptItem], output_path: Path, exchange_rate: float) -> None:
     template = TEMPLATE_DIR / USA_TEMPLATE_NAME
     if not template.exists():
@@ -869,22 +901,25 @@ def export_korea(
 
     clear_images(receipts_ws)
     fit_columns_for_receipts(receipts_ws)
-    for row in range(1, max(240, len(items) * 40 + 20)):
+    configure_korea_receipt_page(receipts_ws, len(items))
+    page_height = 50
+    receipts_per_page = 4
+    page_count = max(1, (len(items) + receipts_per_page - 1) // receipts_per_page)
+    last_receipt_row = page_count * page_height
+    for row in range(1, max(240, last_receipt_row + 1)):
         for col in "ABCDEFGH":
             receipts_ws[f"{col}{row}"] = None
-    anchors = ["A", "D", "G"]
-    row_step = 34
+    anchors = ["A", "D"]
+    row_offsets = [2, 26]
     for idx, item in enumerate(items):
-        band = idx // len(anchors)
-        slot = idx % len(anchors)
-        label_row = 1 + band * row_step
-        image_row = label_row + 1
-        col = anchors[slot]
-        label = item.receipt_label.strip() or item.details.strip() or item.filename
-        receipts_ws[f"{col}{label_row}"] = label[:60]
+        page = idx // receipts_per_page
+        slot = idx % receipts_per_page
+        row_group = slot // len(anchors)
+        col = anchors[slot % len(anchors)]
+        image_row = (page * page_height) + row_offsets[row_group]
         image_path = Path(item.path)
         if image_path.exists():
-            receipts_ws.add_image(resize_excel_image(image_path, 280, 390, item.crop_box), f"{col}{image_row}")
+            receipts_ws.add_image(resize_excel_image(image_path, 215, 300, item.crop_box), f"{col}{image_row}")
 
     wb.save(output_path)
 
