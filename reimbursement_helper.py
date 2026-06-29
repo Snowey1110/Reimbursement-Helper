@@ -246,6 +246,7 @@ class ReceiptItem:
     payment_method: str = ""
     receipt_label: str = ""
     status: str = "Empty"
+    crop_box: Optional[List[float]] = None
 
 
 def appdata_daily_logger_key_file() -> Optional[Path]:
@@ -590,7 +591,25 @@ def normalized_category(category: str, form_version: str) -> str:
     return "other"
 
 
-def prepare_excel_image_file(path: Path) -> Path:
+def normalized_crop_box(crop_box: Any, width: int, height: int) -> Optional[Tuple[int, int, int, int]]:
+    if not isinstance(crop_box, (list, tuple)) or len(crop_box) != 4:
+        return None
+    try:
+        x1, y1, x2, y2 = [float(value) for value in crop_box]
+    except (TypeError, ValueError):
+        return None
+    left = max(0, min(width, min(x1, x2)))
+    right = max(0, min(width, max(x1, x2)))
+    top = max(0, min(height, min(y1, y2)))
+    bottom = max(0, min(height, max(y1, y2)))
+    if right - left < 5 or bottom - top < 5:
+        return None
+    if left <= 0 and top <= 0 and right >= width and bottom >= height:
+        return None
+    return int(round(left)), int(round(top)), int(round(right)), int(round(bottom))
+
+
+def prepare_excel_image_file(path: Path, crop_box: Any = None) -> Path:
     if Image is None:
         return path
     target_dir = WORK_DIR / "excel_images"
@@ -598,14 +617,17 @@ def prepare_excel_image_file(path: Path) -> Path:
     target = target_dir / f"{uuid.uuid4().hex}.png"
     with Image.open(path) as source:
         image = ImageOps.exif_transpose(source) if ImageOps is not None else source.copy()
+        crop = normalized_crop_box(crop_box, image.width, image.height)
+        if crop:
+            image = image.crop(crop)
         if image.mode not in {"RGB", "RGBA"}:
             image = image.convert("RGB")
         image.save(target, "PNG")
     return target
 
 
-def resize_excel_image(path: Path, max_width: int, max_height: int) -> Any:
-    excel_path = prepare_excel_image_file(path)
+def resize_excel_image(path: Path, max_width: int, max_height: int, crop_box: Any = None) -> Any:
+    excel_path = prepare_excel_image_file(path, crop_box)
     img = XLImage(str(excel_path))
     if Image is None:
         img.width = max_width
@@ -694,7 +716,7 @@ def export_usa(items: List[ReceiptItem], output_path: Path, exchange_rate: float
         receipts_ws.row_dimensions[row].height = 126
         image_path = Path(item.path)
         if image_path.exists():
-            receipts_ws.add_image(resize_excel_image(image_path, 260, 150), f"D{row}")
+            receipts_ws.add_image(resize_excel_image(image_path, 260, 150, item.crop_box), f"D{row}")
 
     wb.save(output_path)
 
@@ -862,7 +884,7 @@ def export_korea(
         receipts_ws[f"{col}{label_row}"] = label[:60]
         image_path = Path(item.path)
         if image_path.exists():
-            receipts_ws.add_image(resize_excel_image(image_path, 280, 390), f"{col}{image_row}")
+            receipts_ws.add_image(resize_excel_image(image_path, 280, 390, item.crop_box), f"{col}{image_row}")
 
     wb.save(output_path)
 
@@ -873,6 +895,12 @@ class ReimbursementHelperApp:
         self.items: List[ReceiptItem] = []
         self.selected_index: Optional[int] = None
         self.photo: Optional[Any] = None
+        self.preview_canvas: Optional[Any] = None
+        self.revert_crop_btn: Optional[Any] = None
+        self._preview_image_bounds: Tuple[int, int, int, int] = (0, 0, 0, 0)
+        self._preview_original_size: Tuple[int, int] = (0, 0)
+        self._crop_handle_centers: Dict[str, Tuple[float, float]] = {}
+        self._dragging_crop_handle: Optional[str] = None
         self.settings = load_user_settings()
         self.form_version = tk.StringVar(value="USA")
         self.exchange_rate = tk.StringVar(value=str(self.settings.get("usa_exchange_rate", DEFAULT_USD_TO_RMB_RATE)))
@@ -1031,22 +1059,29 @@ class ReimbursementHelperApp:
         right.grid(row=0, column=1, sticky="nsew")
         right.grid_rowconfigure(1, weight=1)
         right.grid_columnconfigure(0, weight=1)
-        ttk.Label(right, text="Receipt preview", style="Header.TLabel").grid(row=0, column=0, sticky="w")
+        preview_header = ttk.Frame(right, style="Panel.TFrame")
+        preview_header.grid(row=0, column=0, sticky="ew")
+        preview_header.grid_columnconfigure(0, weight=1)
+        ttk.Label(preview_header, text="Receipt preview", style="Header.TLabel").grid(row=0, column=0, sticky="w")
+        self.revert_crop_btn = ttk.Button(preview_header, text="Revert crop", command=self.revert_crop, state="disabled")
+        self.revert_crop_btn.grid(row=0, column=1, sticky="e")
         preview_frame = ttk.Frame(right, style="Panel.TFrame")
         preview_frame.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
         preview_frame.grid_rowconfigure(0, weight=1)
         preview_frame.grid_columnconfigure(0, weight=1)
-        self.preview_label = tk.Label(
+        self.preview_canvas = tk.Canvas(
             preview_frame,
             bg="#FFFFFF",
-            fg="#666666",
-            text="Drop images into Unprocessed, then click Upload Folder.",
-            anchor="center",
-            justify="center",
+            highlightthickness=1,
+            highlightbackground="#222222",
             bd=1,
             relief="solid",
         )
-        self.preview_label.grid(row=0, column=0, sticky="nsew")
+        self.preview_canvas.grid(row=0, column=0, sticky="nsew")
+        self.preview_canvas.bind("<Configure>", lambda _event: self.update_preview())
+        self.preview_canvas.bind("<ButtonPress-1>", self._on_crop_press)
+        self.preview_canvas.bind("<B1-Motion>", self._on_crop_drag)
+        self.preview_canvas.bind("<ButtonRelease-1>", self._on_crop_release)
 
         footer = ttk.Frame(self.root, padding=(18, 0, 18, 12))
         footer.pack(fill="x")
@@ -1535,26 +1570,176 @@ class ReimbursementHelperApp:
             self._loading_fields = False
         self._sync_amount_fields("rate")
 
+    def clear_preview(self, message: str) -> None:
+        if self.preview_canvas is None:
+            return
+        self.preview_canvas.delete("all")
+        width = max(1, self.preview_canvas.winfo_width())
+        height = max(1, self.preview_canvas.winfo_height())
+        self.preview_canvas.create_text(
+            width / 2,
+            height / 2,
+            text=message,
+            fill="#666666",
+            width=max(160, width - 30),
+            justify="center",
+        )
+        self.photo = None
+        self._preview_image_bounds = (0, 0, 0, 0)
+        self._preview_original_size = (0, 0)
+        self._crop_handle_centers = {}
+        if self.revert_crop_btn is not None:
+            self.revert_crop_btn.configure(state="disabled")
+
     def update_preview(self) -> None:
+        if self.preview_canvas is None:
+            return
         item = self.selected_item()
         if item is None:
-            self.preview_label.configure(image="", text="Drop images into Unprocessed, then click Upload Folder.")
-            self.photo = None
+            self.clear_preview("Drop images into Unprocessed, then click Upload Folder.")
             return
         path = Path(item.path)
         if not path.exists() or Image is None or ImageTk is None:
-            self.preview_label.configure(image="", text=str(path))
-            self.photo = None
+            self.clear_preview(str(path))
             return
         try:
-            image = Image.open(path)
-            image.thumbnail((610, 610))
+            with Image.open(path) as source:
+                image = ImageOps.exif_transpose(source) if ImageOps is not None else source.copy()
+            self._preview_original_size = (image.width, image.height)
+            canvas_w = max(240, self.preview_canvas.winfo_width())
+            canvas_h = max(240, self.preview_canvas.winfo_height())
+            max_w = max(1, canvas_w - 20)
+            max_h = max(1, canvas_h - 20)
+            image.thumbnail((max_w, max_h))
+            display_w, display_h = image.size
+            x = max(0, (canvas_w - display_w) // 2)
+            y = max(0, (canvas_h - display_h) // 2)
             self.photo = ImageTk.PhotoImage(image)
-            self.preview_label.configure(image=self.photo, text="")
+            self.preview_canvas.delete("all")
+            self.preview_canvas.create_image(x, y, anchor="nw", image=self.photo)
+            self._preview_image_bounds = (x, y, display_w, display_h)
+            self.draw_crop_overlay()
         except Exception as exc:
             log_exception("Receipt preview failed")
-            self.preview_label.configure(image="", text=f"Could not preview image:\n{exc}")
-            self.photo = None
+            self.clear_preview(f"Could not preview image:\n{exc}")
+
+    def current_preview_crop_box(self, item: ReceiptItem) -> Tuple[float, float, float, float]:
+        width, height = self._preview_original_size
+        crop = normalized_crop_box(item.crop_box, width, height)
+        if crop:
+            return tuple(float(value) for value in crop)
+        return 0.0, 0.0, float(width), float(height)
+
+    def original_to_canvas(self, x: float, y: float) -> Tuple[float, float]:
+        image_x, image_y, display_w, display_h = self._preview_image_bounds
+        original_w, original_h = self._preview_original_size
+        if original_w <= 0 or original_h <= 0:
+            return float(image_x), float(image_y)
+        return image_x + (x / original_w) * display_w, image_y + (y / original_h) * display_h
+
+    def canvas_to_original(self, x: float, y: float) -> Tuple[float, float]:
+        image_x, image_y, display_w, display_h = self._preview_image_bounds
+        original_w, original_h = self._preview_original_size
+        if display_w <= 0 or display_h <= 0:
+            return 0.0, 0.0
+        clamped_x = max(image_x, min(image_x + display_w, x))
+        clamped_y = max(image_y, min(image_y + display_h, y))
+        original_x = ((clamped_x - image_x) / display_w) * original_w
+        original_y = ((clamped_y - image_y) / display_h) * original_h
+        return original_x, original_y
+
+    def draw_crop_overlay(self) -> None:
+        if self.preview_canvas is None:
+            return
+        item = self.selected_item()
+        original_w, original_h = self._preview_original_size
+        image_x, image_y, display_w, display_h = self._preview_image_bounds
+        if item is None or original_w <= 0 or original_h <= 0 or display_w <= 0 or display_h <= 0:
+            return
+        self.preview_canvas.delete("crop")
+        crop = self.current_preview_crop_box(item)
+        x1, y1 = self.original_to_canvas(crop[0], crop[1])
+        x2, y2 = self.original_to_canvas(crop[2], crop[3])
+        self.preview_canvas.create_rectangle(
+            x1,
+            y1,
+            x2,
+            y2,
+            outline="#0078D7",
+            width=2,
+            tags=("crop",),
+        )
+        handle_size = 8
+        centers = {
+            "nw": (x1, y1),
+            "ne": (x2, y1),
+            "sw": (x1, y2),
+            "se": (x2, y2),
+        }
+        self._crop_handle_centers = centers
+        for handle, (hx, hy) in centers.items():
+            self.preview_canvas.create_oval(
+                hx - handle_size,
+                hy - handle_size,
+                hx + handle_size,
+                hy + handle_size,
+                fill="#FFFFFF",
+                outline="#0078D7",
+                width=2,
+                tags=("crop", f"crop_{handle}"),
+            )
+        if self.revert_crop_btn is not None:
+            has_crop = normalized_crop_box(item.crop_box, original_w, original_h) is not None
+            self.revert_crop_btn.configure(state="normal" if has_crop else "disabled")
+
+    def nearest_crop_handle(self, x: float, y: float) -> Optional[str]:
+        nearest: Optional[str] = None
+        nearest_distance = 16.0
+        for handle, (hx, hy) in self._crop_handle_centers.items():
+            distance = ((hx - x) ** 2 + (hy - y) ** 2) ** 0.5
+            if distance <= nearest_distance:
+                nearest = handle
+                nearest_distance = distance
+        return nearest
+
+    def _on_crop_press(self, event: Any) -> None:
+        self._dragging_crop_handle = self.nearest_crop_handle(event.x, event.y)
+
+    def _on_crop_drag(self, event: Any) -> None:
+        item = self.selected_item()
+        handle = self._dragging_crop_handle
+        original_w, original_h = self._preview_original_size
+        if item is None or handle is None or original_w <= 0 or original_h <= 0:
+            return
+        x1, y1, x2, y2 = self.current_preview_crop_box(item)
+        x, y = self.canvas_to_original(event.x, event.y)
+        min_size = 10.0
+        if "n" in handle:
+            y1 = min(max(0.0, y), y2 - min_size)
+        if "s" in handle:
+            y2 = max(min(float(original_h), y), y1 + min_size)
+        if "w" in handle:
+            x1 = min(max(0.0, x), x2 - min_size)
+        if "e" in handle:
+            x2 = max(min(float(original_w), x), x1 + min_size)
+        item.crop_box = [round(x1, 2), round(y1, 2), round(x2, 2), round(y2, 2)]
+        self.draw_crop_overlay()
+
+    def _on_crop_release(self, _event: Any) -> None:
+        if self._dragging_crop_handle is None:
+            return
+        self._dragging_crop_handle = None
+        self.save_session()
+        self.status_text.set("Crop updated for selected receipt.")
+
+    def revert_crop(self) -> None:
+        item = self.selected_item()
+        if item is None:
+            return
+        item.crop_box = None
+        self.draw_crop_overlay()
+        self.save_session()
+        self.status_text.set("Crop reverted for selected receipt.")
 
     def remove_selected(self) -> None:
         indices = self.selected_indices()
@@ -1892,6 +2077,8 @@ class ReimbursementHelperApp:
             values = {key: raw.get(key, "") for key in fields}
             if not values.get("item_id"):
                 values["item_id"] = uuid.uuid4().hex
+            if not isinstance(values.get("crop_box"), list):
+                values["crop_box"] = None
             restored.append(ReceiptItem(**values))
         if not restored:
             return

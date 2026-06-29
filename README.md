@@ -8,6 +8,7 @@ The app supports:
 - folder intake from `Unprocessed/` with finished files moved to `Processed/`
 - one combined receipt/details manager section
 - receipt preview beside editable fields
+- manual receipt image cropping with four draggable corner points and revert
 - manual entry when AI is not needed
 - one-click AI extraction when an OpenAI API key is available locally
 - live USD/RMB and Korea original-currency-to-KRW/RMB conversion using editable rate fields
@@ -82,6 +83,10 @@ For Korea, `Original amount` plus `Currency` fills the KRW and RMB charged amoun
 ## Bulk Edits
 
 Highlight multiple receipt rows, then edit a field such as `Project number`, `Category`, or `Currency`. The edited field applies to every highlighted row while each row keeps its own receipt image and other details.
+
+## Receipt Cropping
+
+Each preview image has four draggable crop points. Drag the corners to keep only the receipt area before export. `Revert crop` resets the selected receipt, and cropped images are used in the generated Excel workbook.
 
 ## Logs
 
