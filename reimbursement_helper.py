@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import copy
 import json
+import logging
 import os
 import re
 import shutil
@@ -12,6 +13,7 @@ import traceback
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 from urllib import error, request
@@ -36,9 +38,10 @@ except Exception:  # pragma: no cover
     XLImage = None  # type: ignore[assignment]
 
 try:
-    from PIL import Image, ImageTk
+    from PIL import Image, ImageOps, ImageTk
 except Exception:  # pragma: no cover
     Image = None  # type: ignore[assignment]
+    ImageOps = None  # type: ignore[assignment]
     ImageTk = None  # type: ignore[assignment]
 
 
@@ -46,17 +49,47 @@ APP_DIR = Path(__file__).resolve().parent
 CONFIG_DIR = APP_DIR / "config"
 TEMPLATE_DIR = APP_DIR / "templates"
 OUTPUT_DIR = APP_DIR / "outputs"
+WORK_DIR = APP_DIR / "work"
+LOG_DIR = APP_DIR / "logs"
 USER_SETTINGS_FILE = CONFIG_DIR / "user_settings.json"
 USER_API_KEY_FILE = CONFIG_DIR / "api_key.txt"
 TEMPLATES_CONFIG_FILE = CONFIG_DIR / "templates.json"
 SUPPORTED_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
 OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions"
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
+DEFAULT_USD_TO_RMB_RATE = "6.8175"
+DEFAULT_KRW_TO_RMB_RATE = "0.004433"
+LOGGER = logging.getLogger("reimbursement_helper")
 
 
 USA_TEMPLATE_NAME = "usa_expense_report_template.xlsx"
 KOREA_COVER_TEMPLATE_NAME = "korea_cover_receipts_template.xlsx"
 KOREA_DETAILS_TEMPLATE_NAME = "korea_details_template.xlsx"
+
+
+def setup_logging() -> None:
+    if LOGGER.handlers:
+        return
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    handler = RotatingFileHandler(
+        LOG_DIR / "app.log",
+        maxBytes=750_000,
+        backupCount=5,
+        encoding="utf-8",
+    )
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+    )
+    LOGGER.setLevel(logging.INFO)
+    LOGGER.addHandler(handler)
+    LOGGER.propagate = False
+    LOGGER.info("Reimbursement Helper logging started")
+
+
+def log_exception(message: str) -> Path:
+    setup_logging()
+    LOGGER.exception(message)
+    return LOG_DIR / "app.log"
 
 
 USA_CATEGORY_ROWS: Dict[str, List[int]] = {
@@ -111,6 +144,28 @@ KOREA_CATEGORY_LABELS = {
     "consumables": "Consumables / 消耗品",
     "welfare": "Welfare / 福利费",
     "other": "Other / 其他",
+}
+
+
+KOREA_COVER_ROWS = {
+    "transportation": (4, "\u4ea4\u901a\u8d39"),
+    "consumables": (5, "\u6d88\u8017\u54c1"),
+    "lodging": (6, "\u4f4f\u5bbf\u8d39"),
+    "meals": (7, "\u4e1a\u52a1\u62db\u5f85\u8d39/\u9910\u8d39"),
+    "other": (8, "\u5176\u4ed6"),
+}
+
+KOREA_CATEGORY_LABELS = {
+    "transportation": "Transportation / \u4ea4\u901a\u8d39",
+    "physical_exam": "Physical exam / \u5165\u804c\u4f53\u68c0\u8d39",
+    "lodging": "Accommodation / \u4f4f\u5bbf\u8d39",
+    "nucleic_test": "Nucleic acid test / \u6838\u9178\u68c0\u6d4b\u8d39",
+    "materials": "Material / \u7269\u6599\u8d39",
+    "meals": "Meals / \u4e1a\u52a1\u62db\u5f85\u8d39-\u9910\u8d39",
+    "courier": "Courier / \u5feb\u9012\u8d39",
+    "consumables": "Consumables / \u6d88\u8017\u54c1",
+    "welfare": "Welfare / \u798f\u5229\u8d39",
+    "other": "Other / \u5176\u4ed6",
 }
 
 
@@ -365,6 +420,12 @@ def safe_float(value: Any) -> Optional[float]:
         return None
 
 
+def format_amount(value: float) -> str:
+    if abs(value) >= 1000:
+        return f"{value:.2f}"
+    return f"{value:.2f}"
+
+
 def parse_date_value(value: str) -> Any:
     text = (value or "").strip()
     if not text:
@@ -435,13 +496,28 @@ def normalized_category(category: str, form_version: str) -> str:
     return "other"
 
 
+def prepare_excel_image_file(path: Path) -> Path:
+    if Image is None:
+        return path
+    target_dir = WORK_DIR / "excel_images"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / f"{uuid.uuid4().hex}.png"
+    with Image.open(path) as source:
+        image = ImageOps.exif_transpose(source) if ImageOps is not None else source.copy()
+        if image.mode not in {"RGB", "RGBA"}:
+            image = image.convert("RGB")
+        image.save(target, "PNG")
+    return target
+
+
 def resize_excel_image(path: Path, max_width: int, max_height: int) -> Any:
-    img = XLImage(str(path))
+    excel_path = prepare_excel_image_file(path)
+    img = XLImage(str(excel_path))
     if Image is None:
         img.width = max_width
         img.height = max_height
         return img
-    with Image.open(path) as pil_img:
+    with Image.open(excel_path) as pil_img:
         width, height = pil_img.size
     if width <= 0 or height <= 0:
         img.width = max_width
@@ -693,13 +769,23 @@ class ReimbursementHelperApp:
         self.photo: Optional[Any] = None
         self.settings = load_user_settings()
         self.form_version = tk.StringVar(value="USA")
-        self.exchange_rate = tk.StringVar(value=str(self.settings.get("usa_exchange_rate", "6.8")))
-        self.krw_to_rmb_rate = tk.StringVar(value=str(self.settings.get("krw_to_rmb_rate", "0.0046")))
+        self.exchange_rate = tk.StringVar(value=str(self.settings.get("usa_exchange_rate", DEFAULT_USD_TO_RMB_RATE)))
+        self.krw_to_rmb_rate = tk.StringVar(value=str(self.settings.get("krw_to_rmb_rate", DEFAULT_KRW_TO_RMB_RATE)))
         self.status_text = tk.StringVar(value="Ready")
         self.field_vars: Dict[str, Any] = {}
+        self.field_labels: Dict[str, Any] = {}
+        self.field_widgets: Dict[str, Any] = {}
         self.category_values: List[str] = []
         self.category_combo: Optional[Any] = None
+        self.usa_rate_label: Optional[Any] = None
+        self.usa_rate_entry: Optional[Any] = None
+        self.krw_rate_label: Optional[Any] = None
+        self.krw_rate_entry: Optional[Any] = None
+        self._loading_fields = False
+        self._syncing_amounts = False
+        self._last_amount_source = "amount"
         self._build_ui()
+        self._attach_amount_traces()
         self._on_form_version_changed()
 
     def _build_ui(self) -> None:
@@ -741,14 +827,21 @@ class ReimbursementHelperApp:
 
         body = ttk.Frame(self.root, padding=(14, 0, 14, 10))
         body.pack(fill="both", expand=True)
-        body.grid_columnconfigure(0, minsize=300, weight=0)
-        body.grid_columnconfigure(1, minsize=360, weight=0)
-        body.grid_columnconfigure(2, weight=1)
+        body.grid_columnconfigure(0, minsize=650, weight=0)
+        body.grid_columnconfigure(1, weight=1)
         body.grid_rowconfigure(0, weight=1)
 
-        left = ttk.Frame(body, style="Panel.TFrame", padding=12)
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
-        ttk.Label(left, text="Inserted receipts", style="Header.TLabel").pack(anchor="w", pady=(0, 8))
+        manager = ttk.Frame(body, style="Panel.TFrame", padding=12)
+        manager.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        manager.grid_columnconfigure(0, minsize=270, weight=1)
+        manager.grid_columnconfigure(1, minsize=350, weight=1)
+        manager.grid_rowconfigure(1, weight=1)
+        ttk.Label(manager, text="Inserted receipts and details", style="Header.TLabel").grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 8)
+        )
+
+        left = ttk.Frame(manager, style="Panel.TFrame", padding=(0, 0, 10, 0))
+        left.grid(row=1, column=0, sticky="nsew")
         self.tree = ttk.Treeview(left, columns=("status", "date", "amount"), show="tree headings", height=20)
         self.tree.heading("#0", text="File")
         self.tree.heading("status", text="Status")
@@ -765,20 +858,24 @@ class ReimbursementHelperApp:
         ttk.Button(left_buttons, text="Remove", command=self.remove_selected).pack(side="left")
         ttk.Button(left_buttons, text="Clear", command=self.clear_all).pack(side="left", padx=(8, 0))
 
-        middle = ttk.Frame(body, style="Panel.TFrame", padding=12)
-        middle.grid(row=0, column=1, sticky="nsew", padx=(0, 10))
+        middle = ttk.Frame(manager, style="Panel.TFrame", padding=(10, 0, 0, 0))
+        middle.grid(row=1, column=1, sticky="nsew")
         ttk.Label(middle, text="Details", style="Header.TLabel").grid(row=0, column=0, columnspan=2, sticky="w")
         rate_frame = ttk.Frame(middle, style="Panel.TFrame")
         rate_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 10))
-        ttk.Label(rate_frame, text="USA RMB rate").pack(side="left")
-        ttk.Entry(rate_frame, textvariable=self.exchange_rate, width=8).pack(side="left", padx=(6, 14))
-        ttk.Label(rate_frame, text="KRW -> RMB").pack(side="left")
-        ttk.Entry(rate_frame, textvariable=self.krw_to_rmb_rate, width=9).pack(side="left", padx=(6, 0))
+        self.usa_rate_label = ttk.Label(rate_frame, text="USD -> RMB")
+        self.usa_rate_label.pack(side="left")
+        self.usa_rate_entry = ttk.Entry(rate_frame, textvariable=self.exchange_rate, width=9)
+        self.usa_rate_entry.pack(side="left", padx=(6, 14))
+        self.krw_rate_label = ttk.Label(rate_frame, text="KRW -> RMB")
+        self.krw_rate_label.pack(side="left")
+        self.krw_rate_entry = ttk.Entry(rate_frame, textvariable=self.krw_to_rmb_rate, width=9)
+        self.krw_rate_entry.pack(side="left", padx=(6, 0))
 
         fields = [
             ("date", "Date"),
             ("place", "Place / Vendor"),
-            ("amount", "Amount"),
+            ("amount", "USD amount"),
             ("currency", "Currency"),
             ("krw_amount", "KRW amount"),
             ("rmb_amount", "RMB amount"),
@@ -790,7 +887,8 @@ class ReimbursementHelperApp:
             ("receipt_label", "Receipt label"),
         ]
         for row, (key, label) in enumerate(fields, start=2):
-            ttk.Label(middle, text=label).grid(row=row, column=0, sticky="w", pady=4)
+            label_widget = ttk.Label(middle, text=label)
+            label_widget.grid(row=row, column=0, sticky="w", pady=4)
             if key == "category":
                 var = tk.StringVar()
                 widget = ttk.Combobox(middle, textvariable=var, state="readonly", width=28)
@@ -802,11 +900,13 @@ class ReimbursementHelperApp:
                 var = tk.StringVar()
                 widget = ttk.Entry(middle, textvariable=var, width=31)
             self.field_vars[key] = var
+            self.field_labels[key] = label_widget
+            self.field_widgets[key] = widget
             widget.grid(row=row, column=1, sticky="ew", pady=4, padx=(8, 0))
         middle.grid_columnconfigure(1, weight=1)
 
         right = ttk.Frame(body, style="Panel.TFrame", padding=12)
-        right.grid(row=0, column=2, sticky="nsew")
+        right.grid(row=0, column=1, sticky="nsew")
         right.grid_rowconfigure(1, weight=1)
         right.grid_columnconfigure(0, weight=1)
         ttk.Label(right, text="Receipt preview", style="Header.TLabel").grid(row=0, column=0, sticky="w")
@@ -831,6 +931,104 @@ class ReimbursementHelperApp:
         ttk.Label(footer, textvariable=self.status_text, style="Muted.TLabel").pack(side="left")
         ttk.Button(footer, text="Open output folder", command=self.open_output_folder).pack(side="right")
 
+    def _attach_amount_traces(self) -> None:
+        for key in ("amount", "krw_amount", "rmb_amount"):
+            var = self.field_vars.get(key)
+            if var is not None:
+                var.trace_add("write", lambda *_args, k=key: self._sync_amount_fields(k))
+        self.exchange_rate.trace_add("write", lambda *_args: self._sync_amount_fields("rate"))
+        self.krw_to_rmb_rate.trace_add("write", lambda *_args: self._sync_amount_fields("rate"))
+
+    def _sync_amount_fields(self, changed_key: str) -> None:
+        if self._loading_fields or self._syncing_amounts:
+            return
+        self._syncing_amounts = True
+        try:
+            version = self.form_version.get()
+            amount_var = self.field_vars.get("amount")
+            krw_var = self.field_vars.get("krw_amount")
+            rmb_var = self.field_vars.get("rmb_amount")
+            if amount_var is None or krw_var is None or rmb_var is None:
+                return
+            if changed_key in {"amount", "krw_amount", "rmb_amount"}:
+                self._last_amount_source = changed_key
+
+            if version == "USA":
+                rate = safe_float(self.exchange_rate.get())
+                if not rate:
+                    return
+                if changed_key == "rmb_amount":
+                    rmb = safe_float(rmb_var.get())
+                    if rmb is not None:
+                        amount_var.set(format_amount(rmb / rate))
+                    return
+                usd = safe_float(amount_var.get())
+                if usd is not None:
+                    rmb_var.set(format_amount(usd * rate))
+                return
+
+            rate = safe_float(self.krw_to_rmb_rate.get())
+            if not rate:
+                return
+            if changed_key == "rmb_amount":
+                rmb = safe_float(rmb_var.get())
+                if rmb is not None:
+                    krw_var.set(format_amount(rmb / rate))
+                return
+            krw = safe_float(krw_var.get())
+            if krw is not None:
+                rmb_var.set(format_amount(krw * rate))
+        finally:
+            self._syncing_amounts = False
+
+    def _set_field_visible(self, key: str, visible: bool) -> None:
+        label = self.field_labels.get(key)
+        widget = self.field_widgets.get(key)
+        if visible:
+            if label is not None:
+                label.grid()
+            if widget is not None:
+                widget.grid()
+        else:
+            if label is not None:
+                label.grid_remove()
+            if widget is not None:
+                widget.grid_remove()
+
+    def _update_field_visibility(self) -> None:
+        version = self.form_version.get()
+        if version == "USA":
+            self.field_labels["amount"].configure(text="USD amount")
+            self.field_labels["rmb_amount"].configure(text="RMB amount")
+            self.field_vars["currency"].set("USD")
+            self._set_field_visible("currency", False)
+            self._set_field_visible("krw_amount", False)
+            self._set_field_visible("amount", True)
+            self._set_field_visible("rmb_amount", True)
+            if self.usa_rate_label is not None:
+                self.usa_rate_label.pack(side="left")
+            if self.usa_rate_entry is not None:
+                self.usa_rate_entry.pack(side="left", padx=(6, 14))
+            if self.krw_rate_label is not None:
+                self.krw_rate_label.pack_forget()
+            if self.krw_rate_entry is not None:
+                self.krw_rate_entry.pack_forget()
+        else:
+            self.field_labels["amount"].configure(text="Original amount")
+            self.field_labels["rmb_amount"].configure(text="RMB amount")
+            self._set_field_visible("currency", True)
+            self._set_field_visible("krw_amount", True)
+            self._set_field_visible("amount", True)
+            self._set_field_visible("rmb_amount", True)
+            if self.usa_rate_label is not None:
+                self.usa_rate_label.pack_forget()
+            if self.usa_rate_entry is not None:
+                self.usa_rate_entry.pack_forget()
+            if self.krw_rate_label is not None:
+                self.krw_rate_label.pack(side="left")
+            if self.krw_rate_entry is not None:
+                self.krw_rate_entry.pack(side="left", padx=(6, 0))
+
     def _on_form_version_changed(self) -> None:
         version = self.form_version.get()
         labels = KOREA_CATEGORY_LABELS if version == "Korea" else USA_CATEGORY_LABELS
@@ -841,8 +1039,10 @@ class ReimbursementHelperApp:
         cat = self.field_vars.get("category")
         if cat is not None and not cat.get():
             cat.set(self.category_values[0] if self.category_values else "transportation")
+        self._update_field_visibility()
         if self.selected_index is not None:
             self.load_selected_into_fields()
+        self._sync_amount_fields("rate")
 
     def upload_receipts(self) -> None:
         if filedialog is None:
@@ -923,15 +1123,24 @@ class ReimbursementHelperApp:
     def load_selected_into_fields(self) -> None:
         item = self.selected_item()
         if item is None:
-            for var in self.field_vars.values():
-                var.set("")
+            self._loading_fields = True
+            try:
+                for var in self.field_vars.values():
+                    var.set("")
+            finally:
+                self._loading_fields = False
             return
-        for key, var in self.field_vars.items():
-            value = getattr(item, key)
-            if key == "category":
-                labels = KOREA_CATEGORY_LABELS if self.form_version.get() == "Korea" else USA_CATEGORY_LABELS
-                value = f"{value} - {labels.get(value, value)}"
-            var.set(value)
+        self._loading_fields = True
+        try:
+            for key, var in self.field_vars.items():
+                value = getattr(item, key)
+                if key == "category":
+                    labels = KOREA_CATEGORY_LABELS if self.form_version.get() == "Korea" else USA_CATEGORY_LABELS
+                    value = f"{value} - {labels.get(value, value)}"
+                var.set(value)
+        finally:
+            self._loading_fields = False
+        self._sync_amount_fields("rate")
 
     def update_preview(self) -> None:
         item = self.selected_item()
@@ -950,6 +1159,7 @@ class ReimbursementHelperApp:
             self.photo = ImageTk.PhotoImage(image)
             self.preview_label.configure(image=self.photo, text="")
         except Exception as exc:
+            log_exception("Receipt preview failed")
             self.preview_label.configure(image="", text=f"Could not preview image:\n{exc}")
             self.photo = None
 
@@ -1006,6 +1216,8 @@ class ReimbursementHelperApp:
             if dest == "category":
                 text = normalized_category(text, self.form_version.get())
             setattr(item, dest, text)
+        if self.form_version.get() == "USA":
+            item.currency = "USD"
         item.status = "AI filled"
 
     def generate_selected_details(self) -> None:
@@ -1037,6 +1249,7 @@ class ReimbursementHelperApp:
                     self.apply_ai_data_to_item(item, data)
                 self.root.after(0, lambda: self.after_ai_success(reload_selected))
             except Exception as exc:
+                log_exception("AI extraction failed")
                 message = str(exc)
                 self.root.after(0, lambda: self.after_ai_error(message))
 
@@ -1051,7 +1264,7 @@ class ReimbursementHelperApp:
     def after_ai_error(self, message: str) -> None:
         self.status_text.set("AI extraction failed.")
         if messagebox:
-            messagebox.showerror("Generate Details", message)
+            messagebox.showerror("Generate Details", f"{message}\n\nLogged to:\n{LOG_DIR / 'app.log'}")
 
     def set_status(self, message: str) -> None:
         self.root.after(0, lambda: self.status_text.set(message))
@@ -1077,14 +1290,18 @@ class ReimbursementHelperApp:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             if self.form_version.get() == "USA":
-                exchange_rate = safe_float(self.exchange_rate.get()) or 6.8
+                exchange_rate = safe_float(self.exchange_rate.get()) or safe_float(DEFAULT_USD_TO_RMB_RATE) or 6.8
                 export_usa(self.items, output_path, exchange_rate)
             else:
-                krw_rate = safe_float(self.krw_to_rmb_rate.get()) or 0.0046
+                krw_rate = safe_float(self.krw_to_rmb_rate.get()) or safe_float(DEFAULT_KRW_TO_RMB_RATE) or 0.0046
                 export_korea(self.items, output_path, krw_rate)
         except Exception as exc:
+            log_path = log_exception("Excel export failed")
             if messagebox:
-                messagebox.showerror("Generate Excel", f"Could not generate workbook:\n{exc}")
+                messagebox.showerror(
+                    "Generate Excel",
+                    f"Could not generate workbook:\n{exc}\n\nLogged to:\n{log_path}",
+                )
             self.status_text.set("Export failed.")
             return
         self.status_text.set(f"Saved: {output_path}")
@@ -1130,14 +1347,15 @@ def smoke_test_export() -> None:
         if not sample_path.exists():
             img = Image.new("RGB", (360, 220), "#FFFFFF")
             img.save(sample_path)
-    export_usa([sample], OUTPUT_DIR / "smoke_usa.xlsx", 6.8)
-    export_korea([sample], OUTPUT_DIR / "smoke_korea.xlsx", 0.0046)
+    export_usa([sample], OUTPUT_DIR / "smoke_usa.xlsx", safe_float(DEFAULT_USD_TO_RMB_RATE) or 6.8)
+    export_korea([sample], OUTPUT_DIR / "smoke_korea.xlsx", safe_float(DEFAULT_KRW_TO_RMB_RATE) or 0.0046)
     print("Smoke exports created.")
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     try:
+        setup_logging()
         ensure_dependencies()
         if "--smoke-test" in args:
             smoke_test_export()
@@ -1149,12 +1367,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         root.mainloop()
         return 0
     except Exception as exc:
+        log_path = log_exception("Application startup failed")
         details = "".join(traceback.format_exception_only(type(exc), exc)).strip()
         if messagebox and tk is not None:
             try:
                 root = tk.Tk()
                 root.withdraw()
-                messagebox.showerror("Reimbursement Helper", details)
+                messagebox.showerror("Reimbursement Helper", f"{details}\n\nLogged to:\n{log_path}")
                 root.destroy()
             except Exception:
                 print(details)

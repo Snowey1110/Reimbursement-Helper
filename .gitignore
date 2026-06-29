@@ -14,6 +14,7 @@ config/api_key.txt
 outputs/
 work/
 receipt_uploads/
+logs/
 
 # OS/editor noise
 .DS_Store

@@ -2,7 +2,7 @@
   "applicant_name": "",
   "default_project_number": "",
   "default_department": "",
-  "usa_exchange_rate": "6.8",
-  "krw_to_rmb_rate": "0.0046",
+  "usa_exchange_rate": "6.8175",
+  "krw_to_rmb_rate": "0.004433",
   "notes": "Copy this file to config/user_settings.json for private local defaults. The copied file is ignored by git."
 }
