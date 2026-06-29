@@ -5,6 +5,7 @@ Lightweight Windows desktop app for preparing VisionNav reimbursement workbooks 
 The app supports:
 
 - bulk receipt image upload
+- folder intake from `Unprocessed/` with finished files moved to `Processed/`
 - one combined receipt/details manager section
 - receipt preview beside editable fields
 - manual entry when AI is not needed
@@ -12,6 +13,7 @@ The app supports:
 - live USD/RMB and KRW/RMB conversion using editable rate fields
 - USA and Korea Excel outputs from stored blank templates
 - local error logs for debugging without sharing private files
+- saved working session with restore prompt on reopen
 
 ## Privacy Defaults
 
@@ -26,6 +28,8 @@ Local private files are ignored by git:
 - `receipt_uploads/`
 - `work/`
 - `logs/`
+- `Unprocessed/`
+- `Processed/`
 
 Copy `config/user_settings.example.json` to `config/user_settings.json` if you want private defaults on your own computer.
 
@@ -41,6 +45,14 @@ Or double-click:
 ```text
 run_reimbursement_helper.bat
 ```
+
+## Folder Workflow
+
+1. Put receipt images into `Unprocessed/`.
+2. Open the app and click `Upload Folder`.
+3. Review or generate details.
+4. Files that successfully finish AI processing move to `Processed/`.
+5. Any remaining loaded files also move to `Processed/` after a successful Excel export.
 
 ## AI Extraction
 
@@ -66,6 +78,10 @@ Update the visible rate field before export whenever the reimbursement departmen
 ## Logs
 
 Errors are written to `logs/app.log` with rotating backups. The `logs/` folder is ignored by git, so coworkers do not receive your local debugging history.
+
+## Restore
+
+The app saves the current working session when it closes. On the next launch it asks whether to restore the previous session. The recovery file is `config/session_state.json`, and it is ignored by git.
 
 ## Templates
 

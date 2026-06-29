@@ -10,11 +10,14 @@ dist/
 .env
 .env.local
 config/user_settings.json
+config/session_state.json
 config/api_key.txt
 outputs/
 work/
 receipt_uploads/
 logs/
+Unprocessed/
+Processed/
 
 # OS/editor noise
 .DS_Store

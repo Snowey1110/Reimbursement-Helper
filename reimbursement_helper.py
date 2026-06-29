@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import shutil
+import subprocess
 import sys
 import threading
 import traceback
@@ -51,9 +52,12 @@ TEMPLATE_DIR = APP_DIR / "templates"
 OUTPUT_DIR = APP_DIR / "outputs"
 WORK_DIR = APP_DIR / "work"
 LOG_DIR = APP_DIR / "logs"
+UNPROCESSED_DIR = APP_DIR / "Unprocessed"
+PROCESSED_DIR = APP_DIR / "Processed"
 USER_SETTINGS_FILE = CONFIG_DIR / "user_settings.json"
 USER_API_KEY_FILE = CONFIG_DIR / "api_key.txt"
 TEMPLATES_CONFIG_FILE = CONFIG_DIR / "templates.json"
+SESSION_FILE = CONFIG_DIR / "session_state.json"
 SUPPORTED_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
 OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions"
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
@@ -90,6 +94,61 @@ def log_exception(message: str) -> Path:
     setup_logging()
     LOGGER.exception(message)
     return LOG_DIR / "app.log"
+
+
+def ensure_runtime_folders() -> None:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    WORK_DIR.mkdir(parents=True, exist_ok=True)
+    UNPROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def supported_image_files(folder: Path) -> List[Path]:
+    if not folder.exists():
+        return []
+    return sorted(
+        [
+            path
+            for path in folder.iterdir()
+            if path.is_file() and path.suffix.lower() in SUPPORTED_IMAGE_SUFFIXES
+        ],
+        key=lambda path: path.name.lower(),
+    )
+
+
+def unique_path(folder: Path, filename: str) -> Path:
+    candidate = folder / filename
+    if not candidate.exists():
+        return candidate
+    stem = candidate.stem
+    suffix = candidate.suffix
+    for index in range(2, 10_000):
+        candidate = folder / f"{stem}_{index}{suffix}"
+        if not candidate.exists():
+            return candidate
+    return folder / f"{stem}_{uuid.uuid4().hex}{suffix}"
+
+
+def same_folder(path: Path, folder: Path) -> bool:
+    try:
+        return path.resolve().parent == folder.resolve()
+    except Exception:
+        return False
+
+
+def open_path(path: Path) -> None:
+    if sys.platform == "win32":
+        os.startfile(str(path))  # type: ignore[attr-defined]
+    else:
+        raise RuntimeError(f"Opening files is only implemented for Windows. Path: {path}")
+
+
+def reveal_in_file_explorer(path: Path) -> None:
+    if sys.platform == "win32":
+        subprocess.Popen(["explorer", f"/select,{path}"])
+    else:
+        open_path(path.parent)
 
 
 USA_CATEGORY_ROWS: Dict[str, List[int]] = {
@@ -772,6 +831,8 @@ class ReimbursementHelperApp:
         self.exchange_rate = tk.StringVar(value=str(self.settings.get("usa_exchange_rate", DEFAULT_USD_TO_RMB_RATE)))
         self.krw_to_rmb_rate = tk.StringVar(value=str(self.settings.get("krw_to_rmb_rate", DEFAULT_KRW_TO_RMB_RATE)))
         self.status_text = tk.StringVar(value="Ready")
+        self.progress_text = tk.StringVar(value="")
+        self.progress_value = tk.DoubleVar(value=0)
         self.field_vars: Dict[str, Any] = {}
         self.field_labels: Dict[str, Any] = {}
         self.field_widgets: Dict[str, Any] = {}
@@ -784,9 +845,12 @@ class ReimbursementHelperApp:
         self._loading_fields = False
         self._syncing_amounts = False
         self._last_amount_source = "amount"
+        self._busy = False
         self._build_ui()
         self._attach_amount_traces()
         self._on_form_version_changed()
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.root.after(250, self.restore_previous_session_if_available)
 
     def _build_ui(self) -> None:
         self.root.title("Reimbursement Helper")
@@ -820,10 +884,14 @@ class ReimbursementHelperApp:
         )
         form_combo.pack(side="left", padx=(0, 12))
         form_combo.bind("<<ComboboxSelected>>", lambda _event: self._on_form_version_changed())
-        ttk.Button(controls, text="Upload receipts", command=self.upload_receipts).pack(side="left", padx=4)
-        ttk.Button(controls, text="Generate Details", command=self.generate_selected_details).pack(side="left", padx=4)
-        ttk.Button(controls, text="Generate All", command=self.generate_all_details).pack(side="left", padx=4)
-        ttk.Button(controls, text="Generate Excel", command=self.generate_excel).pack(side="left", padx=4)
+        self.upload_folder_btn = ttk.Button(controls, text="Upload Folder", command=self.upload_folder)
+        self.upload_folder_btn.pack(side="left", padx=4)
+        self.generate_details_btn = ttk.Button(controls, text="Generate Details", command=self.generate_selected_details)
+        self.generate_details_btn.pack(side="left", padx=4)
+        self.generate_all_btn = ttk.Button(controls, text="Generate All", command=self.generate_all_details)
+        self.generate_all_btn.pack(side="left", padx=4)
+        self.generate_excel_btn = ttk.Button(controls, text="Generate Excel", command=self.generate_excel)
+        self.generate_excel_btn.pack(side="left", padx=4)
 
         body = ttk.Frame(self.root, padding=(14, 0, 14, 10))
         body.pack(fill="both", expand=True)
@@ -918,7 +986,7 @@ class ReimbursementHelperApp:
             preview_frame,
             bg="#FFFFFF",
             fg="#666666",
-            text="Upload receipts to preview them here.",
+            text="Drop images into Unprocessed, then click Upload Folder.",
             anchor="center",
             justify="center",
             bd=1,
@@ -929,6 +997,15 @@ class ReimbursementHelperApp:
         footer = ttk.Frame(self.root, padding=(18, 0, 18, 12))
         footer.pack(fill="x")
         ttk.Label(footer, textvariable=self.status_text, style="Muted.TLabel").pack(side="left")
+        ttk.Label(footer, textvariable=self.progress_text, style="Muted.TLabel").pack(side="left", padx=(16, 6))
+        self.progress_bar = ttk.Progressbar(
+            footer,
+            variable=self.progress_value,
+            maximum=100,
+            length=180,
+            mode="determinate",
+        )
+        self.progress_bar.pack(side="left")
         ttk.Button(footer, text="Open output folder", command=self.open_output_folder).pack(side="right")
 
     def _attach_amount_traces(self) -> None:
@@ -1039,28 +1116,44 @@ class ReimbursementHelperApp:
         cat = self.field_vars.get("category")
         if cat is not None and not cat.get():
             cat.set(self.category_values[0] if self.category_values else "transportation")
+        default_currency = "USD" if version == "USA" else "KRW"
+        for item in self.items:
+            if item.currency != default_currency:
+                item.currency = default_currency
+                if item.status == "AI filled":
+                    item.status = "Needs regen"
         self._update_field_visibility()
         if self.selected_index is not None:
             self.load_selected_into_fields()
         self._sync_amount_fields("rate")
+        self.refresh_tree()
 
-    def upload_receipts(self) -> None:
-        if filedialog is None:
-            return
-        paths = filedialog.askopenfilenames(
-            title="Upload receipt images",
-            filetypes=[
-                ("Image files", "*.png *.jpg *.jpeg *.webp *.bmp *.gif"),
-                ("All files", "*.*"),
-            ],
-        )
+    def upload_folder(self) -> None:
+        ensure_runtime_folders()
+        paths = supported_image_files(UNPROCESSED_DIR)
         if not paths:
+            self.status_text.set(f"No images found in {UNPROCESSED_DIR}.")
+            if messagebox:
+                messagebox.showinfo(
+                    "Upload Folder",
+                    f"Put receipt images into this folder, then click Upload Folder again:\n\n{UNPROCESSED_DIR}",
+                )
+            try:
+                open_path(UNPROCESSED_DIR)
+            except Exception:
+                log_exception("Could not open Unprocessed folder")
             return
         self.save_current_fields()
+        existing = {str(Path(item.path).resolve()).lower() for item in self.items if item.path}
         added = 0
-        for raw_path in paths:
-            path = Path(raw_path)
+        for path in paths:
             if path.suffix.lower() not in SUPPORTED_IMAGE_SUFFIXES:
+                continue
+            try:
+                resolved = str(path.resolve()).lower()
+            except Exception:
+                resolved = str(path).lower()
+            if resolved in existing:
                 continue
             self.items.append(
                 ReceiptItem(
@@ -1075,7 +1168,8 @@ class ReimbursementHelperApp:
         self.refresh_tree()
         if self.items and self.selected_index is None:
             self.select_index(0)
-        self.status_text.set(f"Added {added} receipt image(s).")
+        self.save_session()
+        self.status_text.set(f"Loaded {added} image(s) from Unprocessed.")
 
     def refresh_tree(self) -> None:
         self.tree.delete(*self.tree.get_children())
@@ -1145,7 +1239,7 @@ class ReimbursementHelperApp:
     def update_preview(self) -> None:
         item = self.selected_item()
         if item is None:
-            self.preview_label.configure(image="", text="Upload receipts to preview them here.")
+            self.preview_label.configure(image="", text="Drop images into Unprocessed, then click Upload Folder.")
             self.photo = None
             return
         path = Path(item.path)
@@ -1175,6 +1269,7 @@ class ReimbursementHelperApp:
             self.load_selected_into_fields()
             self.update_preview()
         self.status_text.set("Removed selected receipt.")
+        self.save_session()
 
     def clear_all(self) -> None:
         if not self.items:
@@ -1187,6 +1282,7 @@ class ReimbursementHelperApp:
         self.load_selected_into_fields()
         self.update_preview()
         self.status_text.set("Cleared receipt list.")
+        self.save_session()
 
     def apply_ai_data_to_item(self, item: ReceiptItem, data: Dict[str, Any]) -> None:
         field_map = {
@@ -1236,38 +1332,137 @@ class ReimbursementHelperApp:
         self._run_ai_for_items(list(self.items), reload_selected=True)
 
     def _run_ai_for_items(self, items: List[ReceiptItem], reload_selected: bool) -> None:
+        if self._busy:
+            self.show_info("A batch is already running.")
+            return
+        total = len(items)
+        if total <= 0:
+            return
+        form_version = self.form_version.get()
+        self.set_busy(True)
+        self.set_progress(0, total, f"0/{total}")
+        self.status_text.set(f"Generating details for {total} receipt(s)...")
+
         def worker() -> None:
-            try:
-                for idx, item in enumerate(items, start=1):
-                    self.set_status(f"Generating details {idx}/{len(items)}: {item.filename}")
+            successes = 0
+            failures: List[str] = []
+            for idx, item in enumerate(items, start=1):
+                self.root.after(
+                    0,
+                    lambda i=item, n=idx: self.mark_item_status(i, f"Processing {n}/{total}", n - 1, total),
+                )
+                self.set_status(f"Generating details {idx}/{total}: {item.filename}")
+                try:
                     data = call_openai_receipt_extraction(
                         Path(item.path),
-                        self.form_version.get(),
+                        form_version,
                         item,
                         progress=self.set_status,
                     )
                     self.apply_ai_data_to_item(item, data)
-                self.root.after(0, lambda: self.after_ai_success(reload_selected))
-            except Exception as exc:
-                log_exception("AI extraction failed")
-                message = str(exc)
-                self.root.after(0, lambda: self.after_ai_error(message))
+                    self.move_item_to_processed(item)
+                    successes += 1
+                    self.root.after(
+                        0,
+                        lambda i=item, n=idx: self.mark_item_status(i, "AI filled", n, total),
+                    )
+                except Exception as exc:
+                    setup_logging()
+                    LOGGER.exception("AI extraction failed for %s", item.filename)
+                    failures.append(f"{item.filename}: {exc}")
+                    self.root.after(
+                        0,
+                        lambda i=item, n=idx: self.mark_item_status(i, "Failed", n, total),
+                    )
+                    continue
+            self.root.after(0, lambda: self.after_ai_complete(successes, failures, total, reload_selected))
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def after_ai_success(self, reload_selected: bool) -> None:
+    def after_ai_complete(
+        self,
+        successes: int,
+        failures: List[str],
+        total: int,
+        reload_selected: bool,
+    ) -> None:
+        self.set_busy(False)
+        self.set_progress(total, total, f"{total}/{total}")
         self.refresh_tree()
         if reload_selected:
             self.load_selected_into_fields()
-        self.status_text.set("AI details generated. Review before exporting.")
-
-    def after_ai_error(self, message: str) -> None:
-        self.status_text.set("AI extraction failed.")
-        if messagebox:
-            messagebox.showerror("Generate Details", f"{message}\n\nLogged to:\n{LOG_DIR / 'app.log'}")
+            self.update_preview()
+        self.save_session()
+        if failures:
+            self.status_text.set(f"AI finished: {successes} succeeded, {len(failures)} failed.")
+            if messagebox:
+                shown = "\n".join(failures[:5])
+                if len(failures) > 5:
+                    shown += f"\n...and {len(failures) - 5} more."
+                messagebox.showwarning(
+                    "Generate Details",
+                    f"Finished with failures.\n\n{shown}\n\nLogged to:\n{LOG_DIR / 'app.log'}",
+                )
+        else:
+            self.status_text.set("AI details generated. Review before exporting.")
 
     def set_status(self, message: str) -> None:
         self.root.after(0, lambda: self.status_text.set(message))
+
+    def set_busy(self, busy: bool) -> None:
+        self._busy = busy
+        state = "disabled" if busy else "normal"
+        for button in (
+            self.upload_folder_btn,
+            self.generate_details_btn,
+            self.generate_all_btn,
+            self.generate_excel_btn,
+        ):
+            try:
+                button.configure(state=state)
+            except Exception:
+                pass
+
+    def set_progress(self, done: int, total: int, text: str = "") -> None:
+        if total <= 0:
+            self.progress_value.set(0)
+            self.progress_text.set(text)
+            return
+        pct = max(0.0, min(100.0, (done / total) * 100.0))
+        self.progress_value.set(pct)
+        self.progress_text.set(text or f"{done}/{total}")
+
+    def mark_item_status(self, item: ReceiptItem, status: str, done: int, total: int) -> None:
+        item.status = status
+        self.refresh_tree()
+        self.set_progress(done, total, f"{done}/{total}")
+        if self.selected_item() is item:
+            self.load_selected_into_fields()
+            self.update_preview()
+
+    def move_item_to_processed(self, item: ReceiptItem) -> bool:
+        source = Path(item.path)
+        if not source.exists() or not same_folder(source, UNPROCESSED_DIR):
+            return False
+        try:
+            ensure_runtime_folders()
+            destination = unique_path(PROCESSED_DIR, source.name)
+            shutil.move(str(source), str(destination))
+            item.path = str(destination)
+            item.filename = destination.name
+            LOGGER.info("Moved processed receipt to %s", destination)
+            return True
+        except Exception:
+            log_exception(f"Could not move receipt to Processed: {source}")
+            return False
+
+    def move_all_loaded_to_processed(self) -> None:
+        moved = False
+        for item in self.items:
+            moved = self.move_item_to_processed(item) or moved
+        if moved:
+            self.refresh_tree()
+            self.update_preview()
 
     def generate_excel(self) -> None:
         self.save_current_fields()
@@ -1304,9 +1499,24 @@ class ReimbursementHelperApp:
                 )
             self.status_text.set("Export failed.")
             return
+        self.move_all_loaded_to_processed()
+        self.save_session()
         self.status_text.set(f"Saved: {output_path}")
         if messagebox:
-            messagebox.showinfo("Generate Excel", f"Workbook saved:\n{output_path}")
+            choice = messagebox.askyesnocancel(
+                "Generate Excel",
+                "Workbook saved.\n\n"
+                "Yes: open the Excel file\n"
+                "No: show it in the folder\n"
+                "Cancel: stay here",
+            )
+            try:
+                if choice is True:
+                    open_path(output_path)
+                elif choice is False:
+                    reveal_in_file_explorer(output_path)
+            except Exception:
+                log_exception("Could not open generated workbook or folder")
 
     def open_output_folder(self) -> None:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -1320,6 +1530,77 @@ class ReimbursementHelperApp:
             messagebox.showinfo("Reimbursement Helper", message)
         else:
             print(message)
+
+    def session_payload(self) -> Dict[str, Any]:
+        self.save_current_fields()
+        return {
+            "saved_at": datetime.now().isoformat(timespec="seconds"),
+            "form_version": self.form_version.get(),
+            "usa_exchange_rate": self.exchange_rate.get(),
+            "krw_to_rmb_rate": self.krw_to_rmb_rate.get(),
+            "selected_index": self.selected_index,
+            "items": [asdict(item) for item in self.items],
+        }
+
+    def save_session(self) -> None:
+        try:
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            SESSION_FILE.write_text(
+                json.dumps(self.session_payload(), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            log_exception("Could not save session state")
+
+    def restore_previous_session_if_available(self) -> None:
+        if not SESSION_FILE.exists():
+            return
+        try:
+            data = json.loads(SESSION_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            log_exception("Could not read previous session state")
+            return
+        raw_items = data.get("items")
+        if not isinstance(raw_items, list) or not raw_items:
+            return
+        should_restore = True
+        if messagebox:
+            saved_at = str(data.get("saved_at") or "last time")
+            should_restore = messagebox.askyesno(
+                "Restore Previous File",
+                f"A previous reimbursement session was saved at {saved_at}.\n\nRestore it?",
+            )
+        if not should_restore:
+            self.status_text.set("Started a fresh reimbursement session.")
+            return
+        fields = set(ReceiptItem.__dataclass_fields__.keys())
+        restored: List[ReceiptItem] = []
+        for raw in raw_items:
+            if not isinstance(raw, dict):
+                continue
+            values = {key: raw.get(key, "") for key in fields}
+            if not values.get("item_id"):
+                values["item_id"] = uuid.uuid4().hex
+            restored.append(ReceiptItem(**values))
+        if not restored:
+            return
+        self.form_version.set(str(data.get("form_version") or "USA"))
+        self.exchange_rate.set(str(data.get("usa_exchange_rate") or DEFAULT_USD_TO_RMB_RATE))
+        self.krw_to_rmb_rate.set(str(data.get("krw_to_rmb_rate") or DEFAULT_KRW_TO_RMB_RATE))
+        self.items = restored
+        try:
+            selected = int(data.get("selected_index", 0) or 0)
+        except (TypeError, ValueError):
+            selected = 0
+        self.selected_index = None
+        self._on_form_version_changed()
+        self.refresh_tree()
+        self.select_index(max(0, min(selected, len(self.items) - 1)))
+        self.status_text.set("Previous reimbursement session restored.")
+
+    def on_close(self) -> None:
+        self.save_session()
+        self.root.destroy()
 
 
 def smoke_test_export() -> None:
@@ -1360,8 +1641,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         if "--smoke-test" in args:
             smoke_test_export()
             return 0
-        CONFIG_DIR.mkdir(exist_ok=True)
-        OUTPUT_DIR.mkdir(exist_ok=True)
+        ensure_runtime_folders()
         root = tk.Tk()
         ReimbursementHelperApp(root)
         root.mainloop()
