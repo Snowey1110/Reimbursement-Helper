@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+build/
+dist/
+*.spec
+
+# Local/private data. These files are intentionally not shared on GitHub.
+.env
+.env.local
+config/user_settings.json
+config/api_key.txt
+outputs/
+work/
+receipt_uploads/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

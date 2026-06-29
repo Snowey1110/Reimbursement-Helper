@@ -1,0 +1,32 @@
+{
+  "usa": {
+    "template": "templates/usa_expense_report_template.xlsx",
+    "applicant_policy": "leave_blank",
+    "sheets": {
+      "expense": "Expense report",
+      "receipts": "Receipt and Payment of expenses",
+      "mileage": "Mileage Reimbursement",
+      "cover": "面单"
+    },
+    "expense_columns": {
+      "place": "A",
+      "date": "B",
+      "details": "C",
+      "purpose": "D",
+      "project_number": "E",
+      "amount_usd": "F",
+      "amount_rmb_formula": "G",
+      "notes": "H"
+    }
+  },
+  "korea": {
+    "cover_template": "templates/korea_cover_receipts_template.xlsx",
+    "details_template": "templates/korea_details_template.xlsx",
+    "output_sheets": [
+      "境外同事报销使用",
+      "报销明细",
+      "发票"
+    ],
+    "applicant_policy": "leave_blank"
+  }
+}
