@@ -27,6 +27,16 @@ describe("Excel row mapping", () => {
     expect(rows[0].note).toBe("(10 USD)");
   });
 
+  it("keeps Korea meals in column K so later detail columns remain available", () => {
+    const rows = mapKoreaDetailRows(
+      [receipt({ id: "r1", amount: "13900", currency: "KRW", category: "meals", paymentMethod: "Visa" })],
+      { usdToRmb: 7, krwToRmb: 0.005 }
+    );
+
+    expect(rows[0].categoryColumn).toBe("K");
+    expect(rows[0].item.paymentMethod).toBe("Visa");
+  });
+
   it("keeps Korea receipt images inside page slots without label cells", () => {
     expect(koreaReceiptLastRow(5)).toBe(100);
     expect(koreaReceiptImageSlots(5)).toEqual([

@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import App from "./App";
+import { FORM_VERSION_STORAGE_KEY } from "./constants";
 import type { ImageAttachment } from "./types";
 
 vi.mock("./imageUtils", () => ({
@@ -36,6 +37,16 @@ describe("Reimbursement Helper web app", () => {
 
   afterEach(() => {
     cleanup();
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+
+  it("starts with the last selected form version", () => {
+    localStorage.setItem(FORM_VERSION_STORAGE_KEY, "Korea");
+
+    render(<App />);
+
+    expect(screen.getByLabelText("Form")).toHaveValue("Korea");
   });
 
   it("selects all receipt rows with Ctrl+A and bulk edits project number", async () => {

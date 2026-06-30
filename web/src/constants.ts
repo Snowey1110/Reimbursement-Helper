@@ -7,6 +7,7 @@ export const ADVANCED_MODEL = "gpt-5.5";
 
 export const USA_TEMPLATE_URL = "./templates/usa_expense_report_template.xlsx";
 export const KOREA_TEMPLATE_URL = "./templates/korea_reimbursement_template.xlsx";
+export const FORM_VERSION_STORAGE_KEY = "reimbursement-helper-web-form-version";
 
 export const USA_CATEGORY_LABELS: Record<Category, string> = {
   transportation: "Transportation",

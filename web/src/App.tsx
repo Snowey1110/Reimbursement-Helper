@@ -19,6 +19,7 @@ import {
   DEFAULT_KRW_TO_RMB,
   DEFAULT_MODEL,
   DEFAULT_USD_TO_RMB,
+  FORM_VERSION_STORAGE_KEY,
   KOREA_TEMPLATE_URL,
   KOREA_CATEGORY_LABELS,
   USA_TEMPLATE_URL,
@@ -40,9 +41,19 @@ import {
 
 const STORAGE_KEY = "reimbursement-helper-web-api-key";
 type SuggestedAction = "selectFiles" | "selectProof" | "generateAll" | "generateExcel";
+type FormVersion = "USA" | "Korea";
+
+function readStoredFormVersion(): FormVersion {
+  try {
+    const stored = localStorage.getItem(FORM_VERSION_STORAGE_KEY);
+    return stored === "Korea" ? "Korea" : "USA";
+  } catch {
+    return "USA";
+  }
+}
 
 export default function App() {
-  const [formVersion, setFormVersion] = useState<"USA" | "Korea">("USA");
+  const [formVersion, setFormVersion] = useState<FormVersion>(() => readStoredFormVersion());
   const [items, setItems] = useState<ReceiptItem[]>([]);
   const [proofs, setProofs] = useState<PaymentProof[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -79,6 +90,14 @@ export default function App() {
       localStorage.removeItem(STORAGE_KEY);
     }
   }, [apiKey, rememberKey]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(FORM_VERSION_STORAGE_KEY, formVersion);
+    } catch {
+      // Ignore private browsing or storage-disabled environments.
+    }
+  }, [formVersion]);
 
   useEffect(() => {
     setItems((current) =>
@@ -404,7 +423,7 @@ export default function App() {
           <select
             value={formVersion}
             onChange={(event) => {
-              setFormVersion(event.target.value as "USA" | "Korea");
+              setFormVersion(event.target.value as FormVersion);
               setReadyForExport(false);
             }}
           >

@@ -10,6 +10,8 @@ import {
 import { makeContactSheet, preparedImageDataUrl } from "./imageUtils";
 import { downloadBlob, formatAmount, safeNumber } from "./utils";
 
+const KOREA_DETAIL_COLUMNS = "ABCDEFGHIJKLMNOPQRS".split("");
+
 function dataUrlBase64(dataUrl: string): string {
   return dataUrl.split(",", 2)[1] ?? dataUrl;
 }
@@ -269,7 +271,7 @@ export async function exportKoreaWorkbook(items: ReceiptItem[], rates: ExchangeR
   cover.getCell("D9").value = { formula: "SUM(D4:D8)" };
   cover.getCell("B10").value = { formula: "D9" };
   for (let row = 3; row <= 34; row += 1) {
-    for (const col of "ABCDEFGHIJKLMNOPQRS".split("")) {
+    for (const col of KOREA_DETAIL_COLUMNS) {
       details.getCell(`${col}${row}`).value = null;
     }
   }
@@ -290,6 +292,7 @@ export async function exportKoreaWorkbook(items: ReceiptItem[], rates: ExchangeR
     details.getCell(`P${row}`).value = mapped.note;
     details.getCell(`Q${row}`).value = mapped.krw ?? null;
     details.getCell(`R${row}`).value = mapped.rmb ?? null;
+    details.getCell(`S${row}`).value = item.paymentMethod;
     summary[mapped.bucket].krw += mapped.krw ?? 0;
     summary[mapped.bucket].rmb += mapped.rmb ?? 0;
   }

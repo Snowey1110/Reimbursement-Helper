@@ -219,7 +219,11 @@ def open_path(path: Path) -> None:
 
 def reveal_in_file_explorer(path: Path) -> None:
     if sys.platform == "win32":
-        subprocess.Popen(["explorer", f"/select,{path}"])
+        resolved = path.resolve()
+        if resolved.exists():
+            subprocess.Popen(["explorer.exe", f'/select,"{resolved}"'])
+        else:
+            open_path(resolved.parent)
     else:
         open_path(path.parent)
 
@@ -455,6 +459,10 @@ def save_user_settings(settings: Dict[str, Any]) -> None:
         )
     except Exception:
         log_exception("Could not save user settings")
+
+
+def normalized_form_version(value: Any) -> str:
+    return "Korea" if str(value) == "Korea" else "USA"
 
 
 def load_templates_config() -> Dict[str, Any]:
@@ -1212,9 +1220,18 @@ def export_usa(
     wb.save(output_path)
 
 
-def clone_sheet(source_ws: Any, target_wb: Any, title: str, index: Optional[int] = None) -> Any:
+def clone_sheet(
+    source_ws: Any,
+    target_wb: Any,
+    title: str,
+    index: Optional[int] = None,
+    min_rows: int = 0,
+    min_cols: int = 0,
+) -> Any:
     target_ws = target_wb.create_sheet(title=title, index=index)
-    for row in source_ws.iter_rows():
+    max_row = max(source_ws.max_row or 1, min_rows)
+    max_col = max(source_ws.max_column or 1, min_cols)
+    for row in source_ws.iter_rows(min_row=1, max_row=max_row, min_col=1, max_col=max_col):
         for source_cell in row:
             target_cell = target_ws[source_cell.coordinate]
             target_cell.value = source_cell.value
@@ -1242,6 +1259,11 @@ def clone_sheet(source_ws: Any, target_wb: Any, title: str, index: Optional[int]
         target_ws.row_dimensions[key] = copy.copy(dim)
     target_ws.freeze_panes = source_ws.freeze_panes
     target_ws.sheet_view.showGridLines = source_ws.sheet_view.showGridLines
+    target_ws.sheet_format = copy.copy(source_ws.sheet_format)
+    target_ws.sheet_properties = copy.copy(source_ws.sheet_properties)
+    target_ws.page_margins = copy.copy(source_ws.page_margins)
+    target_ws.page_setup = copy.copy(source_ws.page_setup)
+    target_ws.print_options = copy.copy(source_ws.print_options)
     if source_ws.print_area:
         target_ws.print_area = source_ws.print_area
     return target_ws
@@ -1305,7 +1327,9 @@ def export_korea(
     detail_template_wb = load_workbook(details_template)
     cover_ws = wb.worksheets[0]
     receipts_ws = wb.worksheets[1]
-    detail_ws = clone_sheet(detail_template_wb.worksheets[0], wb, "报销明细", index=1)
+    detail_ws = clone_sheet(detail_template_wb.worksheets[0], wb, "报销明细", index=1, min_rows=35, min_cols=20)
+    for col in "KLMNOPQRS":
+        detail_ws.column_dimensions[col].hidden = False
 
     cover_ws["A2"] = f"报销部门：  {date.today().year}年 {date.today().month}月 {date.today().day}日 填 单据及附件共  页"
     cover_ws["A11"] = "领导审批           会计主管              会计                  出纳                 报销人                   领款人 "
@@ -1422,7 +1446,7 @@ class ReimbursementHelperApp:
         self._crop_handle_centers: Dict[str, Tuple[float, float]] = {}
         self._dragging_crop_handle: Optional[str] = None
         self.settings = load_user_settings()
-        self.form_version = tk.StringVar(value="USA")
+        self.form_version = tk.StringVar(value=normalized_form_version(self.settings.get("last_form_version", "USA")))
         self.exchange_rate = tk.StringVar(value=str(self.settings.get("usa_exchange_rate", DEFAULT_USD_TO_RMB_RATE)))
         self.krw_to_rmb_rate = tk.StringVar(value=str(self.settings.get("krw_to_rmb_rate", DEFAULT_KRW_TO_RMB_RATE)))
         self.status_text = tk.StringVar(value="Ready")
@@ -1443,6 +1467,7 @@ class ReimbursementHelperApp:
         self._last_form_version = self.form_version.get()
         self._busy = False
         self._details_ready_for_export = False
+        self.last_generated_output_path: Optional[Path] = None
         self._build_ui()
         self._attach_amount_traces()
         self._on_form_version_changed()
@@ -2106,10 +2131,14 @@ class ReimbursementHelperApp:
                 pass
 
     def _on_form_version_changed(self) -> None:
-        version = self.form_version.get()
+        version = normalized_form_version(self.form_version.get())
+        if version != self.form_version.get():
+            self.form_version.set(version)
         form_changed = version != self._last_form_version
         if form_changed:
             self._details_ready_for_export = False
+            self.settings["last_form_version"] = version
+            save_user_settings(self.settings)
         labels = KOREA_CATEGORY_LABELS if version == "Korea" else USA_CATEGORY_LABELS
         self.category_values = [f"{key} - {label}" for key, label in labels.items()]
         cat_var = self.field_vars.get("category")
@@ -3786,6 +3815,7 @@ class ReimbursementHelperApp:
                 )
             self.status_text.set("Export failed.")
             return
+        self.last_generated_output_path = output_path
         self.move_all_loaded_to_processed()
         self.save_session()
         self.status_text.set(f"Saved: {output_path}")
@@ -3807,6 +3837,16 @@ class ReimbursementHelperApp:
 
     def open_output_folder(self) -> None:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        target = self.last_generated_output_path
+        if target is None or not target.exists():
+            workbooks = list(OUTPUT_DIR.glob("*.xlsx"))
+            target = max(workbooks, key=lambda path: path.stat().st_mtime, default=None)
+        if target is not None and target.exists():
+            try:
+                reveal_in_file_explorer(target)
+                return
+            except Exception:
+                log_exception("Could not reveal output workbook")
         if sys.platform == "win32":
             os.startfile(str(OUTPUT_DIR))  # type: ignore[attr-defined]
         else:
@@ -3896,7 +3936,7 @@ class ReimbursementHelperApp:
                 values["crop_box"] = None
             values["rotation_degrees"] = normalize_rotation(values.get("rotation_degrees", 0))
             restored_bank.append(BankStatementItem(**values))
-        self.form_version.set(str(data.get("form_version") or "USA"))
+        self.form_version.set(normalized_form_version(data.get("form_version") or self.form_version.get()))
         self.exchange_rate.set(str(data.get("usa_exchange_rate") or DEFAULT_USD_TO_RMB_RATE))
         self.krw_to_rmb_rate.set(str(data.get("krw_to_rmb_rate") or DEFAULT_KRW_TO_RMB_RATE))
         self.items = restored
@@ -3917,6 +3957,7 @@ class ReimbursementHelperApp:
     def on_close(self) -> None:
         self.settings["usa_exchange_rate"] = self.exchange_rate.get()
         self.settings["krw_to_rmb_rate"] = self.krw_to_rmb_rate.get()
+        self.settings["last_form_version"] = normalized_form_version(self.form_version.get())
         save_user_settings(self.settings)
         self.save_session()
         self.root.destroy()
