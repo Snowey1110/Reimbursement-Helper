@@ -37,6 +37,7 @@ import {
 } from "./utils";
 
 const STORAGE_KEY = "reimbursement-helper-web-api-key";
+type SuggestedAction = "selectFiles" | "selectProof" | "generateAll" | "generateExcel";
 
 export default function App() {
   const [formVersion, setFormVersion] = useState<"USA" | "Korea">("USA");
@@ -52,12 +53,20 @@ export default function App() {
   const [status, setStatus] = useState("Ready");
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [readyForExport, setReadyForExport] = useState(false);
   const receiptInputRef = useRef<HTMLInputElement>(null);
   const proofInputRef = useRef<HTMLInputElement>(null);
 
   const selectedItem = selectedIds.length ? items.find((item) => item.id === selectedIds[selectedIds.length - 1]) ?? null : null;
   const selectedProofs = selectedItem ? proofs.filter((proof) => proof.matchedReceiptId === selectedItem.id) : [];
   const categoryLabels = formVersion === "USA" ? USA_CATEGORY_LABELS : KOREA_CATEGORY_LABELS;
+  const suggestedAction = useMemo<SuggestedAction | undefined>(() => {
+    if (busy) return undefined;
+    if (items.length && readyForExport) return "generateExcel";
+    if (!items.length) return "selectFiles";
+    if (formVersion === "USA" && !proofs.length) return "selectProof";
+    return "generateAll";
+  }, [busy, formVersion, items.length, proofs.length, readyForExport]);
 
   useEffect(() => {
     if (rememberKey) {
@@ -96,6 +105,7 @@ export default function App() {
   async function addReceiptFiles(files: FileList | null) {
     if (!files?.length) return;
     setBusy(true);
+    setReadyForExport(false);
     try {
       const attachments = await Promise.all(Array.from(files).map(fileToAttachment));
       const next = attachments.map((attachment) => blankReceipt(formVersion, attachment));
@@ -116,6 +126,7 @@ export default function App() {
   async function addProofFiles(files: FileList | null) {
     if (!files?.length) return;
     setBusy(true);
+    setReadyForExport(false);
     try {
       const attachments = await Promise.all(Array.from(files).map(fileToAttachment));
       const nextProofs = attachments.map<PaymentProof>((image) => ({
@@ -162,6 +173,9 @@ export default function App() {
     }
     setBusy(true);
     setProgress(0);
+    if (includeProofs) {
+      setReadyForExport(false);
+    }
     try {
       let done = 0;
       let workingItems = items;
@@ -204,8 +218,14 @@ export default function App() {
         workingProofs = matchPaymentProofs(workingProofs, workingItems);
         setProofs(workingProofs);
       }
+      if (includeProofs) {
+        setReadyForExport(true);
+      }
       setStatus("AI details generated. Review before exporting.");
     } catch (error) {
+      if (includeProofs) {
+        setReadyForExport(false);
+      }
       setStatus(error instanceof Error ? error.message : "AI generation failed.");
     } finally {
       setBusy(false);
@@ -229,6 +249,7 @@ export default function App() {
     setProofs((current) => current.map((proof) => (selectedIds.includes(proof.matchedReceiptId) ? { ...proof, matchedReceiptId: "", status: "Needs manual review" } : proof)));
     setSelectedIds([]);
     setSelectedTile(null);
+    setReadyForExport(false);
     setStatus(`Removed ${selectedIds.length} receipt row(s).`);
   }
 
@@ -382,26 +403,37 @@ export default function App() {
       </p>
 
       <section className="toolbar">
-        <label>
+        <label className="toolbar-control">
           Form
-          <select value={formVersion} onChange={(event) => setFormVersion(event.target.value as "USA" | "Korea")}>
+          <select
+            value={formVersion}
+            onChange={(event) => {
+              setFormVersion(event.target.value as "USA" | "Korea");
+              setReadyForExport(false);
+            }}
+          >
             <option>USA</option>
             <option>Korea</option>
           </select>
         </label>
-        <button type="button" onClick={() => receiptInputRef.current?.click()} disabled={busy}>
+        <button type="button" className={suggestedAction === "selectFiles" ? "recommended" : ""} onClick={() => receiptInputRef.current?.click()} disabled={busy}>
           <Upload size={17} /> Select Files
         </button>
-        <button type="button" onClick={() => proofInputRef.current?.click()} disabled={busy || formVersion !== "USA"}>
+        <button
+          type="button"
+          className={suggestedAction === "selectProof" ? "recommended" : ""}
+          onClick={() => proofInputRef.current?.click()}
+          disabled={busy || formVersion !== "USA"}
+        >
           <Upload size={17} /> Select Payment Proof
         </button>
         <button type="button" onClick={generateSelected} disabled={busy || !selectedIds.length}>
           <Wand2 size={17} /> Generate Details
         </button>
-        <button type="button" onClick={generateAll} disabled={busy || !items.length}>
+        <button type="button" className={suggestedAction === "generateAll" ? "recommended" : ""} onClick={generateAll} disabled={busy || !items.length}>
           {busy ? <Loader2 className="spin" size={17} /> : <Wand2 size={17} />} Generate All
         </button>
-        <button type="button" onClick={generateExcel} disabled={busy || !items.length}>
+        <button type="button" className={suggestedAction === "generateExcel" ? "recommended" : ""} onClick={generateExcel} disabled={busy || !items.length}>
           <FileSpreadsheet size={17} /> Generate Excel
         </button>
         <input ref={receiptInputRef} type="file" multiple accept="image/*,.pdf" hidden onChange={(event) => addReceiptFiles(event.currentTarget.files)} />
@@ -440,7 +472,7 @@ export default function App() {
             <button type="button" onClick={removeSelectedRows} disabled={!selectedIds.length}>
               Remove
             </button>
-            <button type="button" onClick={() => { setItems([]); setProofs([]); setSelectedIds([]); setSelectedTile(null); }}>
+            <button type="button" onClick={() => { setItems([]); setProofs([]); setSelectedIds([]); setSelectedTile(null); setReadyForExport(false); }}>
               Clear
             </button>
           </div>

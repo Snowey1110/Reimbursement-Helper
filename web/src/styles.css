@@ -19,13 +19,25 @@ button {
   border: 1px solid #94a3b8;
   background: #e6edf5;
   color: #17202a;
-  min-height: 36px;
-  padding: 7px 12px;
+  min-height: 42px;
+  padding: 8px 14px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 7px;
   cursor: pointer;
+  white-space: nowrap;
+}
+
+button.recommended:not(:disabled) {
+  border-color: #1d4ed8;
+  background: #2563eb;
+  color: #ffffff;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.16);
+}
+
+button.recommended:not(:disabled):hover {
+  background: #1d4ed8;
 }
 
 button:disabled {
@@ -40,13 +52,14 @@ select {
   border: 1px solid #cbd5e1;
   background: #f1f5f9;
   color: #17202a;
-  min-height: 30px;
-  padding: 4px 8px;
+  min-height: 38px;
+  padding: 6px 9px;
+  min-width: 0;
 }
 
 .app-shell {
   min-height: 100vh;
-  padding: 18px;
+  padding: 14px;
 }
 
 .app-header,
@@ -59,6 +72,7 @@ select {
 
 .app-header {
   justify-content: space-between;
+  flex-wrap: wrap;
 }
 
 h1 {
@@ -80,6 +94,7 @@ h3 {
 .api-panel {
   display: flex;
   align-items: end;
+  flex-wrap: wrap;
   gap: 10px;
 }
 
@@ -100,7 +115,7 @@ label {
 }
 
 .secret-input input {
-  width: 240px;
+  width: min(240px, 34vw);
 }
 
 .secret-input button {
@@ -116,13 +131,27 @@ label {
 
 .toolbar {
   margin-bottom: 14px;
+  align-items: end;
+  flex-wrap: wrap;
+}
+
+.toolbar-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+}
+
+.toolbar-control select {
+  min-height: 42px;
+  width: 94px;
 }
 
 .workspace {
   display: grid;
-  grid-template-columns: minmax(620px, 0.95fr) minmax(420px, 0.65fr) minmax(460px, 1fr);
+  grid-template-columns: minmax(360px, 1.15fr) minmax(300px, 0.8fr) minmax(360px, 1fr);
   gap: 12px;
-  min-height: 640px;
+  min-height: calc(100vh - 205px);
 }
 
 .panel {
@@ -133,8 +162,9 @@ label {
 
 .receipt-table {
   border: 1px solid #cbd5e1;
-  min-height: 520px;
+  min-height: clamp(330px, calc(100vh - 335px), 560px);
   background: #f8fafc;
+  overflow: auto;
 }
 
 .receipt-row {
@@ -175,7 +205,7 @@ label {
 
 .details-grid {
   display: grid;
-  grid-template-columns: 130px minmax(240px, 1fr);
+  grid-template-columns: minmax(105px, 0.45fr) minmax(150px, 1fr);
   gap: 9px 10px;
 }
 
@@ -192,7 +222,7 @@ label {
 
 .rate-row {
   display: grid;
-  grid-template-columns: 130px 100px 120px 100px;
+  grid-template-columns: minmax(105px, auto) minmax(92px, 1fr) minmax(105px, auto) minmax(92px, 1fr);
   gap: 9px 10px;
   margin-bottom: 16px;
 }
@@ -212,8 +242,9 @@ label {
   display: grid;
   grid-template-columns: 1fr;
   border: 1px solid #17202a;
-  min-height: 520px;
+  min-height: clamp(330px, calc(100vh - 335px), 560px);
   background: #f5f7fa;
+  overflow: auto;
 }
 
 .preview-grid.with-proof {
@@ -309,7 +340,7 @@ label {
 }
 
 .statusbar progress {
-  width: 180px;
+  width: min(180px, 20vw);
   height: 12px;
   accent-color: #2563eb;
 }
@@ -333,5 +364,59 @@ label {
   }
   to {
     transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 1280px) {
+  .workspace {
+    grid-template-columns: minmax(360px, 1fr) minmax(300px, 0.85fr);
+  }
+
+  .preview-panel {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 900px) {
+  .app-shell {
+    padding: 10px;
+  }
+
+  .app-header,
+  .toolbar,
+  .statusbar {
+    align-items: stretch;
+  }
+
+  .api-panel,
+  .toolbar {
+    width: 100%;
+  }
+
+  .toolbar > button,
+  .toolbar-control {
+    flex: 1 1 220px;
+  }
+
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .details-grid,
+  .rate-row {
+    grid-template-columns: minmax(105px, 0.4fr) minmax(150px, 1fr);
+  }
+
+  .preview-grid.with-proof {
+    grid-template-columns: 1fr;
+  }
+
+  .swap-divider {
+    min-height: 42px;
+  }
+
+  .proof-stack {
+    border-left: 0;
+    border-top: 1px solid #d8e1ec;
   }
 }
