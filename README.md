@@ -89,11 +89,11 @@ Highlight multiple receipt rows, then edit a field such as `Project number`, `Ca
 
 For the USA form, use `Select Files` for receipts and `Select Payment Proof` for card or bank proof images. `Generate All` reads both groups, merges receipt screenshots that have the same date and USD amount, and matches one proof image by date and charge amount.
 
-The preview shows receipt screenshots on the left and matched payment proof on the right. Use `Swap proof` when the match is wrong, or `Unlink proof` when it needs manual review. Select any screenshot tile and click `Delete screenshot` to remove only that image. In the receipt list, press `Delete` or `Backspace` to remove selected receipt rows after confirmation.
+The preview shows receipt screenshots on the left and matched payment proof on the right. Use the divider icons between the sections to swap or unlink payment proof. If a payment proof was added as a receipt by mistake, drag that screenshot tile into the Payment proof section. Select any screenshot tile and use the delete icon to remove only that image. In the receipt list, press `Delete` or `Backspace` to remove selected receipt rows after confirmation.
 
 ## Receipt Cropping
 
-Use `Rotate left` or `Rotate right` when a screenshot is sideways. Each preview image also has four independent draggable crop points. Drag the corners to match the receipt edges; the app straightens that shape into a rectangle for the generated Excel workbook. `Revert crop` resets the selected receipt.
+Use the rotate icons when a screenshot is sideways. Each preview image also has four independent draggable crop points. Drag the corners to match the receipt edges; the app straightens that shape into a rectangle for the generated Excel workbook. The revert icon resets the selected screenshot back to its original crop and rotation.
 
 ## Logs
 

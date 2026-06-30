@@ -189,6 +189,64 @@ def reveal_in_file_explorer(path: Path) -> None:
         open_path(path.parent)
 
 
+class ToolTip:
+    def __init__(self, widget: Any, text: str) -> None:
+        self.widget = widget
+        self.text = text
+        self.tip_window: Optional[Any] = None
+        self.after_id: Optional[str] = None
+        widget.bind("<Enter>", self.schedule)
+        widget.bind("<Leave>", self.hide)
+        widget.bind("<ButtonPress>", self.hide)
+
+    def schedule(self, _event: Any = None) -> None:
+        self.cancel()
+        try:
+            self.after_id = self.widget.after(450, self.show)
+        except Exception:
+            self.after_id = None
+
+    def cancel(self) -> None:
+        if self.after_id:
+            try:
+                self.widget.after_cancel(self.after_id)
+            except Exception:
+                pass
+            self.after_id = None
+
+    def show(self) -> None:
+        if self.tip_window is not None or tk is None:
+            return
+        try:
+            x = self.widget.winfo_rootx() + 18
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 8
+        except Exception:
+            return
+        self.tip_window = tk.Toplevel(self.widget)
+        self.tip_window.wm_overrideredirect(True)
+        self.tip_window.wm_geometry(f"+{x}+{y}")
+        label = tk.Label(
+            self.tip_window,
+            text=self.text,
+            background="#111827",
+            foreground="#F8FAFC",
+            borderwidth=0,
+            padx=8,
+            pady=4,
+            font=("Segoe UI", 9),
+        )
+        label.pack()
+
+    def hide(self, _event: Any = None) -> None:
+        self.cancel()
+        if self.tip_window is not None:
+            try:
+                self.tip_window.destroy()
+            except Exception:
+                pass
+            self.tip_window = None
+
+
 USA_CATEGORY_ROWS: Dict[str, List[int]] = {
     "transportation": list(range(7, 47)),
     "lodging": list(range(49, 52)),
@@ -1314,6 +1372,12 @@ class ReimbursementHelperApp:
         self.selected_attachment_index = 0
         self.preview_tiles: List[Dict[str, Any]] = []
         self.preview_photos: List[Any] = []
+        self.preview_action_regions: Dict[str, Dict[str, Any]] = {}
+        self.proof_drop_region: Optional[Tuple[int, int, int, int]] = None
+        self._pressed_preview_tile: Optional[Dict[str, Any]] = None
+        self._dragging_preview_tile: Optional[Dict[str, Any]] = None
+        self._drag_start: Tuple[int, int] = (0, 0)
+        self._drag_outline_id: Optional[int] = None
         self._preview_image_bounds: Tuple[int, int, int, int] = (0, 0, 0, 0)
         self._preview_original_size: Tuple[int, int] = (0, 0)
         self._crop_handle_centers: Dict[str, Tuple[float, float]] = {}
@@ -1349,18 +1413,32 @@ class ReimbursementHelperApp:
         self.root.title("Reimbursement Helper")
         self.root.geometry("1220x760")
         self.root.minsize(980, 640)
-        self.root.configure(bg="#F7F4EC")
+        app_bg = "#E9EEF3"
+        panel_bg = "#F8FAFC"
+        canvas_bg = "#F5F7FA"
+        border = "#CBD5E1"
+        text = "#17202A"
+        muted = "#64748B"
+        accent = "#2563EB"
+        self.root.configure(bg=app_bg)
         style = ttk.Style(self.root)
         try:
             style.theme_use("clam")
         except tk.TclError:
             pass
-        style.configure("TFrame", background="#F7F4EC")
-        style.configure("Panel.TFrame", background="#FFFFFF")
-        style.configure("TLabel", background="#F7F4EC", foreground="#222222", font=("Segoe UI", 10))
-        style.configure("Header.TLabel", background="#F7F4EC", foreground="#222222", font=("Segoe UI", 13, "bold"))
-        style.configure("Muted.TLabel", background="#F7F4EC", foreground="#666666", font=("Segoe UI", 9))
-        style.configure("TButton", font=("Segoe UI", 10))
+        style.configure("TFrame", background=app_bg)
+        style.configure("Panel.TFrame", background=panel_bg)
+        style.configure("TLabel", background=app_bg, foreground=text, font=("Segoe UI", 10))
+        style.configure("Header.TLabel", background=app_bg, foreground=text, font=("Segoe UI", 13, "bold"))
+        style.configure("Panel.TLabel", background=panel_bg, foreground=text, font=("Segoe UI", 10))
+        style.configure("PanelHeader.TLabel", background=panel_bg, foreground=text, font=("Segoe UI", 13, "bold"))
+        style.configure("Muted.TLabel", background=app_bg, foreground=muted, font=("Segoe UI", 9))
+        style.configure("TButton", font=("Segoe UI", 10), padding=(10, 5), background="#E2E8F0", foreground=text)
+        style.map("TButton", background=[("active", "#D7DEE8"), ("disabled", "#EEF2F7")])
+        style.configure("Icon.TButton", font=("Segoe UI Symbol", 13), width=3, padding=(4, 3))
+        style.configure("Treeview", background=panel_bg, fieldbackground=panel_bg, foreground=text, rowheight=24)
+        style.configure("Treeview.Heading", background="#DDE5EE", foreground=text, font=("Segoe UI", 9, "bold"))
+        style.map("Treeview", background=[("selected", "#2F6F9F")], foreground=[("selected", "#FFFFFF")])
 
         header = ttk.Frame(self.root, padding=(18, 16, 18, 10))
         header.pack(fill="x")
@@ -1403,7 +1481,7 @@ class ReimbursementHelperApp:
         manager.grid_columnconfigure(0, minsize=270, weight=1)
         manager.grid_columnconfigure(1, minsize=350, weight=1)
         manager.grid_rowconfigure(1, weight=1)
-        ttk.Label(manager, text="Inserted receipts and details", style="Header.TLabel").grid(
+        ttk.Label(manager, text="Inserted receipts and details", style="PanelHeader.TLabel").grid(
             row=0, column=0, columnspan=2, sticky="w", pady=(0, 8)
         )
 
@@ -1435,14 +1513,14 @@ class ReimbursementHelperApp:
 
         middle = ttk.Frame(manager, style="Panel.TFrame", padding=(10, 0, 0, 0))
         middle.grid(row=1, column=1, sticky="nsew")
-        ttk.Label(middle, text="Details", style="Header.TLabel").grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(middle, text="Details", style="PanelHeader.TLabel").grid(row=0, column=0, columnspan=2, sticky="w")
         rate_frame = ttk.Frame(middle, style="Panel.TFrame")
         rate_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 10))
-        self.usa_rate_label = ttk.Label(rate_frame, text="USD -> RMB")
+        self.usa_rate_label = ttk.Label(rate_frame, text="USD -> RMB", style="Panel.TLabel")
         self.usa_rate_label.pack(side="left")
         self.usa_rate_entry = ttk.Entry(rate_frame, textvariable=self.exchange_rate, width=9)
         self.usa_rate_entry.pack(side="left", padx=(6, 14))
-        self.krw_rate_label = ttk.Label(rate_frame, text="KRW -> RMB")
+        self.krw_rate_label = ttk.Label(rate_frame, text="KRW -> RMB", style="Panel.TLabel")
         self.krw_rate_label.pack(side="left")
         self.krw_rate_entry = ttk.Entry(rate_frame, textvariable=self.krw_to_rmb_rate, width=9)
         self.krw_rate_entry.pack(side="left", padx=(6, 0))
@@ -1462,7 +1540,7 @@ class ReimbursementHelperApp:
             ("receipt_label", "Receipt label"),
         ]
         for row, (key, label) in enumerate(fields, start=2):
-            label_widget = ttk.Label(middle, text=label)
+            label_widget = ttk.Label(middle, text=label, style="Panel.TLabel")
             label_widget.grid(row=row, column=0, sticky="w", pady=4)
             if key == "category":
                 var = tk.StringVar()
@@ -1487,53 +1565,52 @@ class ReimbursementHelperApp:
         preview_header = ttk.Frame(right, style="Panel.TFrame")
         preview_header.grid(row=0, column=0, sticky="ew")
         preview_header.grid_columnconfigure(0, weight=1)
-        ttk.Label(preview_header, text="Receipt preview", style="Header.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(preview_header, text="Receipt preview", style="PanelHeader.TLabel").grid(row=0, column=0, sticky="w")
         self.rotate_left_btn = ttk.Button(
             preview_header,
-            text="Rotate left",
+            text="\u27F2",
             command=lambda: self.rotate_selected(-90),
             state="disabled",
+            style="Icon.TButton",
         )
         self.rotate_left_btn.grid(row=0, column=1, sticky="e", padx=(0, 6))
+        ToolTip(self.rotate_left_btn, "Rotate left")
         self.rotate_right_btn = ttk.Button(
             preview_header,
-            text="Rotate right",
+            text="\u27F3",
             command=lambda: self.rotate_selected(90),
             state="disabled",
+            style="Icon.TButton",
         )
         self.rotate_right_btn.grid(row=0, column=2, sticky="e", padx=(0, 6))
-        self.revert_crop_btn = ttk.Button(preview_header, text="Revert crop", command=self.revert_crop, state="disabled")
+        ToolTip(self.rotate_right_btn, "Rotate right")
+        self.revert_crop_btn = ttk.Button(
+            preview_header,
+            text="\u21BA",
+            command=self.revert_crop,
+            state="disabled",
+            style="Icon.TButton",
+        )
         self.revert_crop_btn.grid(row=0, column=3, sticky="e")
+        ToolTip(self.revert_crop_btn, "Revert image to original")
         self.delete_screenshot_btn = ttk.Button(
             preview_header,
-            text="Delete screenshot",
+            text="\u2715",
             command=self.delete_selected_screenshot,
             state="disabled",
+            style="Icon.TButton",
         )
         self.delete_screenshot_btn.grid(row=0, column=4, sticky="e", padx=(6, 0))
-        self.swap_proof_btn = ttk.Button(
-            preview_header,
-            text="Swap proof",
-            command=self.swap_payment_proof,
-            state="disabled",
-        )
-        self.swap_proof_btn.grid(row=0, column=5, sticky="e", padx=(6, 0))
-        self.unlink_proof_btn = ttk.Button(
-            preview_header,
-            text="Unlink proof",
-            command=self.unlink_payment_proof,
-            state="disabled",
-        )
-        self.unlink_proof_btn.grid(row=0, column=6, sticky="e", padx=(6, 0))
+        ToolTip(self.delete_screenshot_btn, "Delete selected screenshot")
         preview_frame = ttk.Frame(right, style="Panel.TFrame")
         preview_frame.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
         preview_frame.grid_rowconfigure(0, weight=1)
         preview_frame.grid_columnconfigure(0, weight=1)
         self.preview_canvas = tk.Canvas(
             preview_frame,
-            bg="#FFFFFF",
+            bg=canvas_bg,
             highlightthickness=1,
-            highlightbackground="#222222",
+            highlightbackground=border,
             bd=1,
             relief="solid",
         )
@@ -2240,6 +2317,12 @@ class ReimbursementHelperApp:
         self.photo = None
         self.preview_photos = []
         self.preview_tiles = []
+        self.preview_action_regions = {}
+        self.proof_drop_region = None
+        self._pressed_preview_tile = None
+        self._dragging_preview_tile = None
+        self._drag_start = (0, 0)
+        self._drag_outline_id = None
         self._preview_image_bounds = (0, 0, 0, 0)
         self._preview_original_size = (0, 0)
         self._crop_handle_centers = {}
@@ -2357,15 +2440,19 @@ class ReimbursementHelperApp:
         self.preview_canvas.delete("all")
         self.preview_photos = []
         self.preview_tiles = []
+        self.preview_action_regions = {}
+        self.proof_drop_region = None
         self.photo = None
         self._preview_image_bounds = (0, 0, 0, 0)
         self._preview_original_size = (0, 0)
         self._crop_handle_centers = {}
         try:
             if self.form_version.get() == "USA":
-                gap = 14
+                gap = 46
                 left_w = max(120, int((canvas_w - gap) * 0.56))
                 right_w = max(100, canvas_w - left_w - gap)
+                proof_x = left_w + gap
+                self.proof_drop_region = (proof_x, 0, canvas_w, canvas_h)
                 self.draw_preview_section(
                     "Receipt screenshots",
                     0,
@@ -2377,13 +2464,14 @@ class ReimbursementHelperApp:
                 )
                 self.draw_preview_section(
                     "Payment proof",
-                    left_w + gap,
+                    proof_x,
                     0,
                     right_w,
                     canvas_h,
                     proof_items,
                     "proof",
                 )
+                self.draw_preview_actions(left_w, gap, canvas_h)
             else:
                 self.draw_preview_section(
                     "Receipt screenshots",
@@ -2516,6 +2604,72 @@ class ReimbursementHelperApp:
                 }
             )
 
+    def draw_preview_actions(self, left_width: int, gap: int, canvas_height: int) -> None:
+        if self.preview_canvas is None:
+            return
+        receipt = self.selected_item()
+        has_proofs = bool(receipt and self.payment_proofs_for_receipt(receipt))
+        can_swap = self.form_version.get() == "USA" and receipt is not None and bool(self.bank_items)
+        center_x = left_width + gap // 2
+        actions = [
+            ("swap", "\u21C4", "Swap payment proof", can_swap),
+            ("unlink", "\u2298", "Unlink payment proof", has_proofs),
+        ]
+        start_y = max(56, canvas_height // 2 - 42)
+        self.preview_action_regions = {}
+        for index, (name, icon, label, enabled) in enumerate(actions):
+            y = start_y + index * 48
+            bbox = (center_x - 17, y - 17, center_x + 17, y + 17)
+            fill = "#2563EB" if enabled else "#E2E8F0"
+            outline = "#1D4ED8" if enabled else "#CBD5E1"
+            text_fill = "#FFFFFF" if enabled else "#94A3B8"
+            self.preview_canvas.create_oval(*bbox, fill=fill, outline=outline, width=1)
+            self.preview_canvas.create_text(
+                center_x,
+                y - 1,
+                text=icon,
+                fill=text_fill,
+                font=("Segoe UI Symbol", 14, "bold"),
+            )
+            self.preview_action_regions[name] = {
+                "bbox": bbox,
+                "enabled": enabled,
+                "label": label,
+            }
+        if self.proof_drop_region is not None and not has_proofs:
+            left, top, right, bottom = self.proof_drop_region
+            self.preview_canvas.create_rectangle(
+                left + 4,
+                top + 34,
+                right - 4,
+                bottom - 4,
+                outline="#CBD5E1",
+                dash=(4, 6),
+                width=1,
+            )
+
+    def preview_action_at(self, x: float, y: float) -> Optional[str]:
+        for action, meta in self.preview_action_regions.items():
+            left, top, right, bottom = meta.get("bbox", (0, 0, 0, 0))
+            if left <= x <= right and top <= y <= bottom:
+                return action
+        return None
+
+    def point_in_proof_drop_region(self, x: float, y: float) -> bool:
+        if self.proof_drop_region is None:
+            return False
+        left, top, right, bottom = self.proof_drop_region
+        return left <= x <= right and top <= y <= bottom
+
+    def run_preview_action(self, action: str) -> None:
+        meta = self.preview_action_regions.get(action)
+        if not meta or not meta.get("enabled"):
+            return
+        if action == "swap":
+            self.swap_payment_proof()
+        elif action == "unlink":
+            self.unlink_payment_proof()
+
     def update_preview_buttons(self) -> None:
         has_tile = self.selected_preview_tile() is not None
         state = "normal" if has_tile else "disabled"
@@ -2608,8 +2762,8 @@ class ReimbursementHelperApp:
                 tags=("crop", f"crop_{handle}"),
             )
         if self.revert_crop_btn is not None:
-            has_crop = normalized_crop_points(state[1], original_w, original_h) is not None
-            self.revert_crop_btn.configure(state="normal" if has_crop else "disabled")
+            has_changes = normalized_crop_points(state[1], original_w, original_h) is not None or state[2] != 0
+            self.revert_crop_btn.configure(state="normal" if has_changes else "disabled")
         self.preview_canvas.tag_raise("crop")
 
     def nearest_crop_handle(self, x: float, y: float) -> Optional[str]:
@@ -2623,6 +2777,16 @@ class ReimbursementHelperApp:
         return nearest
 
     def _on_crop_press(self, event: Any) -> None:
+        self._pressed_preview_tile = None
+        self._dragging_preview_tile = None
+        self._drag_start = (event.x, event.y)
+        if self._drag_outline_id is not None and self.preview_canvas is not None:
+            self.preview_canvas.delete(self._drag_outline_id)
+            self._drag_outline_id = None
+        action = self.preview_action_at(event.x, event.y)
+        if action is not None:
+            self.run_preview_action(action)
+            return
         tile = self.preview_tile_at(event.x, event.y)
         if tile is not None:
             kind = str(tile.get("kind") or "receipt")
@@ -2631,11 +2795,43 @@ class ReimbursementHelperApp:
                 self.selected_attachment_kind = kind
                 self.selected_attachment_index = index
                 self.update_preview()
+                tile = self.selected_preview_tile()
+            self._pressed_preview_tile = tile
         self._dragging_crop_handle = self.nearest_crop_handle(event.x, event.y)
+        if self._dragging_crop_handle is not None:
+            self._pressed_preview_tile = None
 
     def _on_crop_drag(self, event: Any) -> None:
         handle = self._dragging_crop_handle
         original_w, original_h = self._preview_original_size
+        if handle is None and self._pressed_preview_tile is not None:
+            if self.form_version.get() != "USA" or self._pressed_preview_tile.get("kind") != "receipt":
+                return
+            dx = event.x - self._drag_start[0]
+            dy = event.y - self._drag_start[1]
+            if self._dragging_preview_tile is None and (dx * dx + dy * dy) < 64:
+                return
+            self._dragging_preview_tile = self._pressed_preview_tile
+            if self.preview_canvas is not None:
+                if self._drag_outline_id is not None:
+                    self.preview_canvas.delete(self._drag_outline_id)
+                left, top, right, bottom = self._dragging_preview_tile.get("bbox", (0, 0, 0, 0))
+                width = right - left
+                height = bottom - top
+                x1 = int(event.x - width / 2)
+                y1 = int(event.y - height / 2)
+                self._drag_outline_id = self.preview_canvas.create_rectangle(
+                    x1,
+                    y1,
+                    x1 + width,
+                    y1 + height,
+                    outline="#2563EB" if self.point_in_proof_drop_region(event.x, event.y) else "#64748B",
+                    dash=(5, 4),
+                    width=2,
+                )
+                self.preview_canvas.tag_raise(self._drag_outline_id)
+            self.status_text.set("Release in Payment proof to move the screenshot.")
+            return
         if self.selected_image_state() is None or handle is None or original_w <= 0 or original_h <= 0:
             return
         points = self.current_preview_crop_points()
@@ -2647,7 +2843,21 @@ class ReimbursementHelperApp:
         self.set_selected_image_state(flatten_crop_points(points), rotation)
         self.draw_crop_overlay()
 
-    def _on_crop_release(self, _event: Any) -> None:
+    def _on_crop_release(self, event: Any) -> None:
+        if self._dragging_preview_tile is not None:
+            tile = self._dragging_preview_tile
+            dropped = self.point_in_proof_drop_region(event.x, event.y)
+            if self._drag_outline_id is not None and self.preview_canvas is not None:
+                self.preview_canvas.delete(self._drag_outline_id)
+            self._drag_outline_id = None
+            self._dragging_preview_tile = None
+            self._pressed_preview_tile = None
+            if dropped:
+                self.move_receipt_screenshot_to_payment_proof(tile)
+            else:
+                self.status_text.set("Screenshot move cancelled.")
+            return
+        self._pressed_preview_tile = None
         if self._dragging_crop_handle is None:
             return
         self._dragging_crop_handle = None
@@ -2658,10 +2868,10 @@ class ReimbursementHelperApp:
         state = self.selected_image_state()
         if state is None:
             return
-        self.set_selected_image_state(None, state[2])
-        self.draw_crop_overlay()
+        self.set_selected_image_state(None, 0)
+        self.update_preview()
         self.save_session()
-        self.status_text.set("Crop reverted for selected screenshot.")
+        self.status_text.set("Selected screenshot reverted to original.")
 
     def rotate_selected(self, delta_degrees: int) -> None:
         state = self.selected_image_state()
@@ -2685,6 +2895,68 @@ class ReimbursementHelperApp:
         self.save_session()
         direction = "right" if delta_degrees > 0 else "left"
         self.status_text.set(f"Rotated selected screenshot {direction}.")
+
+    def move_receipt_screenshot_to_payment_proof(self, tile: Dict[str, Any]) -> None:
+        if self.form_version.get() != "USA":
+            return
+        receipt = self.selected_item()
+        if receipt is None:
+            return
+        index = int(tile.get("index") or 0)
+        images = ensure_receipt_images(receipt)
+        if index < 0 or index >= len(images):
+            return
+        attachment = copy.deepcopy(images[index])
+        filename = str(attachment.get("filename") or Path(str(attachment.get("path") or "")).name)
+        removing_row = len(images) == 1
+        if removing_row and messagebox and not messagebox.askyesno(
+            "Move to payment proof",
+            f"Move this screenshot to Payment proof and remove the receipt row?\n\n{filename}",
+        ):
+            return
+        proof_item = BankStatementItem(
+            item_id=uuid.uuid4().hex,
+            path=str(attachment.get("path") or ""),
+            filename=filename,
+            source_path=str(attachment.get("source_path") or ""),
+            source_page=str(attachment.get("source_page") or ""),
+            date=receipt.date,
+            amount=receipt.amount,
+            place=receipt.place,
+            matched_receipt_id="" if removing_row else receipt.item_id,
+            status="Needs manual review" if removing_row else "Matched manually",
+            crop_box=copy.deepcopy(attachment.get("crop_box")),
+            rotation_degrees=normalize_rotation(attachment.get("rotation_degrees", 0)),
+        )
+        self.bank_items.append(proof_item)
+        del images[index]
+        if not removing_row:
+            receipt.receipt_images = images
+            ensure_receipt_images(receipt)
+            self.selected_attachment_kind = "proof"
+            self.selected_attachment_index = len(self.payment_proofs_for_receipt(receipt)) - 1
+            self.refresh_tree()
+            self.refresh_bank_tree()
+            self.update_preview()
+            self.save_session()
+            self.status_text.set(f"Moved {filename} to Payment proof.")
+            return
+
+        remove_index = self.selected_index
+        if remove_index is not None and 0 <= remove_index < len(self.items):
+            del self.items[remove_index]
+        self.selected_index = None
+        self.selected_attachment_kind = "receipt"
+        self.selected_attachment_index = 0
+        self.refresh_tree()
+        self.refresh_bank_tree()
+        if self.items:
+            self.select_index(min(remove_index or 0, len(self.items) - 1))
+        else:
+            self.load_selected_into_fields()
+            self.update_preview()
+        self.save_session()
+        self.status_text.set("Moved screenshot to Payment proof. It needs manual review.")
 
     def delete_selected_screenshot(self) -> None:
         tile = self.selected_preview_tile()
