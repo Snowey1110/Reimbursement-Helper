@@ -1,6 +1,24 @@
 # Reimbursement Helper
 
-Lightweight Windows desktop app for preparing VisionNav reimbursement workbooks from receipt screenshots.
+Reimbursement Helper prepares VisionNav USA and Korea reimbursement workbooks from receipt screenshots, PDFs, and USA payment proof images.
+
+There are two ways to use it:
+
+- **Desktop app**: best for daily work on a Windows computer.
+- **Web app**: runs from GitHub Pages and uses the API key typed by the user in the browser.
+
+## Quick Start For Users
+
+1. Download the latest release zip from the GitHub **Releases** page.
+2. Extract the zip.
+3. Double-click `run_reimbursement_helper.bat`.
+4. Click the blue suggested button and follow the flow:
+   - `Select Files`
+   - USA only: `Select Payment Proof`
+   - `Generate All`
+   - `Generate Excel`
+
+The app leaves `申请人` / applicant blank and does not include personal defaults in the shared project.
 
 The app supports:
 
@@ -70,6 +88,30 @@ pnpm build
 ```
 
 GitHub Pages deployment is handled by `.github/workflows/deploy-web.yml`. On `main` or `master`, changes under `web/` are tested, built, and published from `web/dist`.
+
+## GitHub Pages Setup
+
+After pushing this repository to GitHub:
+
+1. Open the GitHub repository.
+2. Go to **Settings**.
+3. Go to **Pages**.
+4. Under **Build and deployment**, set **Source** to **GitHub Actions**.
+5. Push to `master` or run the **Deploy web app to GitHub Pages** workflow manually from the **Actions** tab.
+
+The repository README is the main GitHub project page for coworkers. The GitHub Pages site is the browser app.
+
+## Release Download
+
+To publish a desktop download on GitHub:
+
+1. Create a zip from the project files or use the prepared release zip.
+2. Open the GitHub repository.
+3. Go to **Releases**.
+4. Click **Draft a new release**.
+5. Use tag `v0.1.0` or the next version number.
+6. Upload the zip file.
+7. Publish the release.
 
 ## File Workflow
 

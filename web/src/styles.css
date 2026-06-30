@@ -209,22 +209,32 @@ label {
   gap: 9px 10px;
 }
 
-.details-grid label,
-.rate-row label {
+.details-grid label {
   display: contents;
 }
 
 .details-grid label > input,
-.details-grid label > select,
-.rate-row label > input {
+.details-grid label > select {
   width: 100%;
 }
 
 .rate-row {
   display: grid;
-  grid-template-columns: minmax(105px, auto) minmax(92px, 1fr) minmax(105px, auto) minmax(92px, 1fr);
-  gap: 9px 10px;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px 12px;
   margin-bottom: 16px;
+}
+
+.rate-row label {
+  display: grid;
+  grid-template-columns: auto minmax(78px, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.rate-row label > input {
+  width: 100%;
 }
 
 .preview-header {
@@ -402,9 +412,16 @@ label {
     grid-template-columns: 1fr;
   }
 
-  .details-grid,
-  .rate-row {
+  .details-grid {
     grid-template-columns: minmax(105px, 0.4fr) minmax(150px, 1fr);
+  }
+
+  .rate-row {
+    grid-template-columns: 1fr;
+  }
+
+  .rate-row label {
+    grid-template-columns: auto minmax(92px, 1fr);
   }
 
   .preview-grid.with-proof {
