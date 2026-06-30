@@ -1402,7 +1402,11 @@ class ReimbursementHelperApp:
         self.delete_screenshot_btn: Optional[Any] = None
         self.swap_proof_btn: Optional[Any] = None
         self.unlink_proof_btn: Optional[Any] = None
+        self.upload_folder_btn: Optional[Any] = None
         self.select_payment_proof_btn: Optional[Any] = None
+        self.generate_details_btn: Optional[Any] = None
+        self.generate_all_btn: Optional[Any] = None
+        self.generate_excel_btn: Optional[Any] = None
         self.selected_attachment_kind = "receipt"
         self.selected_attachment_index = 0
         self.preview_tiles: List[Dict[str, Any]] = []
@@ -1438,6 +1442,7 @@ class ReimbursementHelperApp:
         self._last_amount_source = "amount"
         self._last_form_version = self.form_version.get()
         self._busy = False
+        self._details_ready_for_export = False
         self._build_ui()
         self._attach_amount_traces()
         self._on_form_version_changed()
@@ -1506,6 +1511,30 @@ class ReimbursementHelperApp:
             bordercolor=[("disabled", "#C9D4E0"), ("active", "#7C93AA")],
             lightcolor=[("disabled", button_disabled), ("active", button_active)],
             darkcolor=[("disabled", "#C9D4E0"), ("active", "#7C93AA")],
+        )
+        style.configure(
+            "Recommended.TButton",
+            font=("Segoe UI", 10),
+            padding=(10, 5),
+            background=accent,
+            foreground="#FFFFFF",
+            bordercolor="#1D4ED8",
+            lightcolor=accent,
+            darkcolor="#1D4ED8",
+            focuscolor=accent,
+            relief="flat",
+        )
+        style.map(
+            "Recommended.TButton",
+            background=[
+                ("pressed", "#1E40AF"),
+                ("active", "#1D4ED8"),
+                ("disabled", button_disabled),
+            ],
+            foreground=[("disabled", "#94A3B8"), ("!disabled", "#FFFFFF")],
+            bordercolor=[("disabled", "#C9D4E0"), ("active", "#1E40AF")],
+            lightcolor=[("disabled", button_disabled), ("active", "#1D4ED8")],
+            darkcolor=[("disabled", "#C9D4E0"), ("active", "#1E40AF")],
         )
         style.configure(
             "Icon.TButton",
@@ -2049,9 +2078,38 @@ class ReimbursementHelperApp:
             if self.select_payment_proof_btn is not None:
                 self.select_payment_proof_btn.configure(state="disabled")
 
+    def suggested_toolbar_action(self) -> str:
+        if self._busy:
+            return ""
+        if self.items and self._details_ready_for_export:
+            return "generate_excel"
+        if not self.items:
+            return "select_files"
+        if self.form_version.get() == "USA" and not self.bank_items:
+            return "select_payment_proof"
+        return "generate_all"
+
+    def update_toolbar_recommendation(self) -> None:
+        suggested = self.suggested_toolbar_action()
+        buttons = {
+            "select_files": self.upload_folder_btn,
+            "select_payment_proof": self.select_payment_proof_btn,
+            "generate_all": self.generate_all_btn,
+            "generate_excel": self.generate_excel_btn,
+        }
+        for action, button in buttons.items():
+            if button is None:
+                continue
+            try:
+                button.configure(style="Recommended.TButton" if action == suggested else "TButton")
+            except Exception:
+                pass
+
     def _on_form_version_changed(self) -> None:
         version = self.form_version.get()
         form_changed = version != self._last_form_version
+        if form_changed:
+            self._details_ready_for_export = False
         labels = KOREA_CATEGORY_LABELS if version == "Korea" else USA_CATEGORY_LABELS
         self.category_values = [f"{key} - {label}" for key, label in labels.items()]
         cat_var = self.field_vars.get("category")
@@ -2075,6 +2133,7 @@ class ReimbursementHelperApp:
         self.refresh_tree()
         self.refresh_bank_tree()
         self._last_form_version = version
+        self.update_toolbar_recommendation()
 
     def select_files(self) -> None:
         ensure_runtime_folders()
@@ -2093,6 +2152,7 @@ class ReimbursementHelperApp:
         if not paths:
             return
         self.save_current_fields()
+        self._details_ready_for_export = False
         existing = {
             selected_file_key(Path(item.path), item.source_path, item.source_page)
             for item in [*self.items, *self.bank_items]
@@ -2172,6 +2232,7 @@ class ReimbursementHelperApp:
             self.select_index(first_new_index)
         self.save_session()
         self.status_text.set(f"Added {added} receipt file(s).")
+        self.update_toolbar_recommendation()
         if failed and messagebox:
             messagebox.showwarning(
                 "Select Files",
@@ -2202,6 +2263,7 @@ class ReimbursementHelperApp:
         paths = [Path(path) for path in selected]
         if not paths:
             return
+        self._details_ready_for_export = False
         existing = {
             selected_file_key(Path(item.path), item.source_path, item.source_page)
             for item in self.bank_items
@@ -2250,6 +2312,7 @@ class ReimbursementHelperApp:
             added += 1
         self.save_session()
         self.status_text.set(f"Added {added} payment proof file(s).")
+        self.update_toolbar_recommendation()
         if self.selected_item() is not None:
             self.update_preview()
         if failed and messagebox:
@@ -2349,6 +2412,8 @@ class ReimbursementHelperApp:
         self.update_preview()
         self.save_session()
         self.status_text.set("Removed selected payment proof image.")
+        self._details_ready_for_export = False
+        self.update_toolbar_recommendation()
 
     def link_selected_bank_to_receipt(self) -> None:
         bank_item = self.selected_bank_item()
@@ -2361,6 +2426,8 @@ class ReimbursementHelperApp:
         self.refresh_bank_tree()
         self.save_session()
         self.status_text.set("Linked payment proof to selected receipt.")
+        self._details_ready_for_export = False
+        self.update_toolbar_recommendation()
 
     def _on_tree_select(self, _event: Any = None) -> None:
         selection = self.tree.selection()
@@ -3097,6 +3164,8 @@ class ReimbursementHelperApp:
             self.update_preview()
             self.save_session()
             self.status_text.set(f"Moved {filename} to Payment proof.")
+            self._details_ready_for_export = False
+            self.update_toolbar_recommendation()
             return
 
         remove_index = self.selected_index
@@ -3114,6 +3183,8 @@ class ReimbursementHelperApp:
             self.update_preview()
         self.save_session()
         self.status_text.set("Moved screenshot to Payment proof. It needs manual review.")
+        self._details_ready_for_export = False
+        self.update_toolbar_recommendation()
 
     def delete_selected_screenshot(self) -> None:
         tile = self.selected_preview_tile()
@@ -3138,6 +3209,8 @@ class ReimbursementHelperApp:
             self.update_preview()
             self.save_session()
             self.status_text.set("Deleted selected payment proof screenshot.")
+            self._details_ready_for_export = False
+            self.update_toolbar_recommendation()
             return
 
         images = ensure_receipt_images(receipt)
@@ -3214,6 +3287,8 @@ class ReimbursementHelperApp:
         self.update_preview()
         self.save_session()
         self.status_text.set(f"Swapped payment proof to {chosen.filename}.")
+        self._details_ready_for_export = False
+        self.update_toolbar_recommendation()
 
     def unlink_payment_proof(self) -> None:
         receipt = self.selected_item()
@@ -3232,6 +3307,8 @@ class ReimbursementHelperApp:
             self.update_preview()
             self.save_session()
             self.status_text.set("Unlinked payment proof from selected receipt.")
+            self._details_ready_for_export = False
+            self.update_toolbar_recommendation()
 
     def remove_selected(self, _event: Any = None) -> str:
         indices = self.selected_indices()
@@ -3258,6 +3335,8 @@ class ReimbursementHelperApp:
             self.load_selected_into_fields()
             self.update_preview()
         self.status_text.set(f"Removed {len(indices)} selected receipt(s).")
+        self._details_ready_for_export = False
+        self.update_toolbar_recommendation()
         self.save_session()
         return "break"
 
@@ -3275,6 +3354,8 @@ class ReimbursementHelperApp:
         self.load_selected_into_fields()
         self.update_preview()
         self.status_text.set("Cleared receipt list.")
+        self._details_ready_for_export = False
+        self.update_toolbar_recommendation()
         self.save_session()
 
     def apply_ai_data_to_item(self, item: ReceiptItem, data: Dict[str, Any]) -> None:
@@ -3469,6 +3550,8 @@ class ReimbursementHelperApp:
         if total <= 0:
             return
         form_version = self.form_version.get()
+        if include_bank:
+            self._details_ready_for_export = False
         self.set_busy(True)
         self.set_progress(0, total, f"0/{total}")
         self.status_text.set(f"Generating details for {total} image(s)...")
@@ -3561,7 +3644,7 @@ class ReimbursementHelperApp:
                     continue
             if bank_items:
                 self.resolve_payment_proof_conflicts()
-            self.root.after(0, lambda: self.after_ai_complete(successes, failures, total, reload_selected))
+            self.root.after(0, lambda: self.after_ai_complete(successes, failures, total, reload_selected, include_bank))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -3571,8 +3654,11 @@ class ReimbursementHelperApp:
         failures: List[str],
         total: int,
         reload_selected: bool,
+        ready_for_export: bool = False,
     ) -> None:
         self.set_busy(False)
+        if ready_for_export and successes > 0:
+            self._details_ready_for_export = True
         self.set_progress(total, total, f"{total}/{total}")
         self.refresh_tree()
         self.refresh_bank_tree()
@@ -3592,6 +3678,7 @@ class ReimbursementHelperApp:
                 )
         else:
             self.status_text.set("AI details generated. Review before exporting.")
+        self.update_toolbar_recommendation()
 
     def set_status(self, message: str) -> None:
         self.root.after(0, lambda: self.status_text.set(message))
@@ -3615,6 +3702,7 @@ class ReimbursementHelperApp:
                 self.select_payment_proof_btn.configure(state=proof_state)
             except Exception:
                 pass
+        self.update_toolbar_recommendation()
 
     def set_progress(self, done: int, total: int, text: str = "") -> None:
         if total <= 0:
