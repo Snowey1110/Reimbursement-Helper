@@ -51,6 +51,26 @@ Or double-click:
 run_reimbursement_helper.bat
 ```
 
+## Web Version
+
+A static GitHub Pages version is in `web/`. It runs in the browser, uses blank templates from `web/public/templates/`, and asks each user to enter their own OpenAI API key. The key is not committed; by default it is kept only for the browser session, with an optional checkbox to remember it on that device.
+
+```bash
+cd web
+pnpm install
+pnpm dev
+```
+
+Build and test:
+
+```bash
+cd web
+pnpm test
+pnpm build
+```
+
+GitHub Pages deployment is handled by `.github/workflows/deploy-web.yml`. On `main` or `master`, changes under `web/` are tested, built, and published from `web/dist`.
+
 ## File Workflow
 
 1. Open the app and click `Select Files`.

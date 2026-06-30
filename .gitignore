@@ -5,6 +5,12 @@ venv/
 build/
 dist/
 *.spec
+node_modules/
+web/node_modules/
+web/dist/
+web/.vite/
+web/.env
+web/.env.*
 
 # Local/private data. These files are intentionally not shared on GitHub.
 .env
