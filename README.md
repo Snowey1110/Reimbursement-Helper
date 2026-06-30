@@ -19,7 +19,7 @@ https://snowey1110.github.io/Reimbursement-Helper/
 4. Click the blue suggested button and follow the flow:
    - `Select Files`
    - USA only: `Select Payment Proof`
-   - Korea only: `Select 汇率 Image` for the exchange-rate screenshot
+   - Korea only: `Select 汇率 Image` for the exchange-rate screenshot(s)
    - `Generate All`
    - `Generate Excel`
 
@@ -36,6 +36,7 @@ The app supports:
 - USA payment proof images for the proof-of-payment column
 - manual entry when AI is not needed
 - one-click AI extraction when an OpenAI API key is available locally
+- Korea exchange-rate screenshot import, with AI reading to update the KRW/RMB rate when an API key is available
 - live USD/RMB and Korea original-currency-to-KRW/RMB conversion using editable rate fields
 - currency correction for Korea receipts when AI detects the wrong receipt currency
 - multi-row editing for highlighted receipts, useful for shared fields like project number

@@ -71,6 +71,7 @@ OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions"
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
 DEFAULT_USD_TO_RMB_RATE = "6.8175"
 DEFAULT_KRW_TO_RMB_RATE = "0.004433"
+KRW_NUMBER_FORMAT = "\u20a9#,##0"
 LOGGER = logging.getLogger("reimbursement_helper")
 
 
@@ -665,6 +666,104 @@ Current editable row values, to keep if they look more specific than the image:
     return data
 
 
+def exchange_rate_from_data(data: Dict[str, Any], usd_to_rmb_rate: float) -> Optional[float]:
+    for key in ("krw_to_rmb_rate", "krw_to_rmb", "rate", "exchange_rate"):
+        value = safe_float(data.get(key))
+        if value is not None and 0 < value < 1:
+            return value
+    usd_to_krw = safe_float(data.get("usd_to_krw_rate")) or safe_float(data.get("usd_to_krw"))
+    if usd_to_krw and usd_to_krw > 1 and usd_to_rmb_rate:
+        return usd_to_rmb_rate / usd_to_krw
+    return None
+
+
+def format_exchange_rate(rate: float) -> str:
+    return f"{rate:.10f}".rstrip("0").rstrip(".")
+
+
+def call_openai_exchange_rate_extraction(
+    image_paths: Sequence[Path],
+    usd_to_rmb_rate: float,
+    progress: Optional[Callable[[str], None]] = None,
+) -> float:
+    api_key = get_openai_api_key()
+    if not api_key:
+        raise RuntimeError("No OpenAI API key was found, so the exchange rate image could not be read.")
+    existing_paths = [path for path in image_paths if path.exists()]
+    if not existing_paths:
+        raise RuntimeError("No readable exchange rate images were found.")
+
+    def notify(message: str) -> None:
+        if progress:
+            try:
+                progress(message)
+            except Exception:
+                pass
+
+    notify("Reading exchange rate image")
+    prompt = f"""
+Read these exchange-rate screenshots for the Korea reimbursement form.
+Return only compact JSON with these keys:
+krw_to_rmb_rate, usd_to_krw_rate, confidence_notes.
+
+Rules:
+- Prefer an explicit KRW -> RMB or 汇率 value, for example 0.0044029590.
+- If the image only shows USD -> KRW, for example 1 USD = 1548.86 KRW,
+  calculate KRW -> RMB as USD_TO_RMB / USD_TO_KRW.
+- The current USD_TO_RMB value from the app is {usd_to_rmb_rate:g}.
+- Return numbers as plain decimals without currency symbols or commas.
+- If unsure, leave krw_to_rmb_rate empty and explain briefly in confidence_notes.
+""".strip()
+    content: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
+    for path in existing_paths:
+        content.append({"type": "image_url", "image_url": {"url": image_data_url(path)}})
+    payload = json.dumps(
+        {
+            "model": os.getenv("OPENAI_MODEL", DEFAULT_OPENAI_MODEL),
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You extract numeric exchange rates from screenshots for reimbursement forms.",
+                },
+                {"role": "user", "content": content},
+            ],
+            "temperature": 0,
+        }
+    ).encode("utf-8")
+    req = request.Request(
+        OPENAI_CHAT_COMPLETIONS_URL,
+        data=payload,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+    )
+    notify("Contacting AI")
+    try:
+        with request.urlopen(req, timeout=90) as response:
+            body = response.read().decode("utf-8")
+    except error.HTTPError as exc:
+        try:
+            details = exc.read().decode("utf-8")
+        except Exception:
+            details = str(exc)
+        raise RuntimeError(f"OpenAI API error ({exc.code}): {details}") from exc
+    except Exception as exc:
+        raise RuntimeError(f"Could not contact OpenAI: {exc}") from exc
+
+    try:
+        parsed = json.loads(body)
+        response_text = parsed["choices"][0]["message"]["content"]
+    except Exception as exc:
+        raise RuntimeError("OpenAI returned an unexpected exchange-rate response format.") from exc
+    data = extract_json_object(str(response_text))
+    rate = exchange_rate_from_data(data, usd_to_rmb_rate)
+    if rate is None:
+        raise RuntimeError("AI could not find a usable KRW -> RMB exchange rate.")
+    return rate
+
+
 def ensure_dependencies() -> None:
     if tk is None or ttk is None:
         raise RuntimeError("Tkinter is required to run the desktop app.")
@@ -718,6 +817,12 @@ def format_amount(value: float) -> str:
     if abs(value) >= 1000:
         return f"{value:.2f}"
     return f"{value:.2f}"
+
+
+def truncate_amount(value: Optional[float]) -> Optional[int]:
+    if value is None:
+        return None
+    return math.trunc(value)
 
 
 def parse_date_value(value: str) -> Any:
@@ -1057,7 +1162,7 @@ def prepare_attachment_contact_sheet(
     normalized = [attachment for attachment in (normalize_attachment(raw) for raw in attachments) if attachment]
     if not normalized:
         return None
-    if len(normalized) == 1:
+    if len(normalized) == 1 and not allow_upscale:
         return prepare_attachment_image_file(normalized[0])
     target_dir = WORK_DIR / "prepared_images"
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -1133,18 +1238,16 @@ def clear_cells(sheet: Any, rows: Iterable[int], cols: Sequence[str]) -> None:
 
 
 def fit_columns_for_receipts(sheet: Any) -> None:
-    for col in "ABCDE":
-        sheet.column_dimensions[col].width = 18
-    for col in "FGH":
-        sheet.column_dimensions[col].width = 8
+    for col in "ABCDEFGH":
+        sheet.column_dimensions[col].width = 14
 
 
-def configure_korea_receipt_page(sheet: Any, item_count: int) -> None:
-    page_height = 50
-    receipts_per_page = 2
-    page_count = max(1, (item_count + receipts_per_page - 1) // receipts_per_page)
+def configure_korea_receipt_page(sheet: Any, slot_count: int) -> None:
+    page_height = 60
+    slots_per_page = 4
+    page_count = max(1, (slot_count + slots_per_page - 1) // slots_per_page)
     last_row = page_count * page_height
-    sheet.print_area = f"A1:E{last_row}"
+    sheet.print_area = f"A1:H{last_row}"
     if sheet.sheet_properties.pageSetUpPr is None:
         try:
             from openpyxl.worksheet.properties import PageSetupProperties
@@ -1171,16 +1274,61 @@ def configure_korea_receipt_page(sheet: Any, item_count: int) -> None:
         pass
 
 
+def korea_receipt_slot(index: int, wide: bool = False) -> Dict[str, Any]:
+    page_height = 60
+    slots_per_page = 4
+    row_offsets = [1, 1, 31, 31]
+    col_ranges = [("A", "D"), ("E", "H"), ("A", "D"), ("E", "H")]
+    page = index // slots_per_page
+    slot = index % slots_per_page
+    label_row = page * page_height + row_offsets[slot]
+    image_row = label_row + 1
+    if wide:
+        return {
+            "label_range": f"A{label_row}:H{label_row}",
+            "label_cell": f"A{label_row}",
+            "image_cell": f"A{image_row}",
+            "max_width": 760,
+            "max_height": 520,
+        }
+    start_col, end_col = col_ranges[slot]
+    return {
+        "label_range": f"{start_col}{label_row}:{end_col}{label_row}",
+        "label_cell": f"{start_col}{label_row}",
+        "image_cell": f"{start_col}{image_row}",
+        "max_width": 370,
+        "max_height": 520,
+    }
+
+
+def korea_receipt_cost_text(item: "ReceiptItem") -> str:
+    amount = item.amount.strip()
+    if amount:
+        return f"{amount} {normalize_currency(item.currency, 'KRW')}".strip()
+    if item.krw_amount.strip():
+        return f"{item.krw_amount.strip()} KRW"
+    if item.rmb_amount.strip():
+        return f"{item.rmb_amount.strip()} RMB"
+    return ""
+
+
 def korea_receipt_payment_label(index: int, item: "ReceiptItem") -> str:
-    details = []
-    if item.payment_method.strip():
-        details.append(item.payment_method.strip())
+    details: List[str] = []
     if item.date.strip():
         details.append(item.date.strip())
-    if item.amount.strip():
-        currency = normalize_currency(item.currency, "KRW")
-        details.append(f"{item.amount.strip()} {currency}".strip())
-    return f"Payment {index}: {' | '.join(details)}" if details else f"Payment {index}"
+    content = (
+        item.purpose.strip()
+        or item.details.strip()
+        or item.receipt_label.strip()
+        or item.place.strip()
+        or item.filename
+    )
+    if content:
+        details.append(content)
+    cost = korea_receipt_cost_text(item)
+    if cost:
+        details.append(cost)
+    return " | ".join(details) if details else item.filename or f"Payment {index}"
 
 
 def set_korea_receipt_label(sheet: Any, cell_ref: str, label: str) -> None:
@@ -1199,23 +1347,24 @@ def add_korea_receipt_block(
     index: int,
     label: str,
     attachments: List[Dict[str, Any]],
+    wide: bool = False,
 ) -> None:
-    page_height = 50
-    blocks_per_page = 2
-    row_offsets = [1, 26]
-    page = index // blocks_per_page
-    slot = index % blocks_per_page
-    label_row = page * page_height + row_offsets[slot]
-    image_row = label_row + 1
+    slot = korea_receipt_slot(index, wide=wide)
+    label_row = int(re.sub(r"^[A-Z]+", "", str(slot["label_cell"])))
     try:
-        sheet.merge_cells(f"A{label_row}:E{label_row}")
+        sheet.merge_cells(str(slot["label_range"]))
     except Exception:
         pass
     sheet.row_dimensions[label_row].height = 22
-    set_korea_receipt_label(sheet, f"A{label_row}", label)
-    receipt_image = resize_attachment_contact_sheet(attachments, 520, 420, allow_upscale=True)
+    set_korea_receipt_label(sheet, str(slot["label_cell"]), label)
+    receipt_image = resize_attachment_contact_sheet(
+        attachments,
+        int(slot["max_width"]),
+        int(slot["max_height"]),
+        allow_upscale=True,
+    )
     if receipt_image is not None:
-        sheet.add_image(receipt_image, f"A{image_row}")
+        sheet.add_image(receipt_image, str(slot["image_cell"]))
 
 
 def export_usa(
@@ -1420,6 +1569,7 @@ def export_korea(
             detail_ws[f"{col}{row}"] = None
     detail_ws["A34"] = "合计（外币）\nTotal"
     detail_ws["Q34"] = "=SUM(Q3:Q33)"
+    detail_ws["Q34"].number_format = KRW_NUMBER_FORMAT
     detail_ws["A35"] = "合计（人民币）\nTotal"
     detail_ws["R35"] = "=SUM(R3:R34)"
 
@@ -1433,45 +1583,47 @@ def export_korea(
         if category not in KOREA_CATEGORY_COLUMNS:
             category = "other"
         krw, rmb, original_note = korea_amounts(item, krw_to_rmb_rate, usd_to_rmb_rate)
+        krw_whole = truncate_amount(krw)
         detail_ws[f"A{index}"] = excel_date_formula_or_value(item.date)
         detail_ws[f"B{index}"] = item.purpose.strip() or item.details.strip()
         detail_ws[f"C{index}"] = item.place.strip()
         detail_ws[f"D{index}"] = ""
         detail_ws[f"E{index}"] = item.project_number.strip()
         category_col = KOREA_CATEGORY_COLUMNS[category]
-        detail_ws[f"{category_col}{index}"] = (
-            f"{original_note} {krw:.0f} KRW".strip()
-            if original_note and krw is not None
-            else krw
-        )
-        detail_ws[f"Q{index}"] = krw
+        detail_ws[f"{category_col}{index}"] = krw_whole
+        detail_ws[f"{category_col}{index}"].number_format = KRW_NUMBER_FORMAT
+        detail_ws[f"P{index}"] = original_note
+        detail_ws[f"Q{index}"] = krw_whole
+        detail_ws[f"Q{index}"].number_format = KRW_NUMBER_FORMAT
         detail_ws[f"R{index}"] = rmb
         detail_ws[f"S{index}"] = item.payment_method.strip()
         bucket = korea_cover_bucket(category)
         cur_krw, cur_rmb = summary[bucket]
-        summary[bucket] = (cur_krw + (krw or 0.0), cur_rmb + (rmb or 0.0))
+        summary[bucket] = (cur_krw + (krw_whole or 0), cur_rmb + (rmb or 0.0))
 
     for bucket, (krw_total, rmb_total) in summary.items():
         row, _label = KOREA_COVER_ROWS[bucket]
-        cover_ws[f"C{row}"] = round(krw_total, 2) if krw_total else None
+        cover_ws[f"C{row}"] = truncate_amount(krw_total) if krw_total else None
+        cover_ws[f"C{row}"].number_format = KRW_NUMBER_FORMAT
         cover_ws[f"D{row}"] = round(rmb_total, 2) if rmb_total else None
+    cover_ws["C9"].number_format = KRW_NUMBER_FORMAT
 
     clear_images(receipts_ws)
     fit_columns_for_receipts(receipts_ws)
     exchange_rate_attachments = [attachment_from_item(item) for item in exchange_rate_items or []]
-    block_count = len(items) + (1 if exchange_rate_attachments else 0)
-    configure_korea_receipt_page(receipts_ws, block_count)
-    page_height = 50
-    blocks_per_page = 2
-    page_count = max(1, (block_count + blocks_per_page - 1) // blocks_per_page)
+    slot_count = len(items) + (2 if exchange_rate_attachments else 0)
+    configure_korea_receipt_page(receipts_ws, slot_count)
+    page_height = 60
+    slots_per_page = 4
+    page_count = max(1, (slot_count + slots_per_page - 1) // slots_per_page)
     last_receipt_row = page_count * page_height
     for row in range(1, max(240, last_receipt_row + 1)):
         for col in "ABCDEFGH":
             receipts_ws[f"{col}{row}"] = None
     block_index = 0
     if exchange_rate_attachments:
-        add_korea_receipt_block(receipts_ws, block_index, "汇率 / Exchange Rate", exchange_rate_attachments)
-        block_index += 1
+        add_korea_receipt_block(receipts_ws, block_index, "汇率 / Exchange Rate", exchange_rate_attachments, wide=True)
+        block_index += 2
     for idx, item in enumerate(items):
         add_korea_receipt_block(
             receipts_ws,
@@ -2489,6 +2641,8 @@ class ReimbursementHelperApp:
         self.save_session()
         self.status_text.set(f"Selected {added} 汇率 image file(s).")
         self.update_toolbar_recommendation()
+        if added:
+            self.read_exchange_rate_from_images()
         if failed and messagebox:
             messagebox.showwarning(
                 "Select 汇率 Image",
@@ -2496,6 +2650,50 @@ class ReimbursementHelperApp:
                 + "\n".join(failed[:5])
                 + f"\n\nLogged to:\n{LOG_DIR / 'app.log'}",
             )
+
+    def read_exchange_rate_from_images(self) -> None:
+        if not self.exchange_rate_items:
+            return
+        if not get_openai_api_key():
+            self.status_text.set("Selected 汇率 image(s). Add an API key to auto-read the rate.")
+            return
+        image_paths = [Path(item.path) for item in self.exchange_rate_items]
+        usd_to_rmb_rate = safe_float(self.exchange_rate.get()) or safe_float(DEFAULT_USD_TO_RMB_RATE) or 6.8175
+        self.set_busy(True)
+        self.set_progress(0, 1, "Reading 汇率")
+        self.status_text.set("Reading 汇率 image...")
+
+        def worker() -> None:
+            try:
+                rate = call_openai_exchange_rate_extraction(
+                    image_paths,
+                    usd_to_rmb_rate,
+                    progress=lambda message: self.set_status(message),
+                )
+            except Exception as exc:
+                log_exception("Could not read exchange rate images")
+                message = str(exc)
+
+                def fail() -> None:
+                    self.set_busy(False)
+                    self.set_progress(0, 1, "")
+                    self.status_text.set(f"Selected 汇率 image(s), but could not auto-read rate: {message}")
+
+                self.root.after(0, fail)
+                return
+
+            def done() -> None:
+                self.krw_to_rmb_rate.set(format_exchange_rate(rate))
+                self.settings["krw_to_rmb_rate"] = self.krw_to_rmb_rate.get()
+                save_user_settings(self.settings)
+                self.save_session()
+                self.set_busy(False)
+                self.set_progress(1, 1, "1/1")
+                self.status_text.set(f"Updated KRW -> RMB rate from 汇率 image: {self.krw_to_rmb_rate.get()}")
+
+            self.root.after(0, done)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def refresh_tree(self) -> None:
         current_selection = set(self.tree.selection())

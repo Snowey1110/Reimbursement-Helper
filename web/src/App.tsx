@@ -13,7 +13,7 @@ import {
   Repeat2
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { applyExtraction, extractReceiptWithOpenAI } from "./ai";
+import { applyExtraction, extractKrwToRmbRateWithOpenAI, extractReceiptWithOpenAI } from "./ai";
 import {
   ADVANCED_MODEL,
   DEFAULT_KRW_TO_RMB,
@@ -180,7 +180,15 @@ export default function App() {
     try {
       const attachments = await Promise.all(Array.from(files).map(fileToAttachment));
       setExchangeRateImages(attachments);
-      setStatus(`Selected ${attachments.length} 汇率 image file(s).`);
+      if (!apiKey.trim()) {
+        setStatus(`Selected ${attachments.length} 汇率 image file(s). Enter an API key to auto-read the rate.`);
+      } else {
+        setStatus("Reading 汇率 image...");
+        const rate = await extractKrwToRmbRateWithOpenAI(apiKey.trim(), model.trim() || DEFAULT_MODEL, attachments, rates.usdToRmb);
+        const displayRate = Number(rate.toFixed(10));
+        setRates((current) => ({ ...current, krwToRmb: displayRate }));
+        setStatus(`Selected ${attachments.length} 汇率 image file(s). Updated KRW -> RMB to ${displayRate}.`);
+      }
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not add 汇率 image files.");
     } finally {

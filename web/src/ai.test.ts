@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { extractReceiptWithOpenAI } from "./ai";
+import { extractKrwToRmbRateWithOpenAI, extractReceiptWithOpenAI } from "./ai";
 import { receipt } from "./test/factories";
 
 describe("OpenAI extraction", () => {
@@ -47,5 +47,28 @@ describe("OpenAI extraction", () => {
       type: "input_image",
       image_url: receipt().images[0].dataUrl
     });
+  });
+
+  it("extracts KRW to RMB rate from multiple exchange-rate screenshots", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          output_text: JSON.stringify({
+            krw_to_rmb_rate: "0.0044029590",
+            usd_to_krw_rate: "1548.86",
+            confidence_notes: "explicit app rate visible"
+          })
+        }),
+        { status: 200 }
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const image = receipt().images[0];
+    const rate = await extractKrwToRmbRateWithOpenAI("test-user-key", "gpt-test", [{ ...image, id: "rate-1" }, { ...image, id: "rate-2" }], 6.8175);
+
+    expect(rate).toBeCloseTo(0.004402959);
+    const body = JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body));
+    expect(body.input[0].content.filter((part: any) => part.type === "input_image")).toHaveLength(2);
   });
 });
