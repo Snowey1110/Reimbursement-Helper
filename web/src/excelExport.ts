@@ -65,8 +65,8 @@ function koreaAmounts(item: ReceiptItem, rates: ExchangeRates): { krw?: number; 
   let rmb = safeNumber(item.rmbAmount);
   if (amount !== undefined) {
     if (item.currency === "USD") {
-      rmb = amount * rates.usdToRmb;
-      krw = rmb / rates.krwToRmb;
+      krw = amount * rates.usdToKrw;
+      rmb = krw * rates.krwToRmb;
     } else if (item.currency === "KRW") {
       krw = amount;
       rmb = amount * rates.krwToRmb;

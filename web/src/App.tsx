@@ -13,11 +13,12 @@ import {
   Repeat2
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { applyExtraction, extractKrwToRmbRateWithOpenAI, extractReceiptWithOpenAI } from "./ai";
+import { applyExtraction, extractKoreaExchangeRatesWithOpenAI, extractReceiptWithOpenAI } from "./ai";
 import {
   ADVANCED_MODEL,
   DEFAULT_KRW_TO_RMB,
   DEFAULT_MODEL,
+  DEFAULT_USD_TO_KRW,
   DEFAULT_USD_TO_RMB,
   FORM_VERSION_STORAGE_KEY,
   KOREA_TEMPLATE_URL,
@@ -63,7 +64,7 @@ export default function App() {
   const [rememberKey, setRememberKey] = useState(() => Boolean(localStorage.getItem(STORAGE_KEY)));
   const [showApiKey, setShowApiKey] = useState(false);
   const [model, setModel] = useState(DEFAULT_MODEL);
-  const [rates, setRates] = useState<ExchangeRates>({ usdToRmb: DEFAULT_USD_TO_RMB, krwToRmb: DEFAULT_KRW_TO_RMB });
+  const [rates, setRates] = useState<ExchangeRates>({ usdToRmb: DEFAULT_USD_TO_RMB, usdToKrw: DEFAULT_USD_TO_KRW, krwToRmb: DEFAULT_KRW_TO_RMB });
   const [status, setStatus] = useState("Ready");
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -184,10 +185,19 @@ export default function App() {
         setStatus(`Selected ${attachments.length} 汇率 image file(s). Enter an API key to auto-read the rate.`);
       } else {
         setStatus("Reading 汇率 image...");
-        const rate = await extractKrwToRmbRateWithOpenAI(apiKey.trim(), model.trim() || DEFAULT_MODEL, attachments, rates.usdToRmb);
-        const displayRate = Number(rate.toFixed(10));
-        setRates((current) => ({ ...current, krwToRmb: displayRate }));
-        setStatus(`Selected ${attachments.length} 汇率 image file(s). Updated KRW -> RMB to ${displayRate}.`);
+        const extractedRates = await extractKoreaExchangeRatesWithOpenAI(apiKey.trim(), model.trim() || DEFAULT_MODEL, attachments, rates.usdToRmb);
+        const updated: string[] = [];
+        const patch: Partial<ExchangeRates> = {};
+        if (extractedRates.usdToKrw !== undefined) {
+          patch.usdToKrw = Number(extractedRates.usdToKrw.toFixed(6));
+          updated.push(`USD -> KRW ${patch.usdToKrw}`);
+        }
+        if (extractedRates.krwToRmb !== undefined) {
+          patch.krwToRmb = Number(extractedRates.krwToRmb.toFixed(10));
+          updated.push(`KRW -> RMB ${patch.krwToRmb}`);
+        }
+        setRates((current) => ({ ...current, ...patch }));
+        setStatus(`Selected ${attachments.length} 汇率 image file(s). Updated ${updated.join(", ")}.`);
       }
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not add 汇率 image files.");
@@ -524,10 +534,18 @@ export default function App() {
         <section className="panel details-panel">
           <h2>Details</h2>
           <div className="rate-row">
-            <label>
-              USD -&gt; RMB
-              <input type="number" value={rates.usdToRmb} step="0.0001" onChange={(event) => setRates({ ...rates, usdToRmb: Number(event.target.value) })} />
-            </label>
+            {formVersion === "USA" && (
+              <label>
+                USD -&gt; RMB
+                <input type="number" value={rates.usdToRmb} step="0.0001" onChange={(event) => setRates({ ...rates, usdToRmb: Number(event.target.value) })} />
+              </label>
+            )}
+            {formVersion === "Korea" && (
+              <label>
+                USD -&gt; KRW
+                <input type="number" value={rates.usdToKrw} step="0.01" onChange={(event) => setRates({ ...rates, usdToKrw: Number(event.target.value) })} />
+              </label>
+            )}
             {formVersion === "Korea" && (
               <label>
                 KRW -&gt; RMB

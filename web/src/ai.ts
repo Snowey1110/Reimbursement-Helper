@@ -1,6 +1,6 @@
 import type { FormVersion, ImageAttachment, ReceiptExtraction, ReceiptItem } from "./types";
 import { normalizeCategory, normalizeCurrency, updateAmounts } from "./utils";
-import { DEFAULT_KRW_TO_RMB, DEFAULT_USD_TO_RMB } from "./constants";
+import { DEFAULT_KRW_TO_RMB, DEFAULT_USD_TO_KRW, DEFAULT_USD_TO_RMB } from "./constants";
 
 const RECEIPT_SCHEMA = {
   type: "object",
@@ -43,9 +43,10 @@ const EXCHANGE_RATE_SCHEMA = {
   properties: {
     krw_to_rmb_rate: { type: "string" },
     usd_to_krw_rate: { type: "string" },
+    krw_to_usd_rate: { type: "string" },
     confidence_notes: { type: "string" }
   },
-  required: ["krw_to_rmb_rate", "usd_to_krw_rate", "confidence_notes"]
+  required: ["krw_to_rmb_rate", "usd_to_krw_rate", "krw_to_usd_rate", "confidence_notes"]
 };
 
 function parseRate(value: unknown): number | undefined {
@@ -106,16 +107,23 @@ export async function extractReceiptWithOpenAI(apiKey: string, model: string, fo
   return JSON.parse(text) as ReceiptExtraction;
 }
 
-export async function extractKrwToRmbRateWithOpenAI(
+export interface KoreaExchangeRateExtraction {
+  usdToKrw?: number;
+  krwToRmb?: number;
+}
+
+export async function extractKoreaExchangeRatesWithOpenAI(
   apiKey: string,
   model: string,
   images: ImageAttachment[],
   usdToRmb: number
-): Promise<number> {
+): Promise<KoreaExchangeRateExtraction> {
   if (!images.length) throw new Error("Select 汇率 image files first.");
   const prompt = [
     "Read these exchange-rate screenshots for the Korea reimbursement form.",
     "Return only JSON.",
+    "When a screenshot shows 1 USD = some KRW amount, return usd_to_krw_rate.",
+    "When a screenshot shows KRW -> USD, return krw_to_usd_rate.",
     "Prefer an explicit KRW -> RMB or 汇率 value, for example 0.0044029590.",
     "If the screenshot only shows USD -> KRW, calculate KRW -> RMB as USD_TO_RMB / USD_TO_KRW.",
     `The current USD_TO_RMB value from the app is ${usdToRmb}.`,
@@ -158,11 +166,18 @@ export async function extractKrwToRmbRateWithOpenAI(
     throw new Error("OpenAI response did not include JSON text.");
   }
   const parsed = JSON.parse(text);
-  const explicitRate = parseRate(parsed.krw_to_rmb_rate);
-  if (explicitRate !== undefined && explicitRate > 0 && explicitRate < 1) return explicitRate;
+  const result: KoreaExchangeRateExtraction = {};
   const usdToKrw = parseRate(parsed.usd_to_krw_rate);
-  if (usdToKrw !== undefined && usdToKrw > 1 && usdToRmb) return usdToRmb / usdToKrw;
-  throw new Error("AI could not find a usable KRW -> RMB exchange rate.");
+  if (usdToKrw !== undefined && usdToKrw > 1) result.usdToKrw = usdToKrw;
+  const krwToUsd = parseRate(parsed.krw_to_usd_rate);
+  if (result.usdToKrw === undefined && krwToUsd !== undefined && krwToUsd > 0 && krwToUsd < 1) result.usdToKrw = 1 / krwToUsd;
+  const explicitRate = parseRate(parsed.krw_to_rmb_rate);
+  if (explicitRate !== undefined && explicitRate > 0 && explicitRate < 1) result.krwToRmb = explicitRate;
+  if (result.krwToRmb === undefined && result.usdToKrw !== undefined && usdToRmb) result.krwToRmb = usdToRmb / result.usdToKrw;
+  if (result.usdToKrw === undefined && result.krwToRmb === undefined) {
+    throw new Error("AI could not find a usable exchange rate.");
+  }
+  return result;
 }
 
 export function applyExtraction(item: ReceiptItem, extraction: ReceiptExtraction, formVersion: FormVersion): ReceiptItem {
@@ -183,5 +198,5 @@ export function applyExtraction(item: ReceiptItem, extraction: ReceiptExtraction
     receiptLabel: String(extraction.receipt_label ?? item.receiptLabel ?? item.filename),
     status: "AI filled"
   };
-  return updateAmounts(next, { usdToRmb: DEFAULT_USD_TO_RMB, krwToRmb: DEFAULT_KRW_TO_RMB }, "amount");
+  return updateAmounts(next, { usdToRmb: DEFAULT_USD_TO_RMB, usdToKrw: DEFAULT_USD_TO_KRW, krwToRmb: DEFAULT_KRW_TO_RMB }, "amount");
 }

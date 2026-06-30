@@ -19,7 +19,7 @@ describe("Excel row mapping", () => {
   it("maps Korea detail rows with converted KRW and RMB amounts", () => {
     const rows = mapKoreaDetailRows(
       [receipt({ id: "r1", amount: "10", currency: "USD", category: "transportation" })],
-      { usdToRmb: 7, krwToRmb: 0.005 }
+      { usdToRmb: 7, usdToKrw: 1400, krwToRmb: 0.005 }
     );
 
     expect(rows[0].row).toBe(3);
@@ -32,7 +32,7 @@ describe("Excel row mapping", () => {
   it("truncates Korea KRW values instead of rounding them", () => {
     const rows = mapKoreaDetailRows(
       [receipt({ id: "r1", amount: "1", currency: "USD", category: "transportation" })],
-      { usdToRmb: 6.8175, krwToRmb: 0.004402959 }
+      { usdToRmb: 6.8175, usdToKrw: 1548.86, krwToRmb: 0.004402959 }
     );
 
     expect(rows[0].krw).toBe(1548);
@@ -41,7 +41,7 @@ describe("Excel row mapping", () => {
   it("keeps Korea meals in column K so later detail columns remain available", () => {
     const rows = mapKoreaDetailRows(
       [receipt({ id: "r1", amount: "13900", currency: "KRW", category: "meals", paymentMethod: "Visa" })],
-      { usdToRmb: 7, krwToRmb: 0.005 }
+      { usdToRmb: 7, usdToKrw: 1400, krwToRmb: 0.005 }
     );
 
     expect(rows[0].categoryColumn).toBe("K");

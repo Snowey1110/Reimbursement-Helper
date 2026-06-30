@@ -70,6 +70,7 @@ SUPPORTED_UPLOAD_SUFFIXES = SUPPORTED_IMAGE_SUFFIXES | {".pdf"}
 OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions"
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
 DEFAULT_USD_TO_RMB_RATE = "6.8175"
+DEFAULT_USD_TO_KRW_RATE = "1548.86"
 DEFAULT_KRW_TO_RMB_RATE = "0.004433"
 KRW_NUMBER_FORMAT = "\u20a9#,##0"
 LOGGER = logging.getLogger("reimbursement_helper")
@@ -666,15 +667,25 @@ Current editable row values, to keep if they look more specific than the image:
     return data
 
 
-def exchange_rate_from_data(data: Dict[str, Any], usd_to_rmb_rate: float) -> Optional[float]:
+def exchange_rates_from_data(data: Dict[str, Any], usd_to_rmb_rate: float) -> Dict[str, float]:
+    rates: Dict[str, float] = {}
+    for key in ("usd_to_krw_rate", "usd_to_krw"):
+        value = safe_float(data.get(key))
+        if value is not None and value > 1:
+            rates["usd_to_krw_rate"] = value
+            break
+    krw_to_usd = safe_float(data.get("krw_to_usd_rate")) or safe_float(data.get("krw_to_usd"))
+    if "usd_to_krw_rate" not in rates and krw_to_usd and 0 < krw_to_usd < 1:
+        rates["usd_to_krw_rate"] = 1 / krw_to_usd
     for key in ("krw_to_rmb_rate", "krw_to_rmb", "rate", "exchange_rate"):
         value = safe_float(data.get(key))
         if value is not None and 0 < value < 1:
-            return value
-    usd_to_krw = safe_float(data.get("usd_to_krw_rate")) or safe_float(data.get("usd_to_krw"))
-    if usd_to_krw and usd_to_krw > 1 and usd_to_rmb_rate:
-        return usd_to_rmb_rate / usd_to_krw
-    return None
+            rates["krw_to_rmb_rate"] = value
+            break
+    usd_to_krw = rates.get("usd_to_krw_rate")
+    if "krw_to_rmb_rate" not in rates and usd_to_krw and usd_to_rmb_rate:
+        rates["krw_to_rmb_rate"] = usd_to_rmb_rate / usd_to_krw
+    return rates
 
 
 def format_exchange_rate(rate: float) -> str:
@@ -685,7 +696,7 @@ def call_openai_exchange_rate_extraction(
     image_paths: Sequence[Path],
     usd_to_rmb_rate: float,
     progress: Optional[Callable[[str], None]] = None,
-) -> float:
+) -> Dict[str, float]:
     api_key = get_openai_api_key()
     if not api_key:
         raise RuntimeError("No OpenAI API key was found, so the exchange rate image could not be read.")
@@ -704,11 +715,15 @@ def call_openai_exchange_rate_extraction(
     prompt = f"""
 Read these exchange-rate screenshots for the Korea reimbursement form.
 Return only compact JSON with these keys:
-krw_to_rmb_rate, usd_to_krw_rate, confidence_notes.
+usd_to_krw_rate, krw_to_usd_rate, krw_to_rmb_rate, confidence_notes.
 
 Rules:
+- Prefer an explicit USD -> KRW value, for example 1548.86, when a screenshot shows
+  1 USD = 1548.86 KRW.
+- If a screenshot shows KRW -> USD instead, return krw_to_usd_rate and leave
+  usd_to_krw_rate empty.
 - Prefer an explicit KRW -> RMB or 汇率 value, for example 0.0044029590.
-- If the image only shows USD -> KRW, for example 1 USD = 1548.86 KRW,
+- If the images only show USD -> KRW, for example 1 USD = 1548.86 KRW,
   calculate KRW -> RMB as USD_TO_RMB / USD_TO_KRW.
 - The current USD_TO_RMB value from the app is {usd_to_rmb_rate:g}.
 - Return numbers as plain decimals without currency symbols or commas.
@@ -758,10 +773,10 @@ Rules:
     except Exception as exc:
         raise RuntimeError("OpenAI returned an unexpected exchange-rate response format.") from exc
     data = extract_json_object(str(response_text))
-    rate = exchange_rate_from_data(data, usd_to_rmb_rate)
-    if rate is None:
-        raise RuntimeError("AI could not find a usable KRW -> RMB exchange rate.")
-    return rate
+    rates = exchange_rates_from_data(data, usd_to_rmb_rate)
+    if not rates:
+        raise RuntimeError("AI could not find a usable exchange rate.")
+    return rates
 
 
 def ensure_dependencies() -> None:
@@ -1494,6 +1509,7 @@ def korea_amounts(
     item: ReceiptItem,
     krw_to_rmb_rate: float,
     usd_to_rmb_rate: float,
+    usd_to_krw_rate: float,
 ) -> Tuple[Optional[float], Optional[float], str]:
     amount = safe_float(item.amount)
     krw = safe_float(item.krw_amount)
@@ -1501,11 +1517,15 @@ def korea_amounts(
     currency = normalize_currency(item.currency, "KRW")
     if amount is not None:
         if currency == "USD":
-            rmb = amount * usd_to_rmb_rate if usd_to_rmb_rate else rmb
-            krw = rmb / krw_to_rmb_rate if rmb is not None and krw_to_rmb_rate else krw
+            krw = amount * usd_to_krw_rate if usd_to_krw_rate else krw
+            if krw is None and usd_to_rmb_rate and krw_to_rmb_rate:
+                krw = (amount * usd_to_rmb_rate) / krw_to_rmb_rate
+            rmb = krw * krw_to_rmb_rate if krw is not None and krw_to_rmb_rate else (amount * usd_to_rmb_rate if usd_to_rmb_rate else rmb)
         elif currency == "RMB" or currency == "CNY":
             rmb = amount
-            krw = amount / krw_to_rmb_rate if krw_to_rmb_rate else None
+            krw = amount / krw_to_rmb_rate if krw_to_rmb_rate else (
+                (amount / usd_to_rmb_rate) * usd_to_krw_rate if usd_to_rmb_rate and usd_to_krw_rate else None
+            )
         elif currency == "KRW":
             krw = amount
             rmb = amount * krw_to_rmb_rate if krw_to_rmb_rate else None
@@ -1536,6 +1556,7 @@ def export_korea(
     output_path: Path,
     krw_to_rmb_rate: float,
     usd_to_rmb_rate: float,
+    usd_to_krw_rate: float,
     exchange_rate_items: Optional[List[BankStatementItem]] = None,
 ) -> None:
     cover_template = TEMPLATE_DIR / KOREA_COVER_TEMPLATE_NAME
@@ -1582,7 +1603,7 @@ def export_korea(
         category = normalized_category(item.category, "Korea")
         if category not in KOREA_CATEGORY_COLUMNS:
             category = "other"
-        krw, rmb, original_note = korea_amounts(item, krw_to_rmb_rate, usd_to_rmb_rate)
+        krw, rmb, original_note = korea_amounts(item, krw_to_rmb_rate, usd_to_rmb_rate, usd_to_krw_rate)
         krw_whole = truncate_amount(krw)
         detail_ws[f"A{index}"] = excel_date_formula_or_value(item.date)
         detail_ws[f"B{index}"] = item.purpose.strip() or item.details.strip()
@@ -1675,6 +1696,7 @@ class ReimbursementHelperApp:
         self.settings = load_user_settings()
         self.form_version = tk.StringVar(value=normalized_form_version(self.settings.get("last_form_version", "USA")))
         self.exchange_rate = tk.StringVar(value=str(self.settings.get("usa_exchange_rate", DEFAULT_USD_TO_RMB_RATE)))
+        self.usd_to_krw_rate = tk.StringVar(value=str(self.settings.get("usd_to_krw_rate", DEFAULT_USD_TO_KRW_RATE)))
         self.krw_to_rmb_rate = tk.StringVar(value=str(self.settings.get("krw_to_rmb_rate", DEFAULT_KRW_TO_RMB_RATE)))
         self.status_text = tk.StringVar(value="Ready")
         self.progress_text = tk.StringVar(value="")
@@ -1686,6 +1708,8 @@ class ReimbursementHelperApp:
         self.category_combo: Optional[Any] = None
         self.usa_rate_label: Optional[Any] = None
         self.usa_rate_entry: Optional[Any] = None
+        self.usd_krw_rate_label: Optional[Any] = None
+        self.usd_krw_rate_entry: Optional[Any] = None
         self.krw_rate_label: Optional[Any] = None
         self.krw_rate_entry: Optional[Any] = None
         self._loading_fields = False
@@ -1948,6 +1972,10 @@ class ReimbursementHelperApp:
         self.usa_rate_label.pack(side="left")
         self.usa_rate_entry = ttk.Entry(rate_frame, textvariable=self.exchange_rate, width=9)
         self.usa_rate_entry.pack(side="left", padx=(6, 14))
+        self.usd_krw_rate_label = ttk.Label(rate_frame, text="USD -> KRW", style="Panel.TLabel")
+        self.usd_krw_rate_label.pack(side="left")
+        self.usd_krw_rate_entry = ttk.Entry(rate_frame, textvariable=self.usd_to_krw_rate, width=9)
+        self.usd_krw_rate_entry.pack(side="left", padx=(6, 14))
         self.krw_rate_label = ttk.Label(rate_frame, text="KRW -> RMB", style="Panel.TLabel")
         self.krw_rate_label.pack(side="left")
         self.krw_rate_entry = ttk.Entry(rate_frame, textvariable=self.krw_to_rmb_rate, width=9)
@@ -2080,6 +2108,7 @@ class ReimbursementHelperApp:
             if var is not None:
                 var.trace_add("write", lambda *_args, k=key: self._on_field_changed(k))
         self.exchange_rate.trace_add("write", lambda *_args: self._sync_amount_fields("rate"))
+        self.usd_to_krw_rate.trace_add("write", lambda *_args: self._sync_amount_fields("rate"))
         self.krw_to_rmb_rate.trace_add("write", lambda *_args: self._sync_amount_fields("rate"))
 
     def _on_field_changed(self, key: str) -> None:
@@ -2123,7 +2152,8 @@ class ReimbursementHelperApp:
                     should_save = True
             else:
                 krw_rate = safe_float(self.krw_to_rmb_rate.get())
-                usd_rate = safe_float(self.exchange_rate.get())
+                usd_rmb_rate = safe_float(self.exchange_rate.get())
+                usd_krw_rate = safe_float(self.usd_to_krw_rate.get())
                 if krw_rate:
                     currency = normalize_currency(currency_var.get(), "KRW")
                     if currency_var.get() != currency:
@@ -2134,8 +2164,11 @@ class ReimbursementHelperApp:
                     rmb = safe_float(rmb_var.get())
                     if source in {"amount", "currency", "rate"} and amount is not None:
                         if currency == "USD":
-                            if usd_rate:
-                                rmb = amount * usd_rate
+                            if usd_krw_rate:
+                                krw = amount * usd_krw_rate
+                                rmb = krw * krw_rate
+                            elif usd_rmb_rate:
+                                rmb = amount * usd_rmb_rate
                                 krw = rmb / krw_rate
                         elif currency in {"RMB", "CNY"}:
                             rmb = amount
@@ -2149,16 +2182,20 @@ class ReimbursementHelperApp:
                             amount_var.set(format_amount(rmb))
                         elif currency == "KRW":
                             amount_var.set(format_amount(krw))
-                        elif currency == "USD" and usd_rate and not amount_var.get().strip():
-                            amount_var.set(format_amount(rmb / usd_rate))
+                        elif currency == "USD" and usd_krw_rate and not amount_var.get().strip():
+                            amount_var.set(format_amount(krw / usd_krw_rate))
+                        elif currency == "USD" and usd_rmb_rate and not amount_var.get().strip():
+                            amount_var.set(format_amount(rmb / usd_rmb_rate))
                     elif source == "krw_amount" and krw is not None:
                         rmb = krw * krw_rate
                         if currency == "KRW":
                             amount_var.set(format_amount(krw))
                         elif currency in {"RMB", "CNY"} and not amount_var.get().strip():
                             amount_var.set(format_amount(rmb))
-                        elif currency == "USD" and usd_rate and not amount_var.get().strip():
-                            amount_var.set(format_amount(rmb / usd_rate))
+                        elif currency == "USD" and usd_krw_rate and not amount_var.get().strip():
+                            amount_var.set(format_amount(krw / usd_krw_rate))
+                        elif currency == "USD" and usd_rmb_rate and not amount_var.get().strip():
+                            amount_var.set(format_amount(rmb / usd_rmb_rate))
 
                     if krw is None and rmb is not None:
                         krw = rmb / krw_rate
@@ -2190,7 +2227,8 @@ class ReimbursementHelperApp:
             return
 
         krw_rate = safe_float(self.krw_to_rmb_rate.get()) or safe_float(DEFAULT_KRW_TO_RMB_RATE)
-        usd_rate = safe_float(self.exchange_rate.get()) or safe_float(DEFAULT_USD_TO_RMB_RATE)
+        usd_rmb_rate = safe_float(self.exchange_rate.get()) or safe_float(DEFAULT_USD_TO_RMB_RATE)
+        usd_krw_rate = safe_float(self.usd_to_krw_rate.get()) or safe_float(DEFAULT_USD_TO_KRW_RATE)
         if not krw_rate:
             return
         item.currency = normalize_currency(item.currency, "KRW")
@@ -2200,8 +2238,8 @@ class ReimbursementHelperApp:
         item_source = "amount" if source in {"currency", "rate"} and amount is not None else source
         if item_source == "amount" and amount is not None:
             if item.currency == "USD":
-                rmb = amount * usd_rate if usd_rate else rmb
-                krw = rmb / krw_rate if rmb is not None else krw
+                krw = amount * usd_krw_rate if usd_krw_rate else krw
+                rmb = krw * krw_rate if krw is not None else (amount * usd_rmb_rate if usd_rmb_rate else rmb)
             elif item.currency in {"RMB", "CNY"}:
                 rmb = amount
                 krw = amount / krw_rate
@@ -2214,16 +2252,20 @@ class ReimbursementHelperApp:
                 item.amount = format_amount(rmb)
             elif item.currency == "KRW" and amount is None:
                 item.amount = format_amount(krw)
-            elif item.currency == "USD" and amount is None and usd_rate:
-                item.amount = format_amount(rmb / usd_rate)
+            elif item.currency == "USD" and amount is None and usd_krw_rate:
+                item.amount = format_amount(krw / usd_krw_rate)
+            elif item.currency == "USD" and amount is None and usd_rmb_rate:
+                item.amount = format_amount(rmb / usd_rmb_rate)
         elif item_source == "krw_amount" and krw is not None:
             rmb = krw * krw_rate
             if item.currency == "KRW":
                 item.amount = format_amount(krw)
             elif item.currency in {"RMB", "CNY"} and amount is None:
                 item.amount = format_amount(rmb)
-            elif item.currency == "USD" and amount is None and usd_rate:
-                item.amount = format_amount(rmb / usd_rate)
+            elif item.currency == "USD" and amount is None and usd_krw_rate:
+                item.amount = format_amount(krw / usd_krw_rate)
+            elif item.currency == "USD" and amount is None and usd_rmb_rate:
+                item.amount = format_amount(rmb / usd_rmb_rate)
 
         if krw is None and rmb is not None:
             krw = rmb / krw_rate
@@ -2306,6 +2348,10 @@ class ReimbursementHelperApp:
                 self.usa_rate_label.pack(side="left")
             if self.usa_rate_entry is not None:
                 self.usa_rate_entry.pack(side="left", padx=(6, 14))
+            if self.usd_krw_rate_label is not None:
+                self.usd_krw_rate_label.pack_forget()
+            if self.usd_krw_rate_entry is not None:
+                self.usd_krw_rate_entry.pack_forget()
             if self.krw_rate_label is not None:
                 self.krw_rate_label.pack_forget()
             if self.krw_rate_entry is not None:
@@ -2323,6 +2369,10 @@ class ReimbursementHelperApp:
                 self.usa_rate_label.pack_forget()
             if self.usa_rate_entry is not None:
                 self.usa_rate_entry.pack_forget()
+            if self.usd_krw_rate_label is not None:
+                self.usd_krw_rate_label.pack(side="left")
+            if self.usd_krw_rate_entry is not None:
+                self.usd_krw_rate_entry.pack(side="left", padx=(6, 14))
             if self.krw_rate_label is not None:
                 self.krw_rate_label.pack(side="left")
             if self.krw_rate_entry is not None:
@@ -2665,7 +2715,7 @@ class ReimbursementHelperApp:
 
         def worker() -> None:
             try:
-                rate = call_openai_exchange_rate_extraction(
+                rates = call_openai_exchange_rate_extraction(
                     image_paths,
                     usd_to_rmb_rate,
                     progress=lambda message: self.set_status(message),
@@ -2683,13 +2733,20 @@ class ReimbursementHelperApp:
                 return
 
             def done() -> None:
-                self.krw_to_rmb_rate.set(format_exchange_rate(rate))
-                self.settings["krw_to_rmb_rate"] = self.krw_to_rmb_rate.get()
+                updates: List[str] = []
+                if "usd_to_krw_rate" in rates:
+                    self.usd_to_krw_rate.set(format_exchange_rate(rates["usd_to_krw_rate"]))
+                    self.settings["usd_to_krw_rate"] = self.usd_to_krw_rate.get()
+                    updates.append(f"USD -> KRW {self.usd_to_krw_rate.get()}")
+                if "krw_to_rmb_rate" in rates:
+                    self.krw_to_rmb_rate.set(format_exchange_rate(rates["krw_to_rmb_rate"]))
+                    self.settings["krw_to_rmb_rate"] = self.krw_to_rmb_rate.get()
+                    updates.append(f"KRW -> RMB {self.krw_to_rmb_rate.get()}")
                 save_user_settings(self.settings)
                 self.save_session()
                 self.set_busy(False)
                 self.set_progress(1, 1, "1/1")
-                self.status_text.set(f"Updated KRW -> RMB rate from 汇率 image: {self.krw_to_rmb_rate.get()}")
+                self.status_text.set(f"Updated rate from 汇率 image: {', '.join(updates)}")
 
             self.root.after(0, done)
 
@@ -4149,7 +4206,8 @@ class ReimbursementHelperApp:
             else:
                 krw_rate = safe_float(self.krw_to_rmb_rate.get()) or safe_float(DEFAULT_KRW_TO_RMB_RATE) or 0.0046
                 usd_rate = safe_float(self.exchange_rate.get()) or safe_float(DEFAULT_USD_TO_RMB_RATE) or 6.8
-                export_korea(self.items, output_path, krw_rate, usd_rate, self.exchange_rate_items)
+                usd_krw_rate = safe_float(self.usd_to_krw_rate.get()) or safe_float(DEFAULT_USD_TO_KRW_RATE) or 1548.86
+                export_korea(self.items, output_path, krw_rate, usd_rate, usd_krw_rate, self.exchange_rate_items)
         except Exception as exc:
             log_path = log_exception("Excel export failed")
             if messagebox:
@@ -4208,6 +4266,7 @@ class ReimbursementHelperApp:
             "saved_at": datetime.now().isoformat(timespec="seconds"),
             "form_version": self.form_version.get(),
             "usa_exchange_rate": self.exchange_rate.get(),
+            "usd_to_krw_rate": self.usd_to_krw_rate.get(),
             "krw_to_rmb_rate": self.krw_to_rmb_rate.get(),
             "selected_index": self.selected_index,
             "items": [asdict(item) for item in self.items],
@@ -4297,6 +4356,7 @@ class ReimbursementHelperApp:
             restored_exchange.append(BankStatementItem(**values))
         self.form_version.set(normalized_form_version(data.get("form_version") or self.form_version.get()))
         self.exchange_rate.set(str(data.get("usa_exchange_rate") or DEFAULT_USD_TO_RMB_RATE))
+        self.usd_to_krw_rate.set(str(data.get("usd_to_krw_rate") or DEFAULT_USD_TO_KRW_RATE))
         self.krw_to_rmb_rate.set(str(data.get("krw_to_rmb_rate") or DEFAULT_KRW_TO_RMB_RATE))
         self.items = restored
         self.bank_items = restored_bank
@@ -4316,6 +4376,7 @@ class ReimbursementHelperApp:
 
     def on_close(self) -> None:
         self.settings["usa_exchange_rate"] = self.exchange_rate.get()
+        self.settings["usd_to_krw_rate"] = self.usd_to_krw_rate.get()
         self.settings["krw_to_rmb_rate"] = self.krw_to_rmb_rate.get()
         self.settings["last_form_version"] = normalized_form_version(self.form_version.get())
         save_user_settings(self.settings)
@@ -4354,6 +4415,7 @@ def smoke_test_export() -> None:
         OUTPUT_DIR / "smoke_korea.xlsx",
         safe_float(DEFAULT_KRW_TO_RMB_RATE) or 0.0046,
         safe_float(DEFAULT_USD_TO_RMB_RATE) or 6.8,
+        safe_float(DEFAULT_USD_TO_KRW_RATE) or 1548.86,
     )
     print("Smoke exports created.")
 

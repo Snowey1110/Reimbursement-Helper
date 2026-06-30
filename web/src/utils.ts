@@ -1,4 +1,4 @@
-import { DEFAULT_KRW_TO_RMB, DEFAULT_USD_TO_RMB } from "./constants";
+import { DEFAULT_KRW_TO_RMB, DEFAULT_USD_TO_KRW, DEFAULT_USD_TO_RMB } from "./constants";
 import type { Category, Currency, ExchangeRates, ImageAttachment, PaymentProof, ReceiptItem } from "./types";
 
 export function uid(prefix = "id"): string {
@@ -94,15 +94,16 @@ export function blankReceipt(formVersion: "USA" | "Korea", image: ImageAttachmen
 }
 
 export function updateAmounts(item: ReceiptItem, rates: ExchangeRates, source: "amount" | "krw" | "rmb" | "currency" = "amount"): ReceiptItem {
-  const usdRate = rates.usdToRmb || DEFAULT_USD_TO_RMB;
+  const usdRmbRate = rates.usdToRmb || DEFAULT_USD_TO_RMB;
+  const usdKrwRate = rates.usdToKrw || DEFAULT_USD_TO_KRW;
   const krwRate = rates.krwToRmb || DEFAULT_KRW_TO_RMB;
   const next = { ...item };
   const amount = safeNumber(next.amount);
   let krw = safeNumber(next.krwAmount);
   let rmb = safeNumber(next.rmbAmount);
   if (next.currency === "USD" && amount !== undefined && source !== "krw" && source !== "rmb") {
-    rmb = amount * usdRate;
-    krw = rmb / krwRate;
+    krw = amount * usdKrwRate;
+    rmb = krw * krwRate;
   } else if (next.currency === "KRW" && amount !== undefined && source !== "rmb") {
     krw = amount;
     rmb = amount * krwRate;
@@ -112,9 +113,11 @@ export function updateAmounts(item: ReceiptItem, rates: ExchangeRates, source: "
   } else if (source === "krw" && krw !== undefined) {
     rmb = krw * krwRate;
     if (next.currency === "KRW") next.amount = formatAmount(krw);
+    if (next.currency === "USD" && !next.amount.trim()) next.amount = formatAmount(krw / usdKrwRate);
   } else if (source === "rmb" && rmb !== undefined) {
     krw = rmb / krwRate;
     if (next.currency === "RMB" || next.currency === "CNY") next.amount = formatAmount(rmb);
+    if (next.currency === "USD" && !next.amount.trim()) next.amount = formatAmount(krw / usdKrwRate || rmb / usdRmbRate);
   }
   next.krwAmount = formatAmount(krw);
   next.rmbAmount = formatAmount(rmb);

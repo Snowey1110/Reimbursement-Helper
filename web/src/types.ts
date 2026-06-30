@@ -64,6 +64,7 @@ export interface PaymentProof {
 
 export interface ExchangeRates {
   usdToRmb: number;
+  usdToKrw: number;
   krwToRmb: number;
 }
 

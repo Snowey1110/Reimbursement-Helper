@@ -10,10 +10,10 @@ import {
 
 describe("currency conversion", () => {
   it("updates USD, KRW, and RMB amounts in real time", () => {
-    const rates = { usdToRmb: 7, krwToRmb: 0.005 };
+    const rates = { usdToRmb: 7, usdToKrw: 1550, krwToRmb: 0.005 };
 
-    expect(updateAmounts(receipt({ amount: "10", currency: "USD" }), rates).rmbAmount).toBe("70");
-    expect(updateAmounts(receipt({ amount: "10", currency: "USD" }), rates).krwAmount).toBe("14000");
+    expect(updateAmounts(receipt({ amount: "10", currency: "USD" }), rates).krwAmount).toBe("15500");
+    expect(updateAmounts(receipt({ amount: "10", currency: "USD" }), rates).rmbAmount).toBe("77.50");
     expect(updateAmounts(receipt({ amount: "1000", currency: "KRW" }), rates).rmbAmount).toBe("5");
     expect(updateAmounts(receipt({ amount: "70", currency: "RMB" }), rates).krwAmount).toBe("14000");
   });

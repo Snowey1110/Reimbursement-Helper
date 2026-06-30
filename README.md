@@ -36,8 +36,8 @@ The app supports:
 - USA payment proof images for the proof-of-payment column
 - manual entry when AI is not needed
 - one-click AI extraction when an OpenAI API key is available locally
-- Korea exchange-rate screenshot import, with AI reading to update the KRW/RMB rate when an API key is available
-- live USD/RMB and Korea original-currency-to-KRW/RMB conversion using editable rate fields
+- Korea exchange-rate screenshot import, with AI reading to update USD/KRW and/or KRW/RMB when an API key is available
+- live USD/RMB and Korea USD-to-KRW-to-RMB conversion using editable rate fields
 - currency correction for Korea receipts when AI detects the wrong receipt currency
 - multi-row editing for highlighted receipts, useful for shared fields like project number
 - USA and Korea Excel outputs from stored blank templates
@@ -149,9 +149,10 @@ Do not commit real keys. The files above are ignored by `.gitignore`.
 The app has editable exchange-rate fields. Current defaults are:
 
 - USD to RMB: `6.8175`
+- USD to KRW: `1548.86`
 - KRW to RMB: `0.004433`
 
-For Korea, `Original amount` plus `Currency` fills the KRW and RMB charged amounts. Change `Currency` to the receipt's real currency, such as `USD`, and the converted fields update immediately. Update the visible rate field before export whenever the reimbursement department needs a different rate.
+For Korea, `Original amount` plus `Currency` fills the KRW and RMB charged amounts. USD receipts calculate as USD -> KRW -> RMB. Change `Currency` to the receipt's real currency, such as `USD`, and the converted fields update immediately. Upload one or two `汇率` screenshots to update the visible Korea rate fields before export.
 
 ## Bulk Edits
 

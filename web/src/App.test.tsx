@@ -64,6 +64,8 @@ describe("Reimbursement Helper web app", () => {
 
     const exchangeButton = screen.getByRole("button", { name: /Select 汇率 Image/ });
     expect(exchangeButton).toHaveClass("recommended");
+    expect(screen.getByLabelText("USD -> KRW")).toBeInTheDocument();
+    expect(screen.queryByLabelText("USD -> RMB")).not.toBeInTheDocument();
   });
 
   it("selects all receipt rows with Ctrl+A and bulk edits project number", async () => {
