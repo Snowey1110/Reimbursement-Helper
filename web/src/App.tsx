@@ -19,12 +19,14 @@ import {
   DEFAULT_KRW_TO_RMB,
   DEFAULT_MODEL,
   DEFAULT_USD_TO_RMB,
+  KOREA_TEMPLATE_URL,
   KOREA_CATEGORY_LABELS,
+  USA_TEMPLATE_URL,
   USA_CATEGORY_LABELS
 } from "./constants";
 import { exportKoreaWorkbook, exportUsaWorkbook } from "./excelExport";
-import { defaultCropPoints, fileToAttachment, rotateCropPoints } from "./imageUtils";
-import type { Category, Currency, ExchangeRates, ImageAttachment, PaymentProof, ReceiptItem, SelectedTile } from "./types";
+import { defaultCropPoints, fileToAttachment, orientedImageDataUrl, orientedImageSize, rotateCropPoints } from "./imageUtils";
+import type { Category, CropPoint, Currency, ExchangeRates, ImageAttachment, PaymentProof, ReceiptItem, SelectedTile } from "./types";
 import {
   blankReceipt,
   formatAmount,
@@ -286,11 +288,14 @@ export default function App() {
 
   function rotateSelected(delta: number) {
     if (!selectedTile) return;
-    updateAttachment(selectedTile, (attachment) => ({
-      ...attachment,
-      cropPoints: rotateCropPoints(attachment.cropPoints, attachment.width, attachment.height, delta),
-      rotationDegrees: (attachment.rotationDegrees + delta + 360) % 360
-    }));
+    updateAttachment(selectedTile, (attachment) => {
+      const size = orientedImageSize(attachment);
+      return {
+        ...attachment,
+        cropPoints: rotateCropPoints(attachment.cropPoints, size.width, size.height, delta),
+        rotationDegrees: (attachment.rotationDegrees + delta + 360) % 360
+      };
+    });
   }
 
   function revertSelected() {
@@ -354,15 +359,6 @@ export default function App() {
       removeSelectedRows();
     }
   }
-
-  const selectedImage = useMemo(() => {
-    if (!selectedTile) return undefined;
-    if (selectedTile.kind === "proof" && selectedTile.proofId) {
-      return proofs.find((proof) => proof.id === selectedTile.proofId)?.image;
-    }
-    const item = items.find((receipt) => receipt.id === selectedTile.receiptId);
-    return item?.images.find((image) => image.id === selectedTile.imageId);
-  }, [items, proofs, selectedTile]);
 
   return (
     <div className="app-shell">
@@ -529,6 +525,13 @@ export default function App() {
               selectedTile={selectedTile}
               onSelect={setSelectedTile}
               onMoveToProof={moveImageToProof}
+              onCropChange={(imageId, cropPoints) =>
+                selectedItem &&
+                updateAttachment({ kind: "receipt", receiptId: selectedItem.id, imageId }, (attachment) => ({
+                  ...attachment,
+                  cropPoints
+                }))
+              }
             />
             {proofs.length > 0 && (
               <>
@@ -543,16 +546,17 @@ export default function App() {
                   selectedTile={selectedTile}
                   onSelect={setSelectedTile}
                   onDropProof={moveImageToProof}
+                  onCropChange={(proofId, cropPoints) =>
+                    selectedItem &&
+                    updateAttachment({ kind: "proof", receiptId: selectedItem.id, proofId }, (attachment) => ({
+                      ...attachment,
+                      cropPoints
+                    }))
+                  }
                 />
               </>
             )}
           </div>
-          {selectedImage && (
-            <CropEditor
-              attachment={selectedImage}
-              onChange={(points) => selectedTile && updateAttachment(selectedTile, (attachment) => ({ ...attachment, cropPoints: points }))}
-            />
-          )}
         </section>
       </main>
 
@@ -560,9 +564,16 @@ export default function App() {
         <span>{status}</span>
         <progress value={progress} max={100} />
         {progress === 100 && <CheckCircle2 size={16} />}
-        <a href="./templates/" target="_blank" rel="noreferrer">
-          <Download size={16} /> Templates
-        </a>
+        <div className="template-links" aria-label="Template downloads">
+          <Download size={16} />
+          <span>Templates</span>
+          <a href={USA_TEMPLATE_URL} download>
+            USA
+          </a>
+          <a href={KOREA_TEMPLATE_URL} download>
+            Korea
+          </a>
+        </div>
       </footer>
     </div>
   );
@@ -631,31 +642,42 @@ function ImageStack({
   item,
   selectedTile,
   onSelect,
-  onMoveToProof
+  onMoveToProof,
+  onCropChange
 }: {
   title: string;
   item: ReceiptItem | null;
   selectedTile: SelectedTile | null;
   onSelect: (tile: SelectedTile) => void;
   onMoveToProof: (receiptId: string, imageId: string) => void;
+  onCropChange: (imageId: string, points: CropPoint[]) => void;
 }) {
+  const selectedImageId = selectedTile?.kind === "receipt" && selectedTile.receiptId === item?.id ? selectedTile.imageId : item?.images[0]?.id;
+  const selectedImage = item?.images.find((image) => image.id === selectedImageId) ?? item?.images[0];
   return (
     <div className="image-stack">
       <h3>{title}</h3>
-      {item?.images.length ? (
-        item.images.map((image) => (
-          <button
-            type="button"
-            key={image.id}
-            className={`image-card ${selectedTile?.imageId === image.id ? "selected" : ""}`}
-            draggable
-            onDragStart={(event) => event.dataTransfer.setData("text/plain", JSON.stringify({ receiptId: item.id, imageId: image.id }))}
-            onClick={() => onSelect({ kind: "receipt", receiptId: item.id, imageId: image.id })}
-          >
-            <img src={image.dataUrl} alt={image.filename} style={{ transform: `rotate(${image.rotationDegrees}deg)` }} />
-            <span>{image.filename}</span>
-          </button>
-        ))
+      {item && selectedImage ? (
+        <>
+          <CropEditor
+            attachment={selectedImage}
+            dragData={{ receiptId: item.id, imageId: selectedImage.id }}
+            onChange={(points) => onCropChange(selectedImage.id, points)}
+          />
+          <div className="thumbnail-strip" aria-label={`${title} list`}>
+            {item.images.map((image) => (
+              <button
+                type="button"
+                key={image.id}
+                className={`thumbnail-button ${selectedImage.id === image.id ? "selected" : ""}`}
+                title={image.filename}
+                onClick={() => onSelect({ kind: "receipt", receiptId: item.id, imageId: image.id })}
+              >
+                <img src={image.dataUrl} alt={image.filename} style={{ transform: `rotate(${image.rotationDegrees}deg)` }} />
+              </button>
+            ))}
+          </div>
+        </>
       ) : (
         <p className="empty-state">Select receipt image or PDF files to begin.</p>
       )}
@@ -677,14 +699,18 @@ function ProofStack({
   proofs,
   selectedTile,
   onSelect,
-  onDropProof
+  onDropProof,
+  onCropChange
 }: {
   item: ReceiptItem | null;
   proofs: PaymentProof[];
   selectedTile: SelectedTile | null;
   onSelect: (tile: SelectedTile) => void;
   onDropProof: (receiptId: string, imageId: string) => void;
+  onCropChange: (proofId: string, points: CropPoint[]) => void;
 }) {
+  const selectedProofId = selectedTile?.kind === "proof" ? selectedTile.proofId : proofs[0]?.id;
+  const selectedProof = proofs.find((proof) => proof.id === selectedProofId) ?? proofs[0];
   return (
     <div
       className="image-stack proof-stack"
@@ -696,18 +722,23 @@ function ProofStack({
       }}
     >
       <h3>Payment proof</h3>
-      {proofs.length ? (
-        proofs.map((proof) => (
-          <button
-            type="button"
-            key={proof.id}
-            className={`image-card ${selectedTile?.proofId === proof.id ? "selected" : ""}`}
-            onClick={() => item && onSelect({ kind: "proof", receiptId: item.id, proofId: proof.id })}
-          >
-            <img src={proof.image.dataUrl} alt={proof.filename} style={{ transform: `rotate(${proof.image.rotationDegrees}deg)` }} />
-            <span>{proof.filename}</span>
-          </button>
-        ))
+      {selectedProof ? (
+        <>
+          <CropEditor attachment={selectedProof.image} onChange={(points) => onCropChange(selectedProof.id, points)} />
+          <div className="thumbnail-strip" aria-label="Payment proof list">
+            {proofs.map((proof) => (
+              <button
+                type="button"
+                key={proof.id}
+                className={`thumbnail-button ${selectedProof.id === proof.id ? "selected" : ""}`}
+                title={proof.filename}
+                onClick={() => item && onSelect({ kind: "proof", receiptId: item.id, proofId: proof.id })}
+              >
+                <img src={proof.image.dataUrl} alt={proof.filename} style={{ transform: `rotate(${proof.image.rotationDegrees}deg)` }} />
+              </button>
+            ))}
+          </div>
+        </>
       ) : (
         <p className="empty-state">Drag a receipt screenshot here or run Generate All.</p>
       )}
@@ -715,27 +746,101 @@ function ProofStack({
   );
 }
 
-function CropEditor({ attachment, onChange }: { attachment: ImageAttachment; onChange: (points: { x: number; y: number }[]) => void }) {
-  const points = attachment.cropPoints ?? defaultCropPoints(attachment.width, attachment.height);
+function CropEditor({
+  attachment,
+  dragData,
+  onChange
+}: {
+  attachment: ImageAttachment;
+  dragData?: { receiptId: string; imageId: string };
+  onChange: (points: CropPoint[]) => void;
+}) {
+  const [preview, setPreview] = useState<{ dataUrl: string; width: number; height: number } | null>(null);
+  const imageRef = useRef<HTMLImageElement>(null);
+  const [draggingPoint, setDraggingPoint] = useState<number | null>(null);
+  const size = orientedImageSize(attachment);
+  const points = attachment.cropPoints ?? defaultCropPoints(size.width, size.height);
+
+  useEffect(() => {
+    let cancelled = false;
+    setPreview(null);
+    orientedImageDataUrl(attachment)
+      .then((nextPreview) => {
+        if (!cancelled) setPreview(nextPreview);
+      })
+      .catch(() => {
+        if (!cancelled) setPreview({ dataUrl: attachment.dataUrl, width: attachment.width, height: attachment.height });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [attachment.dataUrl, attachment.height, attachment.rotationDegrees, attachment.width]);
+
+  function updatePointFromClient(index: number, clientX: number, clientY: number) {
+    const rect = imageRef.current?.getBoundingClientRect();
+    if (!rect || !rect.width || !rect.height) return;
+    const x = Math.max(0, Math.min(size.width, ((clientX - rect.left) / rect.width) * size.width));
+    const y = Math.max(0, Math.min(size.height, ((clientY - rect.top) / rect.height) * size.height));
+    onChange(points.map((point, pointIndex) => (pointIndex === index ? { x, y } : point)));
+  }
+
+  const polygonPoints = points.map((point) => `${point.x},${point.y}`).join(" ");
+
   return (
     <div className="crop-editor">
-      <span>Crop points</span>
-      <div className="crop-mini">
-        <img src={attachment.dataUrl} alt="" style={{ transform: `rotate(${attachment.rotationDegrees}deg)` }} />
-        {points.map((point, index) => (
-          <input
-            key={index}
-            type="range"
-            min={0}
-            max={100}
-            value={(point.x / attachment.width) * 100}
-            onChange={(event) => {
-              const next = points.map((candidate, pointIndex) => (pointIndex === index ? { ...candidate, x: (Number(event.target.value) / 100) * attachment.width } : candidate));
-              onChange(next);
-            }}
-            title={`Point ${index + 1} horizontal`}
-          />
-        ))}
+      <div
+        className="crop-stage"
+        draggable={Boolean(dragData)}
+        onDragStart={(event) => {
+          if (!dragData) return;
+          event.dataTransfer.setData("text/plain", JSON.stringify(dragData));
+        }}
+      >
+        {preview ? (
+          <div className="crop-image-wrap">
+            <img ref={imageRef} src={preview.dataUrl} alt={attachment.filename} className="crop-image" />
+            <svg className="crop-overlay" viewBox={`0 0 ${size.width} ${size.height}`} preserveAspectRatio="none" aria-hidden="true">
+              <polygon points={polygonPoints} />
+            </svg>
+            {points.map((point, index) => (
+              <button
+                type="button"
+                key={index}
+                className="crop-handle"
+                aria-label={`Crop point ${index + 1}`}
+                data-testid={`crop-handle-${index}`}
+                style={{ left: `${(point.x / size.width) * 100}%`, top: `${(point.y / size.height) * 100}%` }}
+                onPointerDown={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                  setDraggingPoint(index);
+                  updatePointFromClient(index, event.clientX, event.clientY);
+                }}
+                onPointerMove={(event) => {
+                  if (draggingPoint === index) updatePointFromClient(index, event.clientX, event.clientY);
+                }}
+                onPointerUp={(event) => {
+                  event.currentTarget.releasePointerCapture(event.pointerId);
+                  setDraggingPoint(null);
+                }}
+                onPointerCancel={() => setDraggingPoint(null)}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setDraggingPoint(index);
+                  updatePointFromClient(index, event.clientX, event.clientY);
+                }}
+                onMouseMove={(event) => {
+                  if (draggingPoint === index) updatePointFromClient(index, event.clientX, event.clientY);
+                }}
+                onMouseUp={() => setDraggingPoint(null)}
+              />
+            ))}
+          </div>
+        ) : (
+          <p className="empty-state">Loading preview...</p>
+        )}
       </div>
     </div>
   );

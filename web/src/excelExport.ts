@@ -156,6 +156,57 @@ async function addImageToCell(
   });
 }
 
+export function koreaReceiptLastRow(itemCount: number): number {
+  const pageHeight = 50;
+  const receiptsPerPage = 4;
+  const pageCount = Math.max(1, Math.ceil(itemCount / receiptsPerPage));
+  return pageCount * pageHeight;
+}
+
+export function koreaReceiptImageSlots(itemCount: number): Array<{ cell: string; maxWidth: number; maxHeight: number }> {
+  const receiptsPerPage = 4;
+  const pageHeight = 50;
+  const anchors = ["A", "D"];
+  const rowOffsets = [2, 26];
+  return Array.from({ length: itemCount }, (_, index) => {
+    const page = Math.floor(index / receiptsPerPage);
+    const slot = index % receiptsPerPage;
+    const rowGroup = Math.floor(slot / anchors.length);
+    const col = anchors[slot % anchors.length];
+    const row = page * pageHeight + rowOffsets[rowGroup];
+    return { cell: `${col}${row}`, maxWidth: 215, maxHeight: 300 };
+  });
+}
+
+function configureKoreaReceiptPage(sheet: ExcelJS.Worksheet, itemCount: number): number {
+  const pageHeight = 50;
+  const lastRow = koreaReceiptLastRow(itemCount);
+  for (const col of "ABCDEFGH".split("")) {
+    sheet.getColumn(col).width = 16;
+  }
+  sheet.pageSetup = {
+    ...sheet.pageSetup,
+    orientation: "portrait",
+    fitToPage: true,
+    fitToWidth: 1,
+    fitToHeight: 0,
+    printArea: `A1:E${lastRow}`,
+    margins: {
+      left: 0.45,
+      right: 0.45,
+      top: 0.45,
+      bottom: 0.45,
+      header: 0.3,
+      footer: 0.3
+    }
+  };
+  (sheet as unknown as { rowBreaks?: unknown[] }).rowBreaks = [];
+  for (let row = pageHeight; row < lastRow; row += pageHeight) {
+    sheet.getRow(row).addPageBreak();
+  }
+  return lastRow;
+}
+
 export async function exportUsaWorkbook(items: ReceiptItem[], proofs: PaymentProof[], rates: ExchangeRates): Promise<void> {
   const workbook = await fetchWorkbook(USA_TEMPLATE_URL);
   const expense = workbook.getWorksheet("Expense report");
@@ -247,20 +298,16 @@ export async function exportKoreaWorkbook(items: ReceiptItem[], rates: ExchangeR
     cover.getCell(`C${row}`).value = totals.krw ? Math.round(totals.krw * 100) / 100 : null;
     cover.getCell(`D${row}`).value = totals.rmb ? Math.round(totals.rmb * 100) / 100 : null;
   }
-  for (let row = 1; row <= Math.max(240, Math.ceil(items.length / 4) * 50); row += 1) {
+  const lastReceiptRow = configureKoreaReceiptPage(receipts, items.length);
+  for (let row = 1; row <= Math.max(240, lastReceiptRow); row += 1) {
     for (const col of "ABCDEFGH".split("")) {
       receipts.getCell(`${col}${row}`).value = null;
     }
   }
-  const anchors = ["A", "D"];
-  const rowOffsets = [2, 26];
+  const slots = koreaReceiptImageSlots(items.length);
   for (let index = 0; index < items.length; index += 1) {
-    const page = Math.floor(index / 4);
-    const slot = index % 4;
-    const rowGroup = Math.floor(slot / anchors.length);
-    const col = anchors[slot % anchors.length];
-    const row = page * 50 + rowOffsets[rowGroup];
-    await addImageToCell(workbook, receipts, items[index].images[0], `${col}${row}`, 215, 300);
+    const slot = slots[index];
+    await addImageToCell(workbook, receipts, items[index].images[0], slot.cell, slot.maxWidth, slot.maxHeight);
   }
   const buffer = await workbook.xlsx.writeBuffer();
   downloadBlob(new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `reimbursement_korea_${dateStamp()}.xlsx`);

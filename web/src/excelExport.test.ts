@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { receipt } from "./test/factories";
-import { mapKoreaDetailRows, mapUsaExpenseRows } from "./excelExport";
+import { koreaReceiptImageSlots, koreaReceiptLastRow, mapKoreaDetailRows, mapUsaExpenseRows } from "./excelExport";
 
 describe("Excel row mapping", () => {
   it("maps USA expenses into the existing category rows", () => {
@@ -25,5 +25,16 @@ describe("Excel row mapping", () => {
     expect(rows[0].krw).toBe(14000);
     expect(rows[0].rmb).toBe(70);
     expect(rows[0].note).toBe("(10 USD)");
+  });
+
+  it("keeps Korea receipt images inside page slots without label cells", () => {
+    expect(koreaReceiptLastRow(5)).toBe(100);
+    expect(koreaReceiptImageSlots(5)).toEqual([
+      { cell: "A2", maxWidth: 215, maxHeight: 300 },
+      { cell: "D2", maxWidth: 215, maxHeight: 300 },
+      { cell: "A26", maxWidth: 215, maxHeight: 300 },
+      { cell: "D26", maxWidth: 215, maxHeight: 300 },
+      { cell: "A52", maxWidth: 215, maxHeight: 300 }
+    ]);
   });
 });
