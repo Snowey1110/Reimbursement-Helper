@@ -1,3 +1,5 @@
+import ExcelJS from "exceljs";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { receipt } from "./test/factories";
 import { koreaReceiptImageSlots, koreaReceiptLastRow, koreaReceiptPaymentLabel, mapKoreaDetailRows, mapUsaExpenseRows } from "./excelExport";
@@ -52,5 +54,13 @@ describe("Excel row mapping", () => {
     expect(koreaReceiptPaymentLabel(0, receipt({ paymentMethod: "Visa", date: "2026-06-19", amount: "27.00", currency: "USD" }))).toBe(
       "Payment 1: Visa | 2026-06-19 | 27.00 USD"
     );
+  });
+
+  it("ships the Korea web template without a frozen detail pane", async () => {
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(readFileSync("public/templates/korea_reimbursement_template.xlsx"));
+    const details = workbook.getWorksheet("报销明细");
+
+    expect(details?.views.some((view) => view.state === "frozen")).toBe(false);
   });
 });

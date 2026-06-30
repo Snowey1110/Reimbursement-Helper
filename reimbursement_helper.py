@@ -34,6 +34,7 @@ try:
     from openpyxl.cell.cell import MergedCell
     from openpyxl.drawing.image import Image as XLImage
     from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.worksheet.views import Selection
 except Exception:  # pragma: no cover
     Workbook = None  # type: ignore[assignment]
     load_workbook = None  # type: ignore[assignment]
@@ -42,6 +43,7 @@ except Exception:  # pragma: no cover
     Alignment = None  # type: ignore[assignment]
     Font = None  # type: ignore[assignment]
     PatternFill = None  # type: ignore[assignment]
+    Selection = None  # type: ignore[assignment]
 
 try:
     from PIL import Image, ImageOps, ImageTk
@@ -1296,6 +1298,13 @@ def clone_sheet(
     return target_ws
 
 
+def clear_freeze_panes(sheet: Any) -> None:
+    sheet.freeze_panes = None
+    sheet.sheet_view.pane = None
+    if Selection is not None:
+        sheet.sheet_view.selection = [Selection(activeCell="A1", sqref="A1")]
+
+
 def korea_amounts(
     item: ReceiptItem,
     krw_to_rmb_rate: float,
@@ -1355,6 +1364,7 @@ def export_korea(
     cover_ws = wb.worksheets[0]
     receipts_ws = wb.worksheets[1]
     detail_ws = clone_sheet(detail_template_wb.worksheets[0], wb, "报销明细", index=1, min_rows=35, min_cols=20)
+    clear_freeze_panes(detail_ws)
     for col in "KLMNOPQRS":
         detail_ws.column_dimensions[col].hidden = False
 

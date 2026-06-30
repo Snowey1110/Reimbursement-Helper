@@ -33,6 +33,10 @@ function clearCells(sheet: ExcelJS.Worksheet, rows: number[], cols: string[]): v
   }
 }
 
+function clearWorksheetPanes(sheet: ExcelJS.Worksheet): void {
+  sheet.views = [{ state: "normal", activeCell: "A1", showGridLines: true } as ExcelJS.WorksheetView];
+}
+
 function categoryForUsa(item: ReceiptItem): string {
   if (item.category in USA_CATEGORY_ROWS) return item.category;
   if (item.category === "materials" || item.category === "consumables") return "office";
@@ -279,6 +283,7 @@ export async function exportKoreaWorkbook(items: ReceiptItem[], rates: ExchangeR
   const details = workbook.getWorksheet("报销明细") ?? workbook.worksheets[1];
   const receipts = workbook.worksheets[2];
   if (!cover || !details || !receipts) throw new Error("Korea template is missing required sheets.");
+  clearWorksheetPanes(details);
   const now = new Date();
   cover.getCell("A2").value = `报销部门：  ${now.getFullYear()}年 ${now.getMonth() + 1}月 ${now.getDate()}日 填 单据及附件共  页`;
   cover.getCell("A11").value = "领导审批           会计主管              会计                  出纳                 报销人                   领款人 ";
