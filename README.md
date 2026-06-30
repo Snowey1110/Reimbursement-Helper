@@ -57,7 +57,7 @@ run_reimbursement_helper.bat
 2. Choose one or more receipt images or PDFs.
 3. Review or generate details.
 4. Click `Select Files` again later to add more receipts without clearing the current list.
-5. Each PDF page is imported as its own receipt image.
+5. Each PDF is imported as one combined image with page 1, page 2, and later pages stacked together.
 6. For USA reports, click `Select Payment Proof` separately to add card or bank proof screenshots/PDFs.
 
 ## AI Extraction
@@ -83,13 +83,13 @@ For Korea, `Original amount` plus `Currency` fills the KRW and RMB charged amoun
 
 ## Bulk Edits
 
-Highlight multiple receipt rows, then edit a field such as `Project number`, `Category`, or `Currency`. The edited field applies to every highlighted row while each row keeps its own receipt image and other details.
+Highlight multiple receipt rows, then edit a field such as `Project number`, `Category`, or `Currency`. The edited field applies to every highlighted row while each row keeps its own receipt image and other details. Click inside the receipt list and press `Ctrl+A` to select every row.
 
 ## USA Payment Proof
 
 For the USA form, use `Select Files` for receipts and `Select Payment Proof` for card or bank proof images. `Generate All` reads both groups, merges receipt screenshots that have the same date and USD amount, and matches one proof image by date and charge amount.
 
-The preview shows receipt screenshots on the left and matched payment proof on the right. Use the divider icons between the sections to swap or unlink payment proof. If a payment proof was added as a receipt by mistake, drag that screenshot tile into the Payment proof section. Select any screenshot tile and use the delete icon to remove only that image. In the receipt list, press `Delete` or `Backspace` to remove selected receipt rows after confirmation.
+The preview shows receipt screenshots on the left. After payment proof files are loaded, a Payment proof section appears on the right. Use the divider swap icon to switch proof images when another proof is available. If a payment proof was added as a receipt by mistake, drag that screenshot tile into the Payment proof section. Select any screenshot tile and use the delete icon to remove only that image. In the receipt list, press `Delete` or `Backspace` to remove selected receipt rows after confirmation.
 
 ## Receipt Cropping
 

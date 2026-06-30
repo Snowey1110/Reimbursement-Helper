@@ -146,6 +146,41 @@ def render_pdf_pages(pdf_path: Path) -> List[Path]:
     return rendered
 
 
+def render_pdf_to_merged_image(pdf_path: Path) -> Path:
+    page_paths = render_pdf_pages(pdf_path)
+    if not page_paths:
+        raise RuntimeError(f"PDF has no pages: {pdf_path}")
+    if Image is None:
+        raise RuntimeError(
+            "PDF merge requires Pillow. Run `python -m pip install -r requirements.txt`, then try again."
+        )
+    target_dir = WORK_DIR / "pdf_pages" / f"{pdf_path.stem}_{uuid.uuid4().hex[:8]}"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    images = []
+    try:
+        for page_path in page_paths:
+            with Image.open(page_path) as image:
+                images.append(image.convert("RGB").copy())
+        max_width = max(image.width for image in images)
+        gutter = 24
+        total_height = sum(image.height for image in images) + gutter * (len(images) - 1)
+        merged = Image.new("RGB", (max_width, total_height), "#FFFFFF")
+        y = 0
+        for image in images:
+            x = (max_width - image.width) // 2
+            merged.paste(image, (x, y))
+            y += image.height + gutter
+        output = target_dir / f"{pdf_path.stem}_merged.png"
+        merged.save(output, "PNG")
+        return output
+    finally:
+        for image in images:
+            try:
+                image.close()
+            except Exception:
+                pass
+
+
 def selected_file_key(path: Path, source_path: str = "", source_page: str = "") -> Tuple[str, str]:
     key_path = source_path or str(path)
     try:
@@ -1436,6 +1471,32 @@ class ReimbursementHelperApp:
         style.configure("TButton", font=("Segoe UI", 10), padding=(10, 5), background="#E2E8F0", foreground=text)
         style.map("TButton", background=[("active", "#D7DEE8"), ("disabled", "#EEF2F7")])
         style.configure("Icon.TButton", font=("Segoe UI Symbol", 13), width=3, padding=(4, 3))
+        style.configure(
+            "TEntry",
+            fieldbackground="#F1F5F9",
+            background="#F1F5F9",
+            foreground=text,
+            insertcolor=text,
+            bordercolor=border,
+            lightcolor=border,
+            darkcolor=border,
+        )
+        style.configure(
+            "TCombobox",
+            fieldbackground="#F1F5F9",
+            background="#E2E8F0",
+            foreground=text,
+            arrowcolor=text,
+            bordercolor=border,
+            lightcolor=border,
+            darkcolor=border,
+        )
+        style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", "#F1F5F9"), ("!disabled", "#F1F5F9")],
+            selectbackground=[("readonly", "#E2E8F0"), ("!disabled", "#E2E8F0")],
+            selectforeground=[("readonly", text), ("!disabled", text)],
+        )
         style.configure("Treeview", background=panel_bg, fieldbackground=panel_bg, foreground=text, rowheight=24)
         style.configure("Treeview.Heading", background="#DDE5EE", foreground=text, font=("Segoe UI", 9, "bold"))
         style.map("Treeview", background=[("selected", "#2F6F9F")], foreground=[("selected", "#FFFFFF")])
@@ -1506,6 +1567,8 @@ class ReimbursementHelperApp:
         self.tree.bind("<<TreeviewSelect>>", self._on_tree_select)
         self.tree.bind("<Delete>", self.remove_selected)
         self.tree.bind("<BackSpace>", self.remove_selected)
+        self.tree.bind("<Control-a>", self.select_all_receipts)
+        self.tree.bind("<Control-A>", self.select_all_receipts)
         left_buttons = ttk.Frame(left, style="Panel.TFrame")
         left_buttons.pack(fill="x", pady=(10, 0))
         ttk.Button(left_buttons, text="Remove", command=self.remove_selected).pack(side="left")
@@ -1586,10 +1649,9 @@ class ReimbursementHelperApp:
         ToolTip(self.rotate_right_btn, "Rotate right")
         self.revert_crop_btn = ttk.Button(
             preview_header,
-            text="\u21BA",
+            text="Revert",
             command=self.revert_crop,
             state="disabled",
-            style="Icon.TButton",
         )
         self.revert_crop_btn.grid(row=0, column=3, sticky="e")
         ToolTip(self.revert_crop_btn, "Revert image to original")
@@ -1961,39 +2023,39 @@ class ReimbursementHelperApp:
                 continue
             if suffix == ".pdf":
                 try:
-                    page_paths = render_pdf_pages(path)
+                    merged_path = render_pdf_to_merged_image(path)
                 except Exception as exc:
                     log_exception(f"Could not import PDF: {path}")
                     failed.append(f"{path.name}: {exc}")
                     continue
-                for page_index, page_path in enumerate(page_paths, start=1):
-                    key = selected_file_key(page_path, str(path), str(page_index))
-                    if key in existing:
-                        continue
-                    self.items.append(
-                        ReceiptItem(
-                            item_id=uuid.uuid4().hex,
-                            path=str(page_path),
-                            filename=f"{path.name} page {page_index}",
-                            source_path=str(path),
-                            source_page=str(page_index),
-                            currency="USD" if self.form_version.get() == "USA" else "KRW",
-                            category="transportation",
-                            receipt_images=[
-                                {
-                                    "id": uuid.uuid4().hex,
-                                    "path": str(page_path),
-                                    "filename": f"{path.name} page {page_index}",
-                                    "source_path": str(path),
-                                    "source_page": str(page_index),
-                                    "crop_box": None,
-                                    "rotation_degrees": 0,
-                                }
-                            ],
-                        )
+                key = selected_file_key(merged_path, str(path), "merged")
+                if key in existing:
+                    continue
+                filename = f"{path.name} (all pages)"
+                self.items.append(
+                    ReceiptItem(
+                        item_id=uuid.uuid4().hex,
+                        path=str(merged_path),
+                        filename=filename,
+                        source_path=str(path),
+                        source_page="merged",
+                        currency="USD" if self.form_version.get() == "USA" else "KRW",
+                        category="transportation",
+                        receipt_images=[
+                            {
+                                "id": uuid.uuid4().hex,
+                                "path": str(merged_path),
+                                "filename": filename,
+                                "source_path": str(path),
+                                "source_page": "merged",
+                                "crop_box": None,
+                                "rotation_degrees": 0,
+                            }
+                        ],
                     )
-                    existing.add(key)
-                    added += 1
+                )
+                existing.add(key)
+                added += 1
                 continue
             key = selected_file_key(path, str(path), "")
             if key in existing:
@@ -2069,26 +2131,25 @@ class ReimbursementHelperApp:
                 continue
             if suffix == ".pdf":
                 try:
-                    page_paths = render_pdf_pages(path)
+                    merged_path = render_pdf_to_merged_image(path)
                 except Exception as exc:
                     log_exception(f"Could not import payment proof PDF: {path}")
                     failed.append(f"{path.name}: {exc}")
                     continue
-                for page_index, page_path in enumerate(page_paths, start=1):
-                    key = selected_file_key(page_path, str(path), str(page_index))
-                    if key in existing:
-                        continue
-                    self.bank_items.append(
-                        BankStatementItem(
-                            item_id=uuid.uuid4().hex,
-                            path=str(page_path),
-                            filename=f"{path.name} page {page_index}",
-                            source_path=str(path),
-                            source_page=str(page_index),
-                        )
+                key = selected_file_key(merged_path, str(path), "merged")
+                if key in existing:
+                    continue
+                self.bank_items.append(
+                    BankStatementItem(
+                        item_id=uuid.uuid4().hex,
+                        path=str(merged_path),
+                        filename=f"{path.name} (all pages)",
+                        source_path=str(path),
+                        source_page="merged",
                     )
-                    existing.add(key)
-                    added += 1
+                )
+                existing.add(key)
+                added += 1
                 continue
             key = selected_file_key(path, str(path), "")
             if key in existing:
@@ -2254,6 +2315,17 @@ class ReimbursementHelperApp:
         if not indices and self.selected_index is not None and 0 <= self.selected_index < len(self.items):
             indices.append(self.selected_index)
         return sorted(set(indices))
+
+    def select_all_receipts(self, _event: Any = None) -> str:
+        if not self.items:
+            return "break"
+        self.tree.selection_set([str(index) for index in range(len(self.items))])
+        self.tree.focus(str(0))
+        self.selected_index = 0
+        self.load_selected_into_fields()
+        self.update_preview()
+        self.status_text.set(f"Selected all {len(self.items)} receipt row(s).")
+        return "break"
 
     def selected_items(self) -> List[ReceiptItem]:
         return [self.items[index] for index in self.selected_indices()]
@@ -2427,8 +2499,9 @@ class ReimbursementHelperApp:
             self.clear_preview("Image preview is unavailable. Install Pillow from requirements.txt.")
             return
         receipt_images = ensure_receipt_images(receipt)
-        proof_items = self.payment_proofs_for_receipt(receipt) if self.form_version.get() == "USA" else []
-        if self.selected_attachment_kind == "proof" and not proof_items:
+        show_payment_proof = self.form_version.get() == "USA" and bool(self.bank_items)
+        proof_items = self.payment_proofs_for_receipt(receipt) if show_payment_proof else []
+        if self.selected_attachment_kind == "proof" and (not proof_items or not show_payment_proof):
             self.selected_attachment_kind = "receipt"
             self.selected_attachment_index = 0
         if self.selected_attachment_kind == "receipt" and self.selected_attachment_index >= len(receipt_images):
@@ -2447,7 +2520,7 @@ class ReimbursementHelperApp:
         self._preview_original_size = (0, 0)
         self._crop_handle_centers = {}
         try:
-            if self.form_version.get() == "USA":
+            if show_payment_proof:
                 gap = 46
                 left_w = max(120, int((canvas_w - gap) * 0.56))
                 right_w = max(100, canvas_w - left_w - gap)
@@ -2608,14 +2681,14 @@ class ReimbursementHelperApp:
         if self.preview_canvas is None:
             return
         receipt = self.selected_item()
-        has_proofs = bool(receipt and self.payment_proofs_for_receipt(receipt))
-        can_swap = self.form_version.get() == "USA" and receipt is not None and bool(self.bank_items)
+        proofs = self.payment_proofs_for_receipt(receipt) if receipt is not None else []
+        has_proofs = bool(proofs)
+        can_swap = self.form_version.get() == "USA" and has_proofs and len(self.bank_items) > len(proofs)
         center_x = left_width + gap // 2
         actions = [
             ("swap", "\u21C4", "Swap payment proof", can_swap),
-            ("unlink", "\u2298", "Unlink payment proof", has_proofs),
         ]
-        start_y = max(56, canvas_height // 2 - 42)
+        start_y = max(56, canvas_height // 2)
         self.preview_action_regions = {}
         for index, (name, icon, label, enabled) in enumerate(actions):
             y = start_y + index * 48
