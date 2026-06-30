@@ -1455,12 +1455,27 @@ class ReimbursementHelperApp:
         text = "#17202A"
         muted = "#64748B"
         accent = "#2563EB"
+        button_bg = "#E6EDF5"
+        button_active = "#D6E2EE"
+        button_disabled = "#EEF3F8"
+        button_border = "#94A3B8"
+        control_bg = "#F1F5F9"
         self.root.configure(bg=app_bg)
         style = ttk.Style(self.root)
         try:
             style.theme_use("clam")
         except tk.TclError:
             pass
+        style.configure(
+            ".",
+            background=app_bg,
+            foreground=text,
+            bordercolor=border,
+            lightcolor="#F8FAFC",
+            darkcolor="#AAB8C7",
+            troughcolor="#D8E1EC",
+            focuscolor=app_bg,
+        )
         style.configure("TFrame", background=app_bg)
         style.configure("Panel.TFrame", background=panel_bg)
         style.configure("TLabel", background=app_bg, foreground=text, font=("Segoe UI", 10))
@@ -1468,38 +1483,107 @@ class ReimbursementHelperApp:
         style.configure("Panel.TLabel", background=panel_bg, foreground=text, font=("Segoe UI", 10))
         style.configure("PanelHeader.TLabel", background=panel_bg, foreground=text, font=("Segoe UI", 13, "bold"))
         style.configure("Muted.TLabel", background=app_bg, foreground=muted, font=("Segoe UI", 9))
-        style.configure("TButton", font=("Segoe UI", 10), padding=(10, 5), background="#E2E8F0", foreground=text)
-        style.map("TButton", background=[("active", "#D7DEE8"), ("disabled", "#EEF2F7")])
-        style.configure("Icon.TButton", font=("Segoe UI Symbol", 13), width=3, padding=(4, 3))
+        style.configure(
+            "TButton",
+            font=("Segoe UI", 10),
+            padding=(10, 5),
+            background=button_bg,
+            foreground=text,
+            bordercolor=button_border,
+            lightcolor=button_bg,
+            darkcolor=button_border,
+            focuscolor=button_bg,
+            relief="flat",
+        )
+        style.map(
+            "TButton",
+            background=[
+                ("pressed", "#C6D7E8"),
+                ("active", button_active),
+                ("disabled", button_disabled),
+            ],
+            foreground=[("disabled", "#94A3B8")],
+            bordercolor=[("disabled", "#C9D4E0"), ("active", "#7C93AA")],
+            lightcolor=[("disabled", button_disabled), ("active", button_active)],
+            darkcolor=[("disabled", "#C9D4E0"), ("active", "#7C93AA")],
+        )
+        style.configure(
+            "Icon.TButton",
+            font=("Segoe UI Symbol", 13),
+            width=3,
+            padding=(4, 3),
+            background=button_bg,
+            bordercolor=button_border,
+            lightcolor=button_bg,
+            darkcolor=button_border,
+            focuscolor=button_bg,
+            relief="flat",
+        )
         style.configure(
             "TEntry",
-            fieldbackground="#F1F5F9",
-            background="#F1F5F9",
+            fieldbackground=control_bg,
+            background=control_bg,
             foreground=text,
             insertcolor=text,
             bordercolor=border,
-            lightcolor=border,
+            lightcolor=control_bg,
             darkcolor=border,
+            focuscolor=control_bg,
+            selectbackground="#CFE1F6",
+            selectforeground=text,
+            relief="flat",
         )
         style.configure(
             "TCombobox",
-            fieldbackground="#F1F5F9",
-            background="#E2E8F0",
+            fieldbackground=control_bg,
+            background=button_bg,
             foreground=text,
             arrowcolor=text,
             bordercolor=border,
-            lightcolor=border,
+            lightcolor=control_bg,
             darkcolor=border,
+            focuscolor=control_bg,
+            selectbackground="#CFE1F6",
+            selectforeground=text,
+            relief="flat",
         )
         style.map(
             "TCombobox",
-            fieldbackground=[("readonly", "#F1F5F9"), ("!disabled", "#F1F5F9")],
-            selectbackground=[("readonly", "#E2E8F0"), ("!disabled", "#E2E8F0")],
+            fieldbackground=[("readonly", control_bg), ("!disabled", control_bg), ("disabled", button_disabled)],
+            background=[("readonly", button_bg), ("active", button_active), ("disabled", button_disabled)],
+            selectbackground=[("readonly", control_bg), ("!disabled", control_bg), ("disabled", button_disabled)],
             selectforeground=[("readonly", text), ("!disabled", text)],
+            bordercolor=[("focus", "#7EA5D3"), ("disabled", "#C9D4E0")],
+            lightcolor=[("focus", control_bg), ("disabled", button_disabled)],
+            darkcolor=[("focus", "#7EA5D3"), ("disabled", "#C9D4E0")],
         )
-        style.configure("Treeview", background=panel_bg, fieldbackground=panel_bg, foreground=text, rowheight=24)
-        style.configure("Treeview.Heading", background="#DDE5EE", foreground=text, font=("Segoe UI", 9, "bold"))
+        style.configure("Treeview", background=panel_bg, fieldbackground=panel_bg, foreground=text, rowheight=24, bordercolor=border)
+        style.configure(
+            "Treeview.Heading",
+            background="#E2EAF3",
+            foreground=text,
+            font=("Segoe UI", 9, "bold"),
+            bordercolor=button_border,
+            lightcolor="#E2EAF3",
+            darkcolor=button_border,
+            relief="flat",
+        )
+        style.map(
+            "Treeview.Heading",
+            background=[("active", "#D6E2EE"), ("pressed", "#C6D7E8")],
+            bordercolor=[("active", "#7C93AA")],
+            lightcolor=[("active", "#D6E2EE")],
+            darkcolor=[("active", "#7C93AA")],
+        )
         style.map("Treeview", background=[("selected", "#2F6F9F")], foreground=[("selected", "#FFFFFF")])
+        style.configure(
+            "Horizontal.TProgressbar",
+            background=accent,
+            troughcolor="#D8E1EC",
+            bordercolor="#D8E1EC",
+            lightcolor=accent,
+            darkcolor=accent,
+        )
 
         header = ttk.Frame(self.root, padding=(18, 16, 18, 10))
         header.pack(fill="x")
