@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { receipt } from "./test/factories";
-import { koreaReceiptImageSlots, koreaReceiptLastRow, mapKoreaDetailRows, mapUsaExpenseRows } from "./excelExport";
+import { koreaReceiptImageSlots, koreaReceiptLastRow, koreaReceiptPaymentLabel, mapKoreaDetailRows, mapUsaExpenseRows } from "./excelExport";
 
 describe("Excel row mapping", () => {
   it("maps USA expenses into the existing category rows", () => {
@@ -37,14 +37,20 @@ describe("Excel row mapping", () => {
     expect(rows[0].item.paymentMethod).toBe("Visa");
   });
 
-  it("keeps Korea receipt images inside page slots without label cells", () => {
+  it("keeps Korea receipt payment labels next to their image slots", () => {
     expect(koreaReceiptLastRow(5)).toBe(100);
     expect(koreaReceiptImageSlots(5)).toEqual([
-      { cell: "A2", maxWidth: 215, maxHeight: 300 },
-      { cell: "D2", maxWidth: 215, maxHeight: 300 },
-      { cell: "A26", maxWidth: 215, maxHeight: 300 },
-      { cell: "D26", maxWidth: 215, maxHeight: 300 },
-      { cell: "A52", maxWidth: 215, maxHeight: 300 }
+      { labelRange: "A1:C1", labelCell: "A1", imageCell: "A2", maxWidth: 215, maxHeight: 280 },
+      { labelRange: "D1:E1", labelCell: "D1", imageCell: "D2", maxWidth: 215, maxHeight: 280 },
+      { labelRange: "A25:C25", labelCell: "A25", imageCell: "A26", maxWidth: 215, maxHeight: 280 },
+      { labelRange: "D25:E25", labelCell: "D25", imageCell: "D26", maxWidth: 215, maxHeight: 280 },
+      { labelRange: "A51:C51", labelCell: "A51", imageCell: "A52", maxWidth: 215, maxHeight: 280 }
     ]);
+  });
+
+  it("builds Korea payment labels from payment method, date, and amount", () => {
+    expect(koreaReceiptPaymentLabel(0, receipt({ paymentMethod: "Visa", date: "2026-06-19", amount: "27.00", currency: "USD" }))).toBe(
+      "Payment 1: Visa | 2026-06-19 | 27.00 USD"
+    );
   });
 });

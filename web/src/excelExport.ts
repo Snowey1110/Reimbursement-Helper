@@ -165,18 +165,38 @@ export function koreaReceiptLastRow(itemCount: number): number {
   return pageCount * pageHeight;
 }
 
-export function koreaReceiptImageSlots(itemCount: number): Array<{ cell: string; maxWidth: number; maxHeight: number }> {
+export interface KoreaReceiptImageSlot {
+  labelRange: string;
+  labelCell: string;
+  imageCell: string;
+  maxWidth: number;
+  maxHeight: number;
+}
+
+export function koreaReceiptPaymentLabel(index: number, item: ReceiptItem): string {
+  const details = [item.paymentMethod.trim(), item.date.trim(), item.amount.trim() ? `${item.amount.trim()} ${item.currency}` : ""].filter(Boolean);
+  return details.length ? `Payment ${index + 1}: ${details.join(" | ")}` : `Payment ${index + 1}`;
+}
+
+export function koreaReceiptImageSlots(itemCount: number): KoreaReceiptImageSlot[] {
   const receiptsPerPage = 4;
   const pageHeight = 50;
   const anchors = ["A", "D"];
-  const rowOffsets = [2, 26];
+  const rowOffsets = [1, 25];
   return Array.from({ length: itemCount }, (_, index) => {
     const page = Math.floor(index / receiptsPerPage);
     const slot = index % receiptsPerPage;
     const rowGroup = Math.floor(slot / anchors.length);
     const col = anchors[slot % anchors.length];
-    const row = page * pageHeight + rowOffsets[rowGroup];
-    return { cell: `${col}${row}`, maxWidth: 215, maxHeight: 300 };
+    const labelRow = page * pageHeight + rowOffsets[rowGroup];
+    const imageRow = labelRow + 1;
+    return {
+      labelRange: col === "A" ? `A${labelRow}:C${labelRow}` : `D${labelRow}:E${labelRow}`,
+      labelCell: `${col}${labelRow}`,
+      imageCell: `${col}${imageRow}`,
+      maxWidth: 215,
+      maxHeight: 280
+    };
   });
 }
 
@@ -310,7 +330,13 @@ export async function exportKoreaWorkbook(items: ReceiptItem[], rates: ExchangeR
   const slots = koreaReceiptImageSlots(items.length);
   for (let index = 0; index < items.length; index += 1) {
     const slot = slots[index];
-    await addImageToCell(workbook, receipts, items[index].images[0], slot.cell, slot.maxWidth, slot.maxHeight);
+    receipts.mergeCells(slot.labelRange);
+    receipts.getCell(slot.labelCell).value = koreaReceiptPaymentLabel(index, items[index]);
+    receipts.getCell(slot.labelCell).font = { bold: true, size: 10, color: { argb: "FF1F2937" } };
+    receipts.getCell(slot.labelCell).alignment = { vertical: "middle", horizontal: "left", wrapText: true };
+    receipts.getCell(slot.labelCell).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE9EEF3" } };
+    receipts.getRow(Number(slot.labelCell.replace(/^[A-Z]+/, ""))).height = 20;
+    await addImageToCell(workbook, receipts, items[index].images, slot.imageCell, slot.maxWidth, slot.maxHeight);
   }
   const buffer = await workbook.xlsx.writeBuffer();
   downloadBlob(new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `reimbursement_korea_${dateStamp()}.xlsx`);

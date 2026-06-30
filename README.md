@@ -187,5 +187,5 @@ The app copies these templates on export and fills the copy only. Original templ
 
 - Receipt upload currently supports PNG, JPG, JPEG, WEBP, BMP, GIF, and PDF.
 - Korea output is one workbook with three sheets: cover, details, and receipts.
-- Korea receipts are placed without text labels in the left printable page area only; overflow continues on the next printed page below.
+- Korea receipts are grouped by payment on the `发票` sheet, with a compact payment label directly above each grouped receipt image; overflow continues on the next printed page below.
 - USA output preserves the provided workbook format and puts matched payment proof images in column E.

@@ -33,11 +33,15 @@ try:
     from openpyxl import Workbook, load_workbook
     from openpyxl.cell.cell import MergedCell
     from openpyxl.drawing.image import Image as XLImage
+    from openpyxl.styles import Alignment, Font, PatternFill
 except Exception:  # pragma: no cover
     Workbook = None  # type: ignore[assignment]
     load_workbook = None  # type: ignore[assignment]
     MergedCell = None  # type: ignore[assignment]
     XLImage = None  # type: ignore[assignment]
+    Alignment = None  # type: ignore[assignment]
+    Font = None  # type: ignore[assignment]
+    PatternFill = None  # type: ignore[assignment]
 
 try:
     from PIL import Image, ImageOps, ImageTk
@@ -1153,6 +1157,29 @@ def configure_korea_receipt_page(sheet: Any, item_count: int) -> None:
         pass
 
 
+def korea_receipt_payment_label(index: int, item: "ReceiptItem") -> str:
+    details = []
+    if item.payment_method.strip():
+        details.append(item.payment_method.strip())
+    if item.date.strip():
+        details.append(item.date.strip())
+    if item.amount.strip():
+        currency = normalize_currency(item.currency, "KRW")
+        details.append(f"{item.amount.strip()} {currency}".strip())
+    return f"Payment {index}: {' | '.join(details)}" if details else f"Payment {index}"
+
+
+def set_korea_receipt_label(sheet: Any, cell_ref: str, label: str) -> None:
+    cell = sheet[cell_ref]
+    cell.value = label
+    if Font is not None:
+        cell.font = Font(bold=True, size=10, color="1F2937")
+    if Alignment is not None:
+        cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    if PatternFill is not None:
+        cell.fill = PatternFill(fill_type="solid", fgColor="E9EEF3")
+
+
 def export_usa(
     items: List[ReceiptItem],
     output_path: Path,
@@ -1393,19 +1420,24 @@ def export_korea(
         for col in "ABCDEFGH":
             receipts_ws[f"{col}{row}"] = None
     anchors = ["A", "D"]
-    row_offsets = [2, 26]
+    label_ranges = {"A": "A{row}:C{row}", "D": "D{row}:E{row}"}
+    row_offsets = [1, 25]
     for idx, item in enumerate(items):
         page = idx // receipts_per_page
         slot = idx % receipts_per_page
         row_group = slot // len(anchors)
         col = anchors[slot % len(anchors)]
-        image_row = (page * page_height) + row_offsets[row_group]
-        image_path = Path(item.path)
-        if image_path.exists():
-            receipts_ws.add_image(
-                resize_excel_image(image_path, 215, 300, item.crop_box, item.rotation_degrees),
-                f"{col}{image_row}",
-            )
+        label_row = (page * page_height) + row_offsets[row_group]
+        image_row = label_row + 1
+        try:
+            receipts_ws.merge_cells(label_ranges[col].format(row=label_row))
+        except Exception:
+            pass
+        receipts_ws.row_dimensions[label_row].height = 20
+        set_korea_receipt_label(receipts_ws, f"{col}{label_row}", korea_receipt_payment_label(idx + 1, item))
+        receipt_image = resize_attachment_contact_sheet(ensure_receipt_images(item), 215, 280)
+        if receipt_image is not None:
+            receipts_ws.add_image(receipt_image, f"{col}{image_row}")
 
     wb.save(output_path)
 
