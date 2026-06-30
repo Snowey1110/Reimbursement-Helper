@@ -7,6 +7,10 @@ There are two ways to use it:
 - **Desktop app**: best for daily work on a Windows computer.
 - **Web app**: runs from GitHub Pages and uses the API key typed by the user in the browser.
 
+Open the web app here:
+
+https://snowey1110.github.io/Reimbursement-Helper/
+
 ## Quick Start For Users
 
 1. Download the latest release zip from the GitHub **Releases** page.
@@ -72,6 +76,10 @@ run_reimbursement_helper.bat
 ## Web Version
 
 A static GitHub Pages version is in `web/`. It runs in the browser, uses blank templates from `web/public/templates/`, and asks each user to enter their own OpenAI API key. The key is not committed; by default it is kept only for the browser session, with an optional checkbox to remember it on that device.
+
+Live site:
+
+https://snowey1110.github.io/Reimbursement-Helper/
 
 ```bash
 cd web
