@@ -216,8 +216,8 @@ export function perspectiveCoefficients(sourcePoints: CropPoint[], width: number
   return solveLinearSystem(matrix, vector);
 }
 
-function fitCanvasToMax(source: HTMLCanvasElement, maxWidth: number, maxHeight: number): HTMLCanvasElement {
-  const scale = Math.min(maxWidth / source.width, maxHeight / source.height, 1);
+function fitCanvasToMax(source: HTMLCanvasElement, maxWidth: number, maxHeight: number, allowUpscale = false): HTMLCanvasElement {
+  const scale = Math.min(maxWidth / source.width, maxHeight / source.height, allowUpscale ? Number.POSITIVE_INFINITY : 1);
   const output = document.createElement("canvas");
   output.width = Math.max(1, Math.round(source.width * scale));
   output.height = Math.max(1, Math.round(source.height * scale));
@@ -229,9 +229,9 @@ function fitCanvasToMax(source: HTMLCanvasElement, maxWidth: number, maxHeight: 
   return output;
 }
 
-function perspectiveCropCanvas(source: HTMLCanvasElement, points: CropPoint[], maxWidth: number, maxHeight: number): HTMLCanvasElement {
+function perspectiveCropCanvas(source: HTMLCanvasElement, points: CropPoint[], maxWidth: number, maxHeight: number, allowUpscale = false): HTMLCanvasElement {
   const naturalSize = cropOutputSize(points);
-  const scale = Math.min(maxWidth / naturalSize.width, maxHeight / naturalSize.height, 1);
+  const scale = Math.min(maxWidth / naturalSize.width, maxHeight / naturalSize.height, allowUpscale ? Number.POSITIVE_INFINITY : 1);
   const outputWidth = Math.max(1, Math.round(naturalSize.width * scale));
   const outputHeight = Math.max(1, Math.round(naturalSize.height * scale));
   const coefficients = perspectiveCoefficients(points, outputWidth, outputHeight);
@@ -315,7 +315,12 @@ export async function orientedImageDataUrl(attachment: ImageAttachment, maxWidth
   return { dataUrl: canvasToDataUrl(output), width: output.width, height: output.height };
 }
 
-export async function preparedImageDataUrl(attachment: ImageAttachment, maxWidth = 900, maxHeight = 900): Promise<{ dataUrl: string; width: number; height: number }> {
+export async function preparedImageDataUrl(
+  attachment: ImageAttachment,
+  maxWidth = 900,
+  maxHeight = 900,
+  allowUpscale = false
+): Promise<{ dataUrl: string; width: number; height: number }> {
   const image = await loadImage(attachment.dataUrl);
   const rotation = normalizedRotation(attachment.rotationDegrees);
   const rotatedWidth = rotation === 90 || rotation === 270 ? image.naturalHeight : image.naturalWidth;
@@ -342,14 +347,19 @@ export async function preparedImageDataUrl(attachment: ImageAttachment, maxWidth
   context.restore();
 
   const points = normalizedCropPoints(attachment.cropPoints, working.width, working.height);
-  const output = points ? perspectiveCropCanvas(working, points, maxWidth, maxHeight) : fitCanvasToMax(working, maxWidth, maxHeight);
+  const output = points ? perspectiveCropCanvas(working, points, maxWidth, maxHeight, allowUpscale) : fitCanvasToMax(working, maxWidth, maxHeight, allowUpscale);
   return { dataUrl: canvasToDataUrl(output), width: output.width, height: output.height };
 }
 
-export async function makeContactSheet(attachments: ImageAttachment[], maxWidth: number, maxHeight: number): Promise<{ dataUrl: string; width: number; height: number } | undefined> {
+export async function makeContactSheet(
+  attachments: ImageAttachment[],
+  maxWidth: number,
+  maxHeight: number,
+  allowUpscale = false
+): Promise<{ dataUrl: string; width: number; height: number } | undefined> {
   if (!attachments.length) return undefined;
-  if (attachments.length === 1) return preparedImageDataUrl(attachments[0], maxWidth, maxHeight);
-  const prepared = await Promise.all(attachments.map((attachment) => preparedImageDataUrl(attachment, maxWidth / 2, maxHeight / 2)));
+  if (attachments.length === 1) return preparedImageDataUrl(attachments[0], maxWidth, maxHeight, allowUpscale);
+  const prepared = await Promise.all(attachments.map((attachment) => preparedImageDataUrl(attachment, maxWidth / 2, maxHeight / 2, allowUpscale)));
   const cols = Math.min(2, prepared.length);
   const rows = Math.ceil(prepared.length / cols);
   const gutter = 8;
@@ -364,7 +374,7 @@ export async function makeContactSheet(attachments: ImageAttachment[], maxWidth:
   context.fillRect(0, 0, canvas.width, canvas.height);
   for (let index = 0; index < prepared.length; index += 1) {
     const image = await loadImage(prepared[index].dataUrl);
-    const scale = Math.min(cellWidth / image.naturalWidth, cellHeight / image.naturalHeight, 1);
+    const scale = Math.min(cellWidth / image.naturalWidth, cellHeight / image.naturalHeight, allowUpscale ? Number.POSITIVE_INFINITY : 1);
     const width = image.naturalWidth * scale;
     const height = image.naturalHeight * scale;
     const col = index % cols;

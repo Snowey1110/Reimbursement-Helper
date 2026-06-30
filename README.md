@@ -19,6 +19,7 @@ https://snowey1110.github.io/Reimbursement-Helper/
 4. Click the blue suggested button and follow the flow:
    - `Select Files`
    - USA only: `Select Payment Proof`
+   - Korea only: `Select 汇率 Image` for the exchange-rate screenshot
    - `Generate All`
    - `Generate Excel`
 
@@ -187,5 +188,5 @@ The app copies these templates on export and fills the copy only. Original templ
 
 - Receipt upload currently supports PNG, JPG, JPEG, WEBP, BMP, GIF, and PDF.
 - Korea output is one workbook with three sheets: cover, details, and receipts.
-- Korea receipts are grouped by payment on the `发票` sheet, with a compact payment label directly above each grouped receipt image; overflow continues on the next printed page below.
+- Korea receipts are grouped by payment on the `发票` sheet, with a compact payment label directly above each larger full-width receipt image. Optional Korea `汇率` screenshots are placed in the first `发票` image slot; overflow continues on the next printed page below.
 - USA output preserves the provided workbook format and puts matched payment proof images in column E.

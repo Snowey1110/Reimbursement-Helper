@@ -1050,6 +1050,7 @@ def prepare_attachment_contact_sheet(
     attachments: List[Dict[str, Any]],
     max_width: int,
     max_height: int,
+    allow_upscale: bool = False,
 ) -> Optional[Path]:
     if Image is None:
         return None
@@ -1078,7 +1079,13 @@ def prepare_attachment_contact_sheet(
     sheet = Image.new("RGB", (max_width, max_height), "white")
     for index, img in enumerate(prepared_images):
         tile = img.copy()
-        tile.thumbnail((cell_width, cell_height))
+        if allow_upscale:
+            scale = min(cell_width / max(1, tile.width), cell_height / max(1, tile.height))
+            resampling = getattr(Image, "Resampling", None)
+            resample = getattr(resampling, "LANCZOS", getattr(Image, "LANCZOS", Image.BICUBIC))
+            tile = tile.resize((max(1, int(tile.width * scale)), max(1, int(tile.height * scale))), resample)
+        else:
+            tile.thumbnail((cell_width, cell_height))
         col = index % cols
         row = index // cols
         x = col * (cell_width + gutter) + max(0, (cell_width - tile.width) // 2)
@@ -1093,14 +1100,17 @@ def resize_attachment_contact_sheet(
     attachments: List[Dict[str, Any]],
     max_width: int,
     max_height: int,
+    allow_upscale: bool = False,
 ) -> Optional[Any]:
-    contact_path = prepare_attachment_contact_sheet(attachments, max_width, max_height)
+    contact_path = prepare_attachment_contact_sheet(attachments, max_width, max_height, allow_upscale)
     if contact_path is None:
         return None
     img = XLImage(str(contact_path))
     with Image.open(contact_path) as pil_img:
         width, height = pil_img.size
-    scale = min(max_width / max(1, width), max_height / max(1, height), 1.0)
+    scale = min(max_width / max(1, width), max_height / max(1, height))
+    if not allow_upscale:
+        scale = min(scale, 1.0)
     img.width = max(1, int(width * scale))
     img.height = max(1, int(height * scale))
     return img
@@ -1123,13 +1133,15 @@ def clear_cells(sheet: Any, rows: Iterable[int], cols: Sequence[str]) -> None:
 
 
 def fit_columns_for_receipts(sheet: Any) -> None:
-    for col in "ABCDEFGH":
-        sheet.column_dimensions[col].width = 16
+    for col in "ABCDE":
+        sheet.column_dimensions[col].width = 18
+    for col in "FGH":
+        sheet.column_dimensions[col].width = 8
 
 
 def configure_korea_receipt_page(sheet: Any, item_count: int) -> None:
     page_height = 50
-    receipts_per_page = 4
+    receipts_per_page = 2
     page_count = max(1, (item_count + receipts_per_page - 1) // receipts_per_page)
     last_row = page_count * page_height
     sheet.print_area = f"A1:E{last_row}"
@@ -1180,6 +1192,30 @@ def set_korea_receipt_label(sheet: Any, cell_ref: str, label: str) -> None:
         cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
     if PatternFill is not None:
         cell.fill = PatternFill(fill_type="solid", fgColor="E9EEF3")
+
+
+def add_korea_receipt_block(
+    sheet: Any,
+    index: int,
+    label: str,
+    attachments: List[Dict[str, Any]],
+) -> None:
+    page_height = 50
+    blocks_per_page = 2
+    row_offsets = [1, 26]
+    page = index // blocks_per_page
+    slot = index % blocks_per_page
+    label_row = page * page_height + row_offsets[slot]
+    image_row = label_row + 1
+    try:
+        sheet.merge_cells(f"A{label_row}:E{label_row}")
+    except Exception:
+        pass
+    sheet.row_dimensions[label_row].height = 22
+    set_korea_receipt_label(sheet, f"A{label_row}", label)
+    receipt_image = resize_attachment_contact_sheet(attachments, 520, 420, allow_upscale=True)
+    if receipt_image is not None:
+        sheet.add_image(receipt_image, f"A{image_row}")
 
 
 def export_usa(
@@ -1351,6 +1387,7 @@ def export_korea(
     output_path: Path,
     krw_to_rmb_rate: float,
     usd_to_rmb_rate: float,
+    exchange_rate_items: Optional[List[BankStatementItem]] = None,
 ) -> None:
     cover_template = TEMPLATE_DIR / KOREA_COVER_TEMPLATE_NAME
     details_template = TEMPLATE_DIR / KOREA_DETAILS_TEMPLATE_NAME
@@ -1421,33 +1458,28 @@ def export_korea(
 
     clear_images(receipts_ws)
     fit_columns_for_receipts(receipts_ws)
-    configure_korea_receipt_page(receipts_ws, len(items))
+    exchange_rate_attachments = [attachment_from_item(item) for item in exchange_rate_items or []]
+    block_count = len(items) + (1 if exchange_rate_attachments else 0)
+    configure_korea_receipt_page(receipts_ws, block_count)
     page_height = 50
-    receipts_per_page = 4
-    page_count = max(1, (len(items) + receipts_per_page - 1) // receipts_per_page)
+    blocks_per_page = 2
+    page_count = max(1, (block_count + blocks_per_page - 1) // blocks_per_page)
     last_receipt_row = page_count * page_height
     for row in range(1, max(240, last_receipt_row + 1)):
         for col in "ABCDEFGH":
             receipts_ws[f"{col}{row}"] = None
-    anchors = ["A", "D"]
-    label_ranges = {"A": "A{row}:C{row}", "D": "D{row}:E{row}"}
-    row_offsets = [1, 25]
+    block_index = 0
+    if exchange_rate_attachments:
+        add_korea_receipt_block(receipts_ws, block_index, "汇率 / Exchange Rate", exchange_rate_attachments)
+        block_index += 1
     for idx, item in enumerate(items):
-        page = idx // receipts_per_page
-        slot = idx % receipts_per_page
-        row_group = slot // len(anchors)
-        col = anchors[slot % len(anchors)]
-        label_row = (page * page_height) + row_offsets[row_group]
-        image_row = label_row + 1
-        try:
-            receipts_ws.merge_cells(label_ranges[col].format(row=label_row))
-        except Exception:
-            pass
-        receipts_ws.row_dimensions[label_row].height = 20
-        set_korea_receipt_label(receipts_ws, f"{col}{label_row}", korea_receipt_payment_label(idx + 1, item))
-        receipt_image = resize_attachment_contact_sheet(ensure_receipt_images(item), 215, 280)
-        if receipt_image is not None:
-            receipts_ws.add_image(receipt_image, f"{col}{image_row}")
+        add_korea_receipt_block(
+            receipts_ws,
+            block_index,
+            korea_receipt_payment_label(idx + 1, item),
+            ensure_receipt_images(item),
+        )
+        block_index += 1
 
     wb.save(output_path)
 
@@ -1457,6 +1489,7 @@ class ReimbursementHelperApp:
         self.root = root
         self.items: List[ReceiptItem] = []
         self.bank_items: List[BankStatementItem] = []
+        self.exchange_rate_items: List[BankStatementItem] = []
         self.selected_index: Optional[int] = None
         self.selected_bank_index: Optional[int] = None
         self.bank_tree: Optional[Any] = None
@@ -1701,7 +1734,7 @@ class ReimbursementHelperApp:
         self.select_payment_proof_btn = ttk.Button(
             controls,
             text="Select Payment Proof",
-            command=self.select_payment_proofs,
+            command=self.select_support_files,
         )
         self.select_payment_proof_btn.pack(side="left", padx=4)
         self.generate_details_btn = ttk.Button(controls, text="Generate Details", command=self.generate_selected_details)
@@ -2126,7 +2159,7 @@ class ReimbursementHelperApp:
             if self.krw_rate_entry is not None:
                 self.krw_rate_entry.pack_forget()
             if self.select_payment_proof_btn is not None:
-                self.select_payment_proof_btn.configure(state="normal")
+                self.select_payment_proof_btn.configure(text="Select Payment Proof", command=self.select_support_files, state="normal")
         else:
             self.field_labels["amount"].configure(text="Original amount")
             self.field_labels["rmb_amount"].configure(text="RMB amount")
@@ -2143,7 +2176,7 @@ class ReimbursementHelperApp:
             if self.krw_rate_entry is not None:
                 self.krw_rate_entry.pack(side="left", padx=(6, 0))
             if self.select_payment_proof_btn is not None:
-                self.select_payment_proof_btn.configure(state="disabled")
+                self.select_payment_proof_btn.configure(text="Select 汇率 Image", command=self.select_support_files, state="normal")
 
     def suggested_toolbar_action(self) -> str:
         if self._busy:
@@ -2153,6 +2186,8 @@ class ReimbursementHelperApp:
         if not self.items:
             return "select_files"
         if self.form_version.get() == "USA" and not self.bank_items:
+            return "select_payment_proof"
+        if self.form_version.get() == "Korea" and not self.exchange_rate_items:
             return "select_payment_proof"
         return "generate_all"
 
@@ -2315,6 +2350,12 @@ class ReimbursementHelperApp:
     def upload_folder(self) -> None:
         self.select_files()
 
+    def select_support_files(self) -> None:
+        if self.form_version.get() == "USA":
+            self.select_payment_proofs()
+        else:
+            self.select_exchange_rate_images()
+
     def select_payment_proofs(self) -> None:
         if self.form_version.get() != "USA":
             self.show_info("Payment proof images are only used for the USA form.")
@@ -2389,6 +2430,68 @@ class ReimbursementHelperApp:
         if failed and messagebox:
             messagebox.showwarning(
                 "Select Payment Proof",
+                "Some files could not be imported.\n\n"
+                + "\n".join(failed[:5])
+                + f"\n\nLogged to:\n{LOG_DIR / 'app.log'}",
+            )
+
+    def select_exchange_rate_images(self) -> None:
+        if self.form_version.get() != "Korea":
+            self.show_info("汇率 images are only used for the Korea form.")
+            return
+        ensure_runtime_folders()
+        if filedialog is None:
+            return
+        selected = filedialog.askopenfilenames(
+            title="Select 汇率 image files",
+            filetypes=[
+                ("Exchange rate image files", "*.png *.jpg *.jpeg *.webp *.bmp *.gif *.pdf"),
+                ("Image files", "*.png *.jpg *.jpeg *.webp *.bmp *.gif"),
+                ("PDF files", "*.pdf"),
+                ("All files", "*.*"),
+            ],
+        )
+        paths = [Path(path) for path in selected]
+        if not paths:
+            return
+        self._details_ready_for_export = False
+        self.exchange_rate_items.clear()
+        added = 0
+        failed: List[str] = []
+        for path in paths:
+            suffix = path.suffix.lower()
+            if suffix not in SUPPORTED_UPLOAD_SUFFIXES:
+                continue
+            if suffix == ".pdf":
+                try:
+                    image_path = render_pdf_to_merged_image(path)
+                except Exception as exc:
+                    log_exception(f"Could not import 汇率 PDF: {path}")
+                    failed.append(f"{path.name}: {exc}")
+                    continue
+                filename = f"{path.name} (all pages)"
+                source_page = "merged"
+            else:
+                image_path = path
+                filename = path.name
+                source_page = ""
+            self.exchange_rate_items.append(
+                BankStatementItem(
+                    item_id=uuid.uuid4().hex,
+                    path=str(image_path),
+                    filename=filename,
+                    source_path=str(path),
+                    source_page=source_page,
+                    status="Exchange rate",
+                )
+            )
+            added += 1
+        self.save_session()
+        self.status_text.set(f"Selected {added} 汇率 image file(s).")
+        self.update_toolbar_recommendation()
+        if failed and messagebox:
+            messagebox.showwarning(
+                "Select 汇率 Image",
                 "Some files could not be imported.\n\n"
                 + "\n".join(failed[:5])
                 + f"\n\nLogged to:\n{LOG_DIR / 'app.log'}",
@@ -3412,12 +3515,13 @@ class ReimbursementHelperApp:
         return "break"
 
     def clear_all(self) -> None:
-        if not self.items:
+        if not self.items and not self.bank_items and not self.exchange_rate_items:
             return
-        if messagebox and not messagebox.askyesno("Clear receipts", "Remove all uploaded receipt rows?"):
+        if messagebox and not messagebox.askyesno("Clear receipts", "Remove all uploaded receipt rows and support images?"):
             return
         self.items.clear()
         self.bank_items.clear()
+        self.exchange_rate_items.clear()
         self.selected_index = None
         self.selected_bank_index = None
         self.refresh_tree()
@@ -3768,7 +3872,7 @@ class ReimbursementHelperApp:
             except Exception:
                 pass
         if self.select_payment_proof_btn is not None:
-            proof_state = "normal" if not busy and self.form_version.get() == "USA" else "disabled"
+            proof_state = "normal" if not busy else "disabled"
             try:
                 self.select_payment_proof_btn.configure(state=proof_state)
             except Exception:
@@ -3847,7 +3951,7 @@ class ReimbursementHelperApp:
             else:
                 krw_rate = safe_float(self.krw_to_rmb_rate.get()) or safe_float(DEFAULT_KRW_TO_RMB_RATE) or 0.0046
                 usd_rate = safe_float(self.exchange_rate.get()) or safe_float(DEFAULT_USD_TO_RMB_RATE) or 6.8
-                export_korea(self.items, output_path, krw_rate, usd_rate)
+                export_korea(self.items, output_path, krw_rate, usd_rate, self.exchange_rate_items)
         except Exception as exc:
             log_path = log_exception("Excel export failed")
             if messagebox:
@@ -3910,6 +4014,7 @@ class ReimbursementHelperApp:
             "selected_index": self.selected_index,
             "items": [asdict(item) for item in self.items],
             "bank_items": [asdict(item) for item in self.bank_items],
+            "exchange_rate_items": [asdict(item) for item in self.exchange_rate_items],
         }
 
     def save_session(self) -> None:
@@ -3932,11 +4037,14 @@ class ReimbursementHelperApp:
             return
         raw_items = data.get("items")
         raw_bank_items = data.get("bank_items")
+        raw_exchange_rate_items = data.get("exchange_rate_items")
         if not isinstance(raw_items, list):
             raw_items = []
         if not isinstance(raw_bank_items, list):
             raw_bank_items = []
-        if not raw_items and not raw_bank_items:
+        if not isinstance(raw_exchange_rate_items, list):
+            raw_exchange_rate_items = []
+        if not raw_items and not raw_bank_items and not raw_exchange_rate_items:
             return
         should_restore = True
         if messagebox:
@@ -3978,11 +4086,23 @@ class ReimbursementHelperApp:
                 values["crop_box"] = None
             values["rotation_degrees"] = normalize_rotation(values.get("rotation_degrees", 0))
             restored_bank.append(BankStatementItem(**values))
+        restored_exchange: List[BankStatementItem] = []
+        for raw in raw_exchange_rate_items:
+            if not isinstance(raw, dict):
+                continue
+            values = {key: raw.get(key, "") for key in bank_fields}
+            if not values.get("item_id"):
+                values["item_id"] = uuid.uuid4().hex
+            if not isinstance(values.get("crop_box"), list):
+                values["crop_box"] = None
+            values["rotation_degrees"] = normalize_rotation(values.get("rotation_degrees", 0))
+            restored_exchange.append(BankStatementItem(**values))
         self.form_version.set(normalized_form_version(data.get("form_version") or self.form_version.get()))
         self.exchange_rate.set(str(data.get("usa_exchange_rate") or DEFAULT_USD_TO_RMB_RATE))
         self.krw_to_rmb_rate.set(str(data.get("krw_to_rmb_rate") or DEFAULT_KRW_TO_RMB_RATE))
         self.items = restored
         self.bank_items = restored_bank
+        self.exchange_rate_items = restored_exchange
         self._last_form_version = self.form_version.get()
         try:
             selected = int(data.get("selected_index", 0) or 0)

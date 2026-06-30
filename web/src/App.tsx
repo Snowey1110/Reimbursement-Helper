@@ -40,7 +40,7 @@ import {
 } from "./utils";
 
 const STORAGE_KEY = "reimbursement-helper-web-api-key";
-type SuggestedAction = "selectFiles" | "selectProof" | "generateAll" | "generateExcel";
+type SuggestedAction = "selectFiles" | "selectProof" | "selectExchangeRate" | "generateAll" | "generateExcel";
 type FormVersion = "USA" | "Korea";
 
 function readStoredFormVersion(): FormVersion {
@@ -56,6 +56,7 @@ export default function App() {
   const [formVersion, setFormVersion] = useState<FormVersion>(() => readStoredFormVersion());
   const [items, setItems] = useState<ReceiptItem[]>([]);
   const [proofs, setProofs] = useState<PaymentProof[]>([]);
+  const [exchangeRateImages, setExchangeRateImages] = useState<ImageAttachment[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectedTile, setSelectedTile] = useState<SelectedTile | null>(null);
   const [apiKey, setApiKey] = useState(() => sessionStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(STORAGE_KEY) ?? "");
@@ -69,6 +70,7 @@ export default function App() {
   const [readyForExport, setReadyForExport] = useState(false);
   const receiptInputRef = useRef<HTMLInputElement>(null);
   const proofInputRef = useRef<HTMLInputElement>(null);
+  const exchangeRateInputRef = useRef<HTMLInputElement>(null);
 
   const selectedItem = selectedIds.length ? items.find((item) => item.id === selectedIds[selectedIds.length - 1]) ?? null : null;
   const selectedProofs = selectedItem ? proofs.filter((proof) => proof.matchedReceiptId === selectedItem.id) : [];
@@ -78,8 +80,9 @@ export default function App() {
     if (items.length && readyForExport) return "generateExcel";
     if (!items.length) return "selectFiles";
     if (formVersion === "USA" && !proofs.length) return "selectProof";
+    if (formVersion === "Korea" && !exchangeRateImages.length) return "selectExchangeRate";
     return "generateAll";
-  }, [busy, formVersion, items.length, proofs.length, readyForExport]);
+  }, [busy, exchangeRateImages.length, formVersion, items.length, proofs.length, readyForExport]);
 
   useEffect(() => {
     if (rememberKey) {
@@ -167,6 +170,22 @@ export default function App() {
     } finally {
       setBusy(false);
       if (proofInputRef.current) proofInputRef.current.value = "";
+    }
+  }
+
+  async function addExchangeRateFiles(files: FileList | null) {
+    if (!files?.length) return;
+    setBusy(true);
+    setReadyForExport(false);
+    try {
+      const attachments = await Promise.all(Array.from(files).map(fileToAttachment));
+      setExchangeRateImages(attachments);
+      setStatus(`Selected ${attachments.length} 汇率 image file(s).`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not add 汇率 image files.");
+    } finally {
+      setBusy(false);
+      if (exchangeRateInputRef.current) exchangeRateInputRef.current.value = "";
     }
   }
 
@@ -357,7 +376,7 @@ export default function App() {
       if (formVersion === "USA") {
         await exportUsaWorkbook(items, proofs, rates);
       } else {
-        await exportKoreaWorkbook(items, rates);
+        await exportKoreaWorkbook(items, rates, exchangeRateImages);
       }
       setStatus("Workbook generated.");
     } catch (error) {
@@ -436,11 +455,11 @@ export default function App() {
         </button>
         <button
           type="button"
-          className={suggestedAction === "selectProof" ? "recommended" : ""}
-          onClick={() => proofInputRef.current?.click()}
-          disabled={busy || formVersion !== "USA"}
+          className={suggestedAction === "selectProof" || suggestedAction === "selectExchangeRate" ? "recommended" : ""}
+          onClick={() => (formVersion === "USA" ? proofInputRef.current?.click() : exchangeRateInputRef.current?.click())}
+          disabled={busy}
         >
-          <Upload size={17} /> Select Payment Proof
+          <Upload size={17} /> {formVersion === "USA" ? "Select Payment Proof" : "Select 汇率 Image"}
         </button>
         <button type="button" onClick={generateSelected} disabled={busy || !selectedIds.length}>
           <Wand2 size={17} /> Generate Details
@@ -453,6 +472,7 @@ export default function App() {
         </button>
         <input ref={receiptInputRef} type="file" multiple accept="image/*,.pdf" hidden onChange={(event) => addReceiptFiles(event.currentTarget.files)} />
         <input ref={proofInputRef} type="file" multiple accept="image/*,.pdf" hidden onChange={(event) => addProofFiles(event.currentTarget.files)} />
+        <input ref={exchangeRateInputRef} type="file" multiple accept="image/*,.pdf" hidden onChange={(event) => addExchangeRateFiles(event.currentTarget.files)} />
       </section>
 
       <main className="workspace">
@@ -487,7 +507,7 @@ export default function App() {
             <button type="button" onClick={removeSelectedRows} disabled={!selectedIds.length}>
               Remove
             </button>
-            <button type="button" onClick={() => { setItems([]); setProofs([]); setSelectedIds([]); setSelectedTile(null); setReadyForExport(false); }}>
+            <button type="button" onClick={() => { setItems([]); setProofs([]); setExchangeRateImages([]); setSelectedIds([]); setSelectedTile(null); setReadyForExport(false); }}>
               Clear
             </button>
           </div>

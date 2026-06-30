@@ -49,6 +49,23 @@ describe("Reimbursement Helper web app", () => {
     expect(screen.getByLabelText("Form")).toHaveValue("Korea");
   });
 
+  it("recommends the Korea exchange-rate image after receipts are selected", async () => {
+    localStorage.setItem(FORM_VERSION_STORAGE_KEY, "Korea");
+    render(<App />);
+
+    const receiptInput = document.querySelector('input[type="file"][accept="image/*,.pdf"]') as HTMLInputElement;
+    fireEvent.change(receiptInput, {
+      target: {
+        files: [new File(["one"], "1.png", { type: "image/png" })]
+      }
+    });
+
+    await screen.findAllByText("1.png");
+
+    const exchangeButton = screen.getByRole("button", { name: /Select 汇率 Image/ });
+    expect(exchangeButton).toHaveClass("recommended");
+  });
+
   it("selects all receipt rows with Ctrl+A and bulk edits project number", async () => {
     render(<App />);
 

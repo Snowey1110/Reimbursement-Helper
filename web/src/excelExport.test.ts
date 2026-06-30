@@ -40,13 +40,13 @@ describe("Excel row mapping", () => {
   });
 
   it("keeps Korea receipt payment labels next to their image slots", () => {
-    expect(koreaReceiptLastRow(5)).toBe(100);
+    expect(koreaReceiptLastRow(5)).toBe(150);
     expect(koreaReceiptImageSlots(5)).toEqual([
-      { labelRange: "A1:C1", labelCell: "A1", imageCell: "A2", maxWidth: 215, maxHeight: 280 },
-      { labelRange: "D1:E1", labelCell: "D1", imageCell: "D2", maxWidth: 215, maxHeight: 280 },
-      { labelRange: "A25:C25", labelCell: "A25", imageCell: "A26", maxWidth: 215, maxHeight: 280 },
-      { labelRange: "D25:E25", labelCell: "D25", imageCell: "D26", maxWidth: 215, maxHeight: 280 },
-      { labelRange: "A51:C51", labelCell: "A51", imageCell: "A52", maxWidth: 215, maxHeight: 280 }
+      { labelRange: "A1:E1", labelCell: "A1", imageCell: "A2", maxWidth: 520, maxHeight: 420 },
+      { labelRange: "A26:E26", labelCell: "A26", imageCell: "A27", maxWidth: 520, maxHeight: 420 },
+      { labelRange: "A51:E51", labelCell: "A51", imageCell: "A52", maxWidth: 520, maxHeight: 420 },
+      { labelRange: "A76:E76", labelCell: "A76", imageCell: "A77", maxWidth: 520, maxHeight: 420 },
+      { labelRange: "A101:E101", labelCell: "A101", imageCell: "A102", maxWidth: 520, maxHeight: 420 }
     ]);
   });
 
@@ -59,7 +59,7 @@ describe("Excel row mapping", () => {
   it("ships the Korea web template without a frozen detail pane", async () => {
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(readFileSync("public/templates/korea_reimbursement_template.xlsx"));
-    const details = workbook.getWorksheet("报销明细");
+    const details = workbook.worksheets[1];
 
     expect(details?.views.some((view) => view.state === "frozen")).toBe(false);
   });
