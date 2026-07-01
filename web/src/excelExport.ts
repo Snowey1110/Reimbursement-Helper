@@ -7,11 +7,18 @@ import {
   USA_CATEGORY_ROWS,
   USA_TEMPLATE_URL
 } from "./constants";
-import { makeContactSheet, preparedImageDataUrl } from "./imageUtils";
+import { makeContactSheet, preparedImageDataUrl, splitAttachmentForFullPage } from "./imageUtils";
 import { downloadBlob, formatAmount, isKoreaOtherText, itemSearchText, koreaInvoiceKindForItem, reportCategoryForItem, safeNumber, sortReceiptsForReport } from "./utils";
 
 const KOREA_DETAIL_COLUMNS = "ABCDEFGHIJKLMNOPQRS".split("");
 const KRW_NUMBER_FORMAT = "₩#,##0";
+const KOREA_RECEIPT_PAGE_HEIGHT = 60;
+const KOREA_RECEIPT_SLOTS_PER_PAGE = 4;
+const KOREA_RECEIPT_HALF_WIDTH = 370;
+const KOREA_RECEIPT_WIDE_WIDTH = 760;
+const KOREA_RECEIPT_HALF_HEIGHT = 520;
+const KOREA_RECEIPT_FULL_HEIGHT = 1040;
+const KOREA_FULL_PAGE_SPLIT_ASPECT = 1.75;
 
 function dataUrlBase64(dataUrl: string): string {
   return dataUrl.split(",", 2)[1] ?? dataUrl;
@@ -182,6 +189,29 @@ export function koreaReceiptShouldBeWide(item: ReceiptItem): boolean {
   return koreaInvoiceKindForItem(item) === "car_rental" || itemSearchText(item).includes("national") || item.images.length > 1;
 }
 
+function normalizedRotation(rotationDegrees: number): number {
+  return (((Math.round(rotationDegrees / 90) * 90) % 360) + 360) % 360;
+}
+
+function attachmentDisplaySize(attachment: ImageAttachment): { width: number; height: number } {
+  const rotation = normalizedRotation(attachment.rotationDegrees);
+  return rotation === 90 || rotation === 270
+    ? { width: attachment.height, height: attachment.width }
+    : { width: attachment.width, height: attachment.height };
+}
+
+function koreaAttachmentNeedsFullPage(attachment: ImageAttachment, forceFull = false): boolean {
+  if (forceFull || attachment.isPdfPage) return true;
+  const { width, height } = attachmentDisplaySize(attachment);
+  if (width <= 0 || height <= 0) return false;
+  return height >= 1400 || height / width >= 1.65 || width >= 1400;
+}
+
+function koreaAttachmentNeedsSplit(attachment: ImageAttachment): boolean {
+  const { width, height } = attachmentDisplaySize(attachment);
+  return width > 0 && height > width * KOREA_FULL_PAGE_SPLIT_ASPECT;
+}
+
 async function addImageToCell(
   workbook: ExcelJS.Workbook,
   sheet: ExcelJS.Worksheet,
@@ -196,7 +226,7 @@ async function addImageToCell(
   if (!attachment) return;
   const prepared = Array.isArray(attachment)
     ? await makeContactSheet(attachment, maxWidth, maxHeight, allowUpscale, stretchTiles)
-    : await preparedImageDataUrl(attachment, maxWidth, maxHeight, allowUpscale);
+    : await preparedImageDataUrl(attachment, stretchToFit ? maxWidth * 2 : maxWidth, stretchToFit ? maxHeight * 2 : maxHeight, allowUpscale);
   if (!prepared) return;
   const imageId = workbook.addImage({
     base64: dataUrlBase64(prepared.dataUrl),
@@ -220,10 +250,8 @@ async function addImageToCell(
 }
 
 export function koreaReceiptLastRow(itemCount: number): number {
-  const pageHeight = 60;
-  const blocksPerPage = 4;
-  const pageCount = Math.max(1, Math.ceil(itemCount / blocksPerPage));
-  return pageCount * pageHeight;
+  const pageCount = Math.max(1, Math.ceil(itemCount / KOREA_RECEIPT_SLOTS_PER_PAGE));
+  return pageCount * KOREA_RECEIPT_PAGE_HEIGHT;
 }
 
 export interface KoreaReceiptImageSlot {
@@ -252,8 +280,6 @@ export function koreaReceiptImageSlots(itemCount: number): KoreaReceiptImageSlot
 }
 
 export function koreaReceiptImageSlot(index: number): KoreaReceiptImageSlot {
-  const blocksPerPage = 4;
-  const pageHeight = 60;
   const rowOffsets = [1, 1, 31, 31];
   const colRanges = [
     ["A", "D"],
@@ -261,46 +287,120 @@ export function koreaReceiptImageSlot(index: number): KoreaReceiptImageSlot {
     ["A", "D"],
     ["E", "H"]
   ];
-  const page = Math.floor(index / blocksPerPage);
-  const slot = index % blocksPerPage;
-  const labelRow = page * pageHeight + rowOffsets[slot];
+  const page = Math.floor(index / KOREA_RECEIPT_SLOTS_PER_PAGE);
+  const slot = index % KOREA_RECEIPT_SLOTS_PER_PAGE;
+  const labelRow = page * KOREA_RECEIPT_PAGE_HEIGHT + rowOffsets[slot];
   const imageRow = labelRow + 1;
   const [startCol, endCol] = colRanges[slot];
   return {
     labelRange: `${startCol}${labelRow}:${endCol}${labelRow}`,
     labelCell: `${startCol}${labelRow}`,
     imageCell: `${startCol}${imageRow}`,
-    maxWidth: 370,
-    maxHeight: 520
+    maxWidth: KOREA_RECEIPT_HALF_WIDTH,
+    maxHeight: KOREA_RECEIPT_HALF_HEIGHT
   };
 }
 
 export function koreaReceiptWideSlot(slotIndex: number): KoreaReceiptImageSlot {
-  const pageHeight = 60;
-  const page = Math.floor(slotIndex / 4);
-  const slot = slotIndex % 4;
+  const page = Math.floor(slotIndex / KOREA_RECEIPT_SLOTS_PER_PAGE);
+  const slot = slotIndex % KOREA_RECEIPT_SLOTS_PER_PAGE;
   const rowOffsets = [1, 1, 31, 31];
-  const labelRow = page * pageHeight + rowOffsets[slot];
+  const labelRow = page * KOREA_RECEIPT_PAGE_HEIGHT + rowOffsets[slot];
   return {
     labelRange: `A${labelRow}:H${labelRow}`,
     labelCell: `A${labelRow}`,
     imageCell: `A${labelRow + 1}`,
-    maxWidth: 760,
-    maxHeight: 520
+    maxWidth: KOREA_RECEIPT_WIDE_WIDTH,
+    maxHeight: KOREA_RECEIPT_HALF_HEIGHT
   };
 }
 
-function koreaReceiptSlotCount(blocks: Array<{ wide: boolean }>): number {
+export function koreaReceiptFullPageSlot(slotIndex: number): KoreaReceiptImageSlot {
+  const page = Math.floor(slotIndex / KOREA_RECEIPT_SLOTS_PER_PAGE);
+  const labelRow = page * KOREA_RECEIPT_PAGE_HEIGHT + 1;
+  return {
+    labelRange: `A${labelRow}:H${labelRow}`,
+    labelCell: `A${labelRow}`,
+    imageCell: `A${labelRow + 1}`,
+    maxWidth: KOREA_RECEIPT_WIDE_WIDTH,
+    maxHeight: KOREA_RECEIPT_FULL_HEIGHT
+  };
+}
+
+type KoreaReceiptBlockMode = "half" | "wide" | "full";
+
+interface KoreaReceiptBlock {
+  label: string;
+  images: ImageAttachment[];
+  mode: KoreaReceiptBlockMode;
+  stretchTiles: boolean;
+}
+
+export async function buildKoreaReceiptBlocks(items: ReceiptItem[], exchangeRateImages: ImageAttachment[] = []): Promise<KoreaReceiptBlock[]> {
+  const blocks: KoreaReceiptBlock[] = [];
+  if (exchangeRateImages.length) {
+    blocks.push({
+      label: "汇率 / Exchange Rate",
+      images: exchangeRateImages,
+      mode: "wide",
+      stretchTiles: false
+    });
+  }
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    const label = koreaReceiptPaymentLabel(index, item);
+    if (!item.images.length) {
+      blocks.push({
+        label,
+        images: [],
+        mode: "half",
+        stretchTiles: false
+      });
+      continue;
+    }
+    const forceFull = item.images.length > 1;
+    for (const image of item.images) {
+      if (koreaAttachmentNeedsFullPage(image, forceFull)) {
+        const parts = koreaAttachmentNeedsSplit(image) ? await splitAttachmentForFullPage(image, KOREA_FULL_PAGE_SPLIT_ASPECT) : [image];
+        for (const part of parts) {
+          blocks.push({
+            label,
+            images: [part],
+            mode: "full",
+            stretchTiles: false
+          });
+        }
+      } else {
+        blocks.push({
+          label,
+          images: [image],
+          mode: koreaReceiptShouldBeWide(item) ? "wide" : "half",
+          stretchTiles: false
+        });
+      }
+    }
+  }
+  return blocks;
+}
+
+function koreaReceiptSlotCount(blocks: Array<{ mode: KoreaReceiptBlockMode }>): number {
   let slotIndex = 0;
   for (const block of blocks) {
-    if (block.wide && slotIndex % 2) slotIndex += 1;
-    slotIndex += block.wide ? 2 : 1;
+    if (block.mode === "full") {
+      const remainder = slotIndex % KOREA_RECEIPT_SLOTS_PER_PAGE;
+      if (remainder) slotIndex += KOREA_RECEIPT_SLOTS_PER_PAGE - remainder;
+      slotIndex += KOREA_RECEIPT_SLOTS_PER_PAGE;
+    } else if (block.mode === "wide") {
+      if (slotIndex % 2) slotIndex += 1;
+      slotIndex += 2;
+    } else {
+      slotIndex += 1;
+    }
   }
   return Math.max(1, slotIndex);
 }
 
 function configureKoreaReceiptPage(sheet: ExcelJS.Worksheet, slotCount: number): number {
-  const pageHeight = 60;
   const lastRow = koreaReceiptLastRow(slotCount);
   for (const col of "ABCDEFGH".split("")) {
     sheet.getColumn(col).width = 14;
@@ -323,7 +423,7 @@ function configureKoreaReceiptPage(sheet: ExcelJS.Worksheet, slotCount: number):
     }
   };
   (sheet as unknown as { rowBreaks?: unknown[] }).rowBreaks = [];
-  for (let row = pageHeight; row < lastRow; row += pageHeight) {
+  for (let row = KOREA_RECEIPT_PAGE_HEIGHT; row < lastRow; row += KOREA_RECEIPT_PAGE_HEIGHT) {
     sheet.getRow(row).addPageBreak();
   }
   return lastRow;
@@ -472,15 +572,7 @@ export async function exportKoreaWorkbook(items: ReceiptItem[], rates: ExchangeR
     cover.getCell(`D${row}`).value = totals.rmb ? Math.round(totals.rmb * 100) / 100 : null;
   }
   cover.getCell("C9").numFmt = KRW_NUMBER_FORMAT;
-  const blocks = [
-    ...(exchangeRateImages.length ? [{ label: "汇率 / Exchange Rate", images: exchangeRateImages, wide: true, stretchTiles: false }] : []),
-    ...sortedItems.map((item, index) => ({
-      label: koreaReceiptPaymentLabel(index, item),
-      images: item.images,
-      wide: koreaReceiptShouldBeWide(item),
-      stretchTiles: true
-    }))
-  ];
+  const blocks = await buildKoreaReceiptBlocks(sortedItems, exchangeRateImages);
   const slotCount = koreaReceiptSlotCount(blocks);
   const lastReceiptRow = configureKoreaReceiptPage(receipts, slotCount);
   for (let row = 1; row <= Math.max(240, lastReceiptRow); row += 1) {
@@ -489,17 +581,31 @@ export async function exportKoreaWorkbook(items: ReceiptItem[], rates: ExchangeR
     }
   }
   let slotIndex = 0;
-  for (let index = 0; index < blocks.length; index += 1) {
-    if (blocks[index].wide && slotIndex % 2) slotIndex += 1;
-    const slot = blocks[index].wide ? koreaReceiptWideSlot(slotIndex) : koreaReceiptImageSlot(slotIndex);
-    receipts.mergeCells(slot.labelRange);
-    receipts.getCell(slot.labelCell).value = blocks[index].label;
+  for (const block of blocks) {
+    if (block.mode === "full") {
+      const remainder = slotIndex % KOREA_RECEIPT_SLOTS_PER_PAGE;
+      if (remainder) slotIndex += KOREA_RECEIPT_SLOTS_PER_PAGE - remainder;
+    } else if (block.mode === "wide" && slotIndex % 2) {
+      slotIndex += 1;
+    }
+    const slot =
+      block.mode === "full"
+        ? koreaReceiptFullPageSlot(slotIndex)
+        : block.mode === "wide"
+          ? koreaReceiptWideSlot(slotIndex)
+          : koreaReceiptImageSlot(slotIndex);
+    try {
+      receipts.mergeCells(slot.labelRange);
+    } catch {
+      // The template may already have this label range merged.
+    }
+    receipts.getCell(slot.labelCell).value = block.label;
     receipts.getCell(slot.labelCell).font = { bold: true, size: 10, color: { argb: "FF1F2937" } };
     receipts.getCell(slot.labelCell).alignment = { vertical: "middle", horizontal: "left", wrapText: true };
     receipts.getCell(slot.labelCell).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE9EEF3" } };
     receipts.getRow(Number(slot.labelCell.replace(/^[A-Z]+/, ""))).height = 22;
-    await addImageToCell(workbook, receipts, blocks[index].images, slot.imageCell, slot.maxWidth, slot.maxHeight, true, true, blocks[index].stretchTiles);
-    slotIndex += blocks[index].wide ? 2 : 1;
+    await addImageToCell(workbook, receipts, block.images, slot.imageCell, slot.maxWidth, slot.maxHeight, true, true, block.stretchTiles);
+    slotIndex += block.mode === "full" ? KOREA_RECEIPT_SLOTS_PER_PAGE : block.mode === "wide" ? 2 : 1;
   }
   const buffer = await workbook.xlsx.writeBuffer();
   downloadBlob(new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `reimbursement_korea_${dateStamp()}.xlsx`);

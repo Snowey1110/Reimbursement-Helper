@@ -357,6 +357,14 @@ KOREA_INVOICE_KIND_ORDER = [
     "other",
 ]
 
+KOREA_RECEIPT_PAGE_HEIGHT = 60
+KOREA_RECEIPT_SLOTS_PER_PAGE = 4
+KOREA_RECEIPT_HALF_WIDTH = 370
+KOREA_RECEIPT_WIDE_WIDTH = 760
+KOREA_RECEIPT_HALF_HEIGHT = 520
+KOREA_RECEIPT_FULL_HEIGHT = 1040
+KOREA_FULL_PAGE_SPLIT_ASPECT = 1.75
+
 KOREA_COVER_ROWS: Dict[str, Tuple[int, str]] = {
     "transportation": (4, "交通费"),
     "consumables": (5, "消耗品"),
@@ -1607,10 +1615,13 @@ def prepare_attachment_contact_sheet(
         return None
     cols = min(2, len(prepared_images))
     rows = (len(prepared_images) + cols - 1) // cols
-    gutter = 8
-    cell_width = max(1, (max_width - gutter * (cols - 1)) // cols)
-    cell_height = max(1, (max_height - gutter * (rows - 1)) // rows)
-    sheet = Image.new("RGB", (max_width, max_height), "white")
+    render_scale = 2 if allow_upscale else 1
+    render_width = max(1, int(max_width * render_scale))
+    render_height = max(1, int(max_height * render_scale))
+    gutter = 8 * render_scale
+    cell_width = max(1, (render_width - gutter * (cols - 1)) // cols)
+    cell_height = max(1, (render_height - gutter * (rows - 1)) // rows)
+    sheet = Image.new("RGB", (render_width, render_height), "white")
     for index, img in enumerate(prepared_images):
         tile = img.copy()
         if stretch_tiles:
@@ -1655,6 +1666,137 @@ def resize_attachment_contact_sheet(
     return img
 
 
+def korea_attachment_is_pdf_page(attachment: Dict[str, Any]) -> bool:
+    source_path = str(attachment.get("source_path") or "")
+    source_page = str(attachment.get("source_page") or "")
+    return source_path.lower().endswith(".pdf") and bool(source_page)
+
+
+def korea_attachment_needs_full_page(attachment: Dict[str, Any], force_full: bool = False) -> bool:
+    if force_full or korea_attachment_is_pdf_page(attachment):
+        return True
+    if Image is None:
+        return False
+    try:
+        path = Path(str(attachment.get("path") or ""))
+        with Image.open(path) as img:
+            width, height = img.size
+    except Exception:
+        return False
+    if width <= 0 or height <= 0:
+        return False
+    aspect = height / width
+    return height >= 1400 or aspect >= 1.65 or width >= 1400
+
+
+def split_korea_attachment_for_full_page(attachment: Dict[str, Any]) -> List[Dict[str, Any]]:
+    if Image is None:
+        return [attachment]
+    try:
+        prepared = prepare_attachment_image_file(attachment)
+        with Image.open(prepared) as source:
+            image = source.convert("RGB").copy()
+    except Exception:
+        return [attachment]
+    width, height = image.size
+    if width <= 0 or height <= 0:
+        return [attachment]
+    max_slice_height = max(1, int(width * KOREA_FULL_PAGE_SPLIT_ASPECT))
+    if height <= max_slice_height:
+        return [attachment]
+    target_dir = WORK_DIR / "prepared_images"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    overlap = min(60, max(0, max_slice_height // 20))
+    slices: List[Dict[str, Any]] = []
+    y = 0
+    part = 1
+    while y < height:
+        bottom = min(height, y + max_slice_height)
+        if height - bottom and height - bottom < max_slice_height * 0.25:
+            bottom = height
+        cropped = image.crop((0, y, width, bottom))
+        output = target_dir / f"{uuid.uuid4().hex}_part_{part}.png"
+        cropped.save(output, "PNG")
+        next_attachment = copy.deepcopy(attachment)
+        base_name = str(attachment.get("filename") or Path(str(attachment.get("path") or "")).name)
+        source_page = str(attachment.get("source_page") or "")
+        next_attachment.update(
+            {
+                "id": uuid.uuid4().hex,
+                "path": str(output),
+                "filename": f"{base_name} part {part}",
+                "source_page": f"{source_page}-part-{part}" if source_page else f"part-{part}",
+                "crop_box": None,
+                "rotation_degrees": 0,
+            }
+        )
+        slices.append(next_attachment)
+        if bottom >= height:
+            break
+        y = max(0, bottom - overlap)
+        part += 1
+    return slices or [attachment]
+
+
+def korea_receipt_slot_count_for_blocks(blocks: List[Dict[str, Any]]) -> int:
+    slot_index = 0
+    for block in blocks:
+        mode = str(block.get("mode") or "half")
+        if mode == "full":
+            remainder = slot_index % KOREA_RECEIPT_SLOTS_PER_PAGE
+            if remainder:
+                slot_index += KOREA_RECEIPT_SLOTS_PER_PAGE - remainder
+            slot_index += KOREA_RECEIPT_SLOTS_PER_PAGE
+        elif mode == "wide":
+            if slot_index % 2:
+                slot_index += 1
+            slot_index += 2
+        else:
+            slot_index += 1
+    return max(1, slot_index)
+
+
+def build_korea_receipt_blocks(
+    items: List["ReceiptItem"],
+    exchange_rate_attachments: Optional[List[Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
+    blocks: List[Dict[str, Any]] = []
+    if exchange_rate_attachments:
+        blocks.append(
+            {
+                "label": "汇率 / Exchange Rate",
+                "attachments": exchange_rate_attachments,
+                "mode": "wide",
+                "stretch_tiles": False,
+            }
+        )
+    for idx, item in enumerate(items):
+        label = korea_receipt_payment_label(idx + 1, item)
+        attachments = ensure_receipt_images(item)
+        force_full = len(attachments) > 1
+        for attachment in attachments:
+            if korea_attachment_needs_full_page(attachment, force_full):
+                for part_attachment in split_korea_attachment_for_full_page(attachment):
+                    blocks.append(
+                        {
+                            "label": label,
+                            "attachments": [part_attachment],
+                            "mode": "full",
+                            "stretch_tiles": False,
+                        }
+                    )
+            else:
+                blocks.append(
+                    {
+                        "label": label,
+                        "attachments": [attachment],
+                        "mode": "wide" if korea_receipt_block_is_wide(item) else "half",
+                        "stretch_tiles": False,
+                    }
+                )
+    return blocks
+
+
 def clear_images(sheet: Any) -> None:
     try:
         sheet._images = []
@@ -1677,8 +1819,8 @@ def fit_columns_for_receipts(sheet: Any) -> None:
 
 
 def configure_korea_receipt_page(sheet: Any, slot_count: int) -> None:
-    page_height = 60
-    slots_per_page = 4
+    page_height = KOREA_RECEIPT_PAGE_HEIGHT
+    slots_per_page = KOREA_RECEIPT_SLOTS_PER_PAGE
     page_count = max(1, (slot_count + slots_per_page - 1) // slots_per_page)
     last_row = page_count * page_height
     sheet.print_area = f"A1:H{last_row}"
@@ -1709,30 +1851,39 @@ def configure_korea_receipt_page(sheet: Any, slot_count: int) -> None:
         pass
 
 
-def korea_receipt_slot(index: int, wide: bool = False) -> Dict[str, Any]:
-    page_height = 60
-    slots_per_page = 4
+def korea_receipt_slot(index: int, wide: bool = False, full_page: bool = False) -> Dict[str, Any]:
+    page_height = KOREA_RECEIPT_PAGE_HEIGHT
+    slots_per_page = KOREA_RECEIPT_SLOTS_PER_PAGE
     row_offsets = [1, 1, 31, 31]
     col_ranges = [("A", "D"), ("E", "H"), ("A", "D"), ("E", "H")]
     page = index // slots_per_page
     slot = index % slots_per_page
     label_row = page * page_height + row_offsets[slot]
     image_row = label_row + 1
+    if full_page:
+        label_row = page * page_height + 1
+        return {
+            "label_range": f"A{label_row}:H{label_row}",
+            "label_cell": f"A{label_row}",
+            "image_cell": f"A{label_row + 1}",
+            "max_width": KOREA_RECEIPT_WIDE_WIDTH,
+            "max_height": KOREA_RECEIPT_FULL_HEIGHT,
+        }
     if wide:
         return {
             "label_range": f"A{label_row}:H{label_row}",
             "label_cell": f"A{label_row}",
             "image_cell": f"A{image_row}",
-            "max_width": 760,
-            "max_height": 520,
+            "max_width": KOREA_RECEIPT_WIDE_WIDTH,
+            "max_height": KOREA_RECEIPT_HALF_HEIGHT,
         }
     start_col, end_col = col_ranges[slot]
     return {
         "label_range": f"{start_col}{label_row}:{end_col}{label_row}",
         "label_cell": f"{start_col}{label_row}",
         "image_cell": f"{start_col}{image_row}",
-        "max_width": 370,
-        "max_height": 520,
+        "max_width": KOREA_RECEIPT_HALF_WIDTH,
+        "max_height": KOREA_RECEIPT_HALF_HEIGHT,
     }
 
 
@@ -1777,9 +1928,10 @@ def add_korea_receipt_block(
     label: str,
     attachments: List[Dict[str, Any]],
     wide: bool = False,
+    full_page: bool = False,
     stretch_tiles: bool = True,
 ) -> None:
-    slot = korea_receipt_slot(index, wide=wide)
+    slot = korea_receipt_slot(index, wide=wide, full_page=full_page)
     label_row = int(re.sub(r"^[A-Z]+", "", str(slot["label_cell"])))
     try:
         sheet.merge_cells(str(slot["label_range"]))
@@ -2088,32 +2240,35 @@ def export_korea(
     clear_images(receipts_ws)
     fit_columns_for_receipts(receipts_ws)
     exchange_rate_attachments = [attachment_from_item(item) for item in exchange_rate_items or []]
-    slot_count = korea_receipt_slot_count(sorted_items, bool(exchange_rate_attachments))
+    receipt_blocks = build_korea_receipt_blocks(sorted_items, exchange_rate_attachments)
+    slot_count = korea_receipt_slot_count_for_blocks(receipt_blocks)
     configure_korea_receipt_page(receipts_ws, slot_count)
-    page_height = 60
-    slots_per_page = 4
+    page_height = KOREA_RECEIPT_PAGE_HEIGHT
+    slots_per_page = KOREA_RECEIPT_SLOTS_PER_PAGE
     page_count = max(1, (slot_count + slots_per_page - 1) // slots_per_page)
     last_receipt_row = page_count * page_height
     for row in range(1, max(240, last_receipt_row + 1)):
         for col in "ABCDEFGH":
             receipts_ws[f"{col}{row}"] = None
     block_index = 0
-    if exchange_rate_attachments:
-        add_korea_receipt_block(receipts_ws, block_index, "汇率 / Exchange Rate", exchange_rate_attachments, wide=True, stretch_tiles=False)
-        block_index += 2
-    for idx, item in enumerate(sorted_items):
-        wide = korea_receipt_block_is_wide(item)
-        if wide and block_index % 2:
+    for block in receipt_blocks:
+        mode = str(block.get("mode") or "half")
+        if mode == "full":
+            remainder = block_index % KOREA_RECEIPT_SLOTS_PER_PAGE
+            if remainder:
+                block_index += KOREA_RECEIPT_SLOTS_PER_PAGE - remainder
+        elif mode == "wide" and block_index % 2:
             block_index += 1
         add_korea_receipt_block(
             receipts_ws,
             block_index,
-            korea_receipt_payment_label(idx + 1, item),
-            ensure_receipt_images(item),
-            wide=wide,
-            stretch_tiles=True,
+            str(block.get("label") or ""),
+            list(block.get("attachments") or []),
+            wide=mode == "wide",
+            full_page=mode == "full",
+            stretch_tiles=bool(block.get("stretch_tiles", False)),
         )
-        block_index += 2 if wide else 1
+        block_index += KOREA_RECEIPT_SLOTS_PER_PAGE if mode == "full" else (2 if mode == "wide" else 1)
 
     wb.save(output_path)
 
@@ -3049,35 +3204,41 @@ class ReimbursementHelperApp:
                 continue
             if suffix == ".pdf":
                 try:
-                    merged_path = render_pdf_to_merged_image(path)
+                    page_paths = render_pdf_pages(path)
                 except Exception as exc:
                     log_exception(f"Could not import PDF: {path}")
                     failed.append(f"{path.name}: {exc}")
                     continue
-                key = selected_file_key(merged_path, str(path), "merged")
+                if not page_paths:
+                    failed.append(f"{path.name}: PDF has no pages")
+                    continue
+                key = selected_file_key(page_paths[0], str(path), "1")
                 if key in existing:
                     continue
-                filename = f"{path.name} (all pages)"
+                filename = f"{path.name} ({len(page_paths)} pages)"
+                receipt_images = []
+                for page_index, page_path in enumerate(page_paths, start=1):
+                    receipt_images.append(
+                        {
+                            "id": uuid.uuid4().hex,
+                            "path": str(page_path),
+                            "filename": f"{path.name} page {page_index}",
+                            "source_path": str(path),
+                            "source_page": str(page_index),
+                            "crop_box": None,
+                            "rotation_degrees": 0,
+                        }
+                    )
                 self.items.append(
                     ReceiptItem(
                         item_id=uuid.uuid4().hex,
-                        path=str(merged_path),
+                        path=str(page_paths[0]),
                         filename=filename,
                         source_path=str(path),
-                        source_page="merged",
+                        source_page="1",
                         currency="USD" if self.form_version.get() == "USA" else "KRW",
                         category="transportation",
-                        receipt_images=[
-                            {
-                                "id": uuid.uuid4().hex,
-                                "path": str(merged_path),
-                                "filename": filename,
-                                "source_path": str(path),
-                                "source_page": "merged",
-                                "crop_box": None,
-                                "rotation_degrees": 0,
-                            }
-                        ],
+                        receipt_images=receipt_images,
                     )
                 )
                 existing.add(key)

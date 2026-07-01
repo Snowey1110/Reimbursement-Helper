@@ -10,7 +10,10 @@ export function image(overrides: Partial<ImageAttachment> = {}): ImageAttachment
     width: overrides.width ?? 100,
     height: overrides.height ?? 200,
     rotationDegrees: overrides.rotationDegrees ?? 0,
-    cropPoints: overrides.cropPoints
+    cropPoints: overrides.cropPoints,
+    sourcePage: overrides.sourcePage,
+    pageCount: overrides.pageCount,
+    isPdfPage: overrides.isPdfPage
   };
 }
 

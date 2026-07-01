@@ -11,15 +11,17 @@ vi.mock("./imageUtils", () => ({
     { x: width, y: height },
     { x: 0, y: height }
   ],
-  fileToAttachment: async (file: File) => ({
-    id: `image-${file.name}`,
-    filename: file.name,
-    sourceName: file.name,
-    dataUrl: `data:image/png;base64,${file.name}`,
-    width: 100,
-    height: 200,
-    rotationDegrees: 0
-  }),
+  fileToAttachments: async (file: File) => [
+    {
+      id: `image-${file.name}`,
+      filename: file.name,
+      sourceName: file.name,
+      dataUrl: `data:image/png;base64,${file.name}`,
+      width: 100,
+      height: 200,
+      rotationDegrees: 0
+    }
+  ],
   orientedImageDataUrl: async (attachment: ImageAttachment) => ({
     dataUrl: attachment.dataUrl,
     width: attachment.width,

@@ -26,7 +26,7 @@ import {
   USA_TEMPLATE_URL,
 } from "./constants";
 import { exportKoreaWorkbook, exportUsaWorkbook } from "./excelExport";
-import { defaultCropPoints, fileToAttachment, orientedImageDataUrl, orientedImageSize, rotateCropPoints } from "./imageUtils";
+import { defaultCropPoints, fileToAttachments, orientedImageDataUrl, orientedImageSize, rotateCropPoints } from "./imageUtils";
 import { CATEGORY_LABELS, LANGUAGE_OPTIONS, normalizeLanguage, text, type AppLanguage } from "./i18n";
 import type { Category, CropPoint, Currency, ExchangeRates, ImageAttachment, PaymentProof, ReceiptItem, SelectedTile } from "./types";
 import {
@@ -158,8 +158,15 @@ export default function App() {
     setBusy(true);
     setReadyForExport(false);
     try {
-      const attachments = await Promise.all(Array.from(files).map(fileToAttachment));
-      const next = attachments.map((attachment) => blankReceipt(formVersion, attachment));
+      const groups = await Promise.all(Array.from(files).map(fileToAttachments));
+      const next = groups.map((attachments) => {
+        const receipt = blankReceipt(formVersion, attachments[0]);
+        return {
+          ...receipt,
+          filename: attachments.length > 1 ? `${attachments[0].sourceName} (${attachments.length} pages)` : attachments[0].filename,
+          images: attachments
+        };
+      });
       setItems((current) => [...current, ...next]);
       if (!selectedIds.length && next.length) {
         setSelectedIds([next[0].id]);
@@ -180,7 +187,7 @@ export default function App() {
     setBusy(true);
     setReadyForExport(false);
     try {
-      const attachments = await Promise.all(Array.from(files).map(fileToAttachment));
+      const attachments = (await Promise.all(Array.from(files).map(fileToAttachments))).flat();
       const nextProofs = attachments.map<PaymentProof>((image) => ({
         id: uid("proof"),
         filename: image.filename,
@@ -206,7 +213,7 @@ export default function App() {
     setBusy(true);
     setReadyForExport(false);
     try {
-      const attachments = await Promise.all(Array.from(files).map(fileToAttachment));
+      const attachments = (await Promise.all(Array.from(files).map(fileToAttachments))).flat();
       setExchangeRateImages(attachments);
       if (!apiKey.trim()) {
         setStatus(t("selectedExchangeNoKey", { count: attachments.length }));

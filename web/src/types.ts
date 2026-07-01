@@ -30,6 +30,9 @@ export interface ImageAttachment {
   height: number;
   cropPoints?: CropPoint[];
   rotationDegrees: number;
+  sourcePage?: number;
+  pageCount?: number;
+  isPdfPage?: boolean;
 }
 
 export interface ReceiptItem {

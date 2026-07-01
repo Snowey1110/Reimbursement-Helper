@@ -1,11 +1,13 @@
 import ExcelJS from "exceljs";
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { receipt } from "./test/factories";
+import { image, receipt } from "./test/factories";
 import {
+  buildKoreaReceiptBlocks,
   exportKoreaWorkbook,
   koreaDetailContent,
   koreaDetailLocation,
+  koreaReceiptFullPageSlot,
   koreaPaymentMethodText,
   koreaReceiptImageSlots,
   koreaReceiptLastRow,
@@ -98,6 +100,22 @@ describe("Excel row mapping", () => {
       { labelRange: "A61:D61", labelCell: "A61", imageCell: "A62", maxWidth: 370, maxHeight: 520 }
     ]);
     expect(koreaReceiptWideSlot(0)).toEqual({ labelRange: "A1:H1", labelCell: "A1", imageCell: "A2", maxWidth: 760, maxHeight: 520 });
+    expect(koreaReceiptFullPageSlot(0)).toEqual({ labelRange: "A1:H1", labelCell: "A1", imageCell: "A2", maxWidth: 760, maxHeight: 1040 });
+  });
+
+  it("uses full printable receipt pages for grouped PDF page images", async () => {
+    const blocks = await buildKoreaReceiptBlocks([
+      receipt({
+        id: "pdf",
+        images: [
+          image({ id: "pdf-page-1", width: 1200, height: 1500, isPdfPage: true, sourcePage: 1, pageCount: 2 }),
+          image({ id: "pdf-page-2", width: 1200, height: 1500, isPdfPage: true, sourcePage: 2, pageCount: 2 })
+        ]
+      })
+    ]);
+
+    expect(blocks.map((block) => block.mode)).toEqual(["full", "full"]);
+    expect(blocks.map((block) => block.images[0].sourcePage)).toEqual([1, 2]);
   });
 
   it("builds Korea payment labels from only date, content, and amount", () => {

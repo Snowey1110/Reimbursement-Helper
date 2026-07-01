@@ -46,6 +46,8 @@ export interface PreparedImageData {
   displayHeight?: number;
 }
 
+type ImageAttachmentMetadata = Partial<Pick<ImageAttachment, "sourcePage" | "pageCount" | "isPdfPage">>;
+
 export function stackedPageLayout(
   pages: Array<{ width: number; height: number }>,
   gutter = 24
@@ -73,7 +75,12 @@ export async function fileToDataUrl(file: File): Promise<string> {
   });
 }
 
-export async function imageAttachmentFromDataUrl(filename: string, sourceName: string, dataUrl: string): Promise<ImageAttachment> {
+export async function imageAttachmentFromDataUrl(
+  filename: string,
+  sourceName: string,
+  dataUrl: string,
+  metadata: ImageAttachmentMetadata = {}
+): Promise<ImageAttachment> {
   const image = await loadImage(dataUrl);
   return {
     id: uid("image"),
@@ -82,7 +89,8 @@ export async function imageAttachmentFromDataUrl(filename: string, sourceName: s
     dataUrl,
     width: image.naturalWidth,
     height: image.naturalHeight,
-    rotationDegrees: 0
+    rotationDegrees: 0,
+    ...metadata
   };
 }
 
@@ -92,6 +100,42 @@ export async function fileToAttachment(file: File): Promise<ImageAttachment> {
   }
   const dataUrl = await fileToDataUrl(file);
   return imageAttachmentFromDataUrl(file.name, file.name, dataUrl);
+}
+
+export async function fileToAttachments(file: File): Promise<ImageAttachment[]> {
+  if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
+    return renderPdfToPageAttachments(file);
+  }
+  return [await fileToAttachment(file)];
+}
+
+export async function renderPdfToPageAttachments(file: File): Promise<ImageAttachment[]> {
+  const buffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+  const attachments: ImageAttachment[] = [];
+  for (let pageIndex = 1; pageIndex <= pdf.numPages; pageIndex += 1) {
+    const page = await pdf.getPage(pageIndex);
+    const viewport = page.getViewport({ scale: 2 });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Could not create PDF canvas.");
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: context, viewport }).promise;
+    attachments.push(
+      await imageAttachmentFromDataUrl(`${file.name} page ${pageIndex}`, file.name, canvasToDataUrl(canvas), {
+        sourcePage: pageIndex,
+        pageCount: pdf.numPages,
+        isPdfPage: true
+      })
+    );
+  }
+  if (!attachments.length) {
+    throw new Error(`${file.name} has no pages.`);
+  }
+  return attachments;
 }
 
 export async function renderPdfToMergedAttachment(file: File): Promise<ImageAttachment> {
@@ -357,6 +401,45 @@ export async function preparedImageDataUrl(
   const points = normalizedCropPoints(attachment.cropPoints, working.width, working.height);
   const output = points ? perspectiveCropCanvas(working, points, maxWidth, maxHeight, allowUpscale) : fitCanvasToMax(working, maxWidth, maxHeight, allowUpscale);
   return { dataUrl: canvasToDataUrl(output), width: output.width, height: output.height };
+}
+
+export async function splitAttachmentForFullPage(attachment: ImageAttachment, maxAspect = 1.75): Promise<ImageAttachment[]> {
+  const prepared = await preparedImageDataUrl(attachment, 1520, 12000, true);
+  if (prepared.height <= prepared.width * maxAspect) {
+    return [attachment];
+  }
+  const source = await loadImage(prepared.dataUrl);
+  const maxSliceHeight = Math.max(1, Math.floor(source.naturalWidth * maxAspect));
+  const overlap = Math.min(120, Math.floor(maxSliceHeight / 20));
+  const slices: ImageAttachment[] = [];
+  let y = 0;
+  let part = 1;
+  while (y < source.naturalHeight) {
+    let bottom = Math.min(source.naturalHeight, y + maxSliceHeight);
+    if (source.naturalHeight - bottom > 0 && source.naturalHeight - bottom < maxSliceHeight * 0.25) {
+      bottom = source.naturalHeight;
+    }
+    const height = Math.max(1, bottom - y);
+    const canvas = document.createElement("canvas");
+    canvas.width = source.naturalWidth;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Could not create receipt slice.");
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(source, 0, y, source.naturalWidth, height, 0, 0, canvas.width, canvas.height);
+    slices.push(
+      await imageAttachmentFromDataUrl(`${attachment.filename} part ${part}`, attachment.sourceName, canvasToDataUrl(canvas), {
+        sourcePage: attachment.sourcePage,
+        pageCount: attachment.pageCount,
+        isPdfPage: attachment.isPdfPage
+      })
+    );
+    if (bottom >= source.naturalHeight) break;
+    y = Math.max(0, bottom - overlap);
+    part += 1;
+  }
+  return slices.length ? slices : [attachment];
 }
 
 export async function makeContactSheet(
