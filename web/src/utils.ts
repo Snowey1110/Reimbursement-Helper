@@ -3,7 +3,7 @@ import {
   DEFAULT_USD_TO_KRW,
   DEFAULT_USD_TO_RMB,
   KOREA_CATEGORY_COLUMNS,
-  KOREA_REPORT_CATEGORY_ORDER,
+  KOREA_INVOICE_KIND_ORDER,
   USA_CATEGORY_ROWS,
   USA_REPORT_CATEGORY_ORDER
 } from "./constants";
@@ -83,12 +83,16 @@ export function normalizeCategory(value: unknown): Category {
 
 export function isKoreaOtherText(value: string): boolean {
   const raw = value.toLowerCase();
-  return /\b(e-?sim|sim card|data plan|internet access)\b/.test(raw) || /流量|虚拟卡|유심|데이터/.test(raw);
+  return /\b(e-?sim|sim card|data plan|internet access)\b/.test(raw) || /\u6d41\u91cf|\u865a\u62df\u5361|\uc720\uc2ec|\ub370\uc774\ud130/.test(raw);
+}
+
+export function itemSearchText(item: ReceiptItem): string {
+  return [item.category, item.purpose, item.details, item.receiptLabel, item.place, item.filename, item.paymentMethod].join(" ").toLowerCase();
 }
 
 export function reportCategoryForItem(item: ReceiptItem, formVersion: "USA" | "Korea"): Category {
   if (formVersion === "Korea") {
-    const text = [item.category, item.purpose, item.details, item.receiptLabel, item.place, item.filename].join(" ");
+    const text = itemSearchText(item);
     if (isKoreaOtherText(text)) return "other";
     if (item.category in KOREA_CATEGORY_COLUMNS) return item.category;
     if (item.category === "advertising" || item.category === "office") return "materials";
@@ -97,6 +101,18 @@ export function reportCategoryForItem(item: ReceiptItem, formVersion: "USA" | "K
   }
   if (item.category in USA_CATEGORY_ROWS) return item.category;
   if (item.category === "materials" || item.category === "consumables") return "office";
+  return "other";
+}
+
+export function koreaInvoiceKindForItem(item: ReceiptItem): string {
+  const text = itemSearchText(item);
+  const category = reportCategoryForItem(item, "Korea");
+  if (/\b(national|car rental|rental car|rent[- ]?a[- ]?car|rental|avis|hertz|enterprise|budget|alamo)\b/.test(text)) return "car_rental";
+  if (/\b(fuel|gas|gasoline|petrol|shell|bp|chevron|exxon)\b/.test(text)) return "fuel";
+  if (/\b(parking|park|toll)\b/.test(text)) return "parking";
+  if (isKoreaOtherText(text)) return "esim";
+  if (/\b(usb|office|supplies|supply|material|materials)\b/.test(text)) return "materials";
+  if (KOREA_INVOICE_KIND_ORDER.includes(category as (typeof KOREA_INVOICE_KIND_ORDER)[number])) return category;
   return "other";
 }
 
@@ -109,13 +125,13 @@ function dateSortValue(value: string): number {
 }
 
 export function sortReceiptsForReport(items: ReceiptItem[], formVersion: "USA" | "Korea"): ReceiptItem[] {
-  const order = formVersion === "Korea" ? KOREA_REPORT_CATEGORY_ORDER : USA_REPORT_CATEGORY_ORDER;
+  const order = formVersion === "Korea" ? KOREA_INVOICE_KIND_ORDER : USA_REPORT_CATEGORY_ORDER;
   const orderIndex = new Map<string, number>(order.map((category, index) => [category, index]));
   return items
     .map((item, index) => ({
       item,
       index,
-      category: reportCategoryForItem(item, formVersion),
+      category: formVersion === "Korea" ? koreaInvoiceKindForItem(item) : reportCategoryForItem(item, formVersion),
       date: dateSortValue(item.date)
     }))
     .sort((left, right) => {

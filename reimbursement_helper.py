@@ -340,6 +340,23 @@ KOREA_REPORT_CATEGORY_ORDER = [
     "other",
 ]
 
+KOREA_INVOICE_KIND_ORDER = [
+    "car_rental",
+    "fuel",
+    "parking",
+    "transportation",
+    "esim",
+    "materials",
+    "physical_exam",
+    "lodging",
+    "nucleic_test",
+    "meals",
+    "courier",
+    "consumables",
+    "welfare",
+    "other",
+]
+
 KOREA_COVER_ROWS: Dict[str, Tuple[int, str]] = {
     "transportation": (4, "交通费"),
     "consumables": (5, "消耗品"),
@@ -1166,14 +1183,107 @@ def is_korea_other_text(value: str) -> bool:
     )
 
 
+def item_search_text(item: Any) -> str:
+    return " ".join(
+        str(getattr(item, attr, "") or "")
+        for attr in ("category", "purpose", "details", "receipt_label", "place", "filename", "payment_method")
+    ).lower()
+
+
+def korea_invoice_kind_for_item(item: Any) -> str:
+    text = item_search_text(item)
+    category = report_category_for_item(item, "Korea")
+    if re.search(r"\b(national|car rental|rental car|rent[- ]?a[- ]?car|rental|avis|hertz|enterprise|budget|alamo)\b", text):
+        return "car_rental"
+    if re.search(r"\b(fuel|gas|gasoline|petrol|shell|bp|chevron|exxon)\b", text):
+        return "fuel"
+    if re.search(r"\b(parking|park|toll)\b", text):
+        return "parking"
+    if is_korea_other_text(text):
+        return "esim"
+    if re.search(r"\b(usb|office|supplies|supply|material|materials)\b", text):
+        return "materials"
+    if category in KOREA_INVOICE_KIND_ORDER:
+        return category
+    return "other"
+
+
+def korea_detail_content(item: "ReceiptItem") -> str:
+    text = item_search_text(item)
+    category = report_category_for_item(item, "Korea")
+    if korea_invoice_kind_for_item(item) == "car_rental":
+        return "\u79df\u8f66\u8d39\u7528"
+    if re.search(r"\b(fuel|gas|gasoline|petrol|shell|bp|chevron|exxon)\b", text):
+        return "\u7528\u8f66\u52a0\u6cb9"
+    if re.search(r"\b(parking|park)\b", text):
+        return "\u505c\u8f66\u8d39"
+    if re.search(r"\btoll\b", text):
+        return "\u8fc7\u8def\u8d39"
+    if is_korea_other_text(text):
+        return "ESIM\u6d41\u91cf\u865a\u62df\u5361"
+    if re.search(r"\busb\b", text):
+        return "\u8d2d\u4e70USB"
+    if category == "materials":
+        return "\u7269\u6599\u91c7\u8d2d"
+    if category == "physical_exam":
+        return "\u4f53\u68c0\u8d39"
+    if category == "lodging":
+        return "\u4f4f\u5bbf\u8d39"
+    if category == "nucleic_test":
+        return "\u6838\u9178\u68c0\u6d4b\u8d39"
+    if category == "meals":
+        return "\u9910\u8d39"
+    if category == "courier":
+        return "\u5feb\u9012\u8d39"
+    if category == "consumables":
+        return "\u6d88\u8017\u54c1"
+    if category == "welfare":
+        return "\u798f\u5229\u8d39"
+    return item.purpose.strip() or item.details.strip() or item.receipt_label.strip() or item.filename
+
+
+def korea_detail_location(item: "ReceiptItem") -> str:
+    text = item_search_text(item)
+    currency = normalize_currency(item.currency, "KRW")
+    if (
+        currency == "USD"
+        or korea_invoice_kind_for_item(item) in {"car_rental", "fuel", "parking", "esim", "materials"}
+        or re.search(r"\b(usa|u\.s\.a|united states|ga|mi|il|ca|ny|atlanta|duluth|utica|chicago)\b", text)
+    ):
+        return "\u7f8e\u56fd"
+    if any(token in text for token in ("korea", "\ud55c\uad6d", "\ub300\ud55c\ubbfc\uad6d")):
+        return "\u97e9\u56fd"
+    if any(token in text for token in ("china", "macao", "macau", "\u4e2d\u56fd", "\u6fb3\u95e8")):
+        return "\u4e2d\u56fd"
+    return item.place.strip()
+
+
+def korea_payment_method_text(item: "ReceiptItem") -> str:
+    raw = (item.payment_method or "").strip()
+    text = raw.lower()
+    if "master" in text:
+        return "MASTERCARD"
+    if "visa" in text:
+        return "VISA"
+    if "wechat" in text or "weixin" in text or "\u5fae\u4fe1" in text:
+        return "wechat"
+    if "credit" in text:
+        return "Credit Card"
+    if text == "card":
+        return "Credit Card"
+    return raw
+
+
+def korea_receipt_block_is_wide(item: "ReceiptItem") -> bool:
+    text = item_search_text(item)
+    return korea_invoice_kind_for_item(item) == "car_rental" or "national" in text or len(ensure_receipt_images(item)) > 1
+
+
 def report_category_for_item(item: Any, form_version: str) -> str:
     version = normalized_form_version(form_version)
     category = category_value_to_key(str(getattr(item, "category", "") or ""), version)
     if version == "Korea":
-        searchable = " ".join(
-            str(getattr(item, attr, "") or "")
-            for attr in ("category", "purpose", "details", "receipt_label", "place", "filename")
-        )
+        searchable = item_search_text(item)
         if is_korea_other_text(searchable):
             return "other"
         if category in KOREA_CATEGORY_COLUMNS:
@@ -1199,11 +1309,11 @@ def date_sort_value(value: str) -> float:
 
 def sort_receipts_for_report(items: List[Any], form_version: str) -> List[Any]:
     version = normalized_form_version(form_version)
-    order = KOREA_REPORT_CATEGORY_ORDER if version == "Korea" else USA_REPORT_CATEGORY_ORDER
+    order = KOREA_INVOICE_KIND_ORDER if version == "Korea" else USA_REPORT_CATEGORY_ORDER
     order_index = {category: index for index, category in enumerate(order)}
     indexed = [
         (
-            order_index.get(report_category_for_item(item, version), len(order)),
+            order_index.get(korea_invoice_kind_for_item(item) if version == "Korea" else report_category_for_item(item, version), len(order)),
             date_sort_value(str(getattr(item, "date", "") or "")),
             index,
             item,
@@ -1474,6 +1584,7 @@ def prepare_attachment_contact_sheet(
     max_width: int,
     max_height: int,
     allow_upscale: bool = False,
+    stretch_tiles: bool = False,
 ) -> Optional[Path]:
     if Image is None:
         return None
@@ -1502,7 +1613,11 @@ def prepare_attachment_contact_sheet(
     sheet = Image.new("RGB", (max_width, max_height), "white")
     for index, img in enumerate(prepared_images):
         tile = img.copy()
-        if allow_upscale:
+        if stretch_tiles:
+            resampling = getattr(Image, "Resampling", None)
+            resample = getattr(resampling, "LANCZOS", getattr(Image, "LANCZOS", Image.BICUBIC))
+            tile = tile.resize((cell_width, cell_height), resample)
+        elif allow_upscale:
             scale = min(cell_width / max(1, tile.width), cell_height / max(1, tile.height))
             resampling = getattr(Image, "Resampling", None)
             resample = getattr(resampling, "LANCZOS", getattr(Image, "LANCZOS", Image.BICUBIC))
@@ -1524,8 +1639,9 @@ def resize_attachment_contact_sheet(
     max_width: int,
     max_height: int,
     allow_upscale: bool = False,
+    stretch_tiles: bool = False,
 ) -> Optional[Any]:
-    contact_path = prepare_attachment_contact_sheet(attachments, max_width, max_height, allow_upscale)
+    contact_path = prepare_attachment_contact_sheet(attachments, max_width, max_height, allow_upscale, stretch_tiles)
     if contact_path is None:
         return None
     img = XLImage(str(contact_path))
@@ -1574,7 +1690,7 @@ def configure_korea_receipt_page(sheet: Any, slot_count: int) -> None:
         except Exception:
             pass
     if sheet.sheet_properties.pageSetUpPr is not None:
-        sheet.sheet_properties.pageSetUpPr.fitToPage = False
+        sheet.sheet_properties.pageSetUpPr.fitToPage = True
     sheet.page_setup.orientation = "portrait"
     sheet.page_setup.scale = 78
     sheet.page_setup.fitToWidth = None
@@ -1635,13 +1751,7 @@ def korea_receipt_payment_label(index: int, item: "ReceiptItem") -> str:
     details: List[str] = []
     if item.date.strip():
         details.append(item.date.strip())
-    content = (
-        item.purpose.strip()
-        or item.details.strip()
-        or item.receipt_label.strip()
-        or item.place.strip()
-        or item.filename
-    )
+    content = korea_detail_content(item)
     if content:
         details.append(content)
     cost = korea_receipt_cost_text(item)
@@ -1667,6 +1777,7 @@ def add_korea_receipt_block(
     label: str,
     attachments: List[Dict[str, Any]],
     wide: bool = False,
+    stretch_tiles: bool = True,
 ) -> None:
     slot = korea_receipt_slot(index, wide=wide)
     label_row = int(re.sub(r"^[A-Z]+", "", str(slot["label_cell"])))
@@ -1681,6 +1792,7 @@ def add_korea_receipt_block(
         int(slot["max_width"]),
         int(slot["max_height"]),
         allow_upscale=True,
+        stretch_tiles=stretch_tiles,
     )
     if receipt_image is not None:
         receipt_image.width = int(slot["max_width"])
@@ -1841,8 +1953,8 @@ def korea_amounts(
     if rmb is None and krw is not None and krw_to_rmb_rate:
         rmb = krw * krw_to_rmb_rate
     note = ""
-    if amount is not None and currency not in {"KRW", "RMB", "CNY"}:
-        note = f"({amount:g} {currency})"
+    if amount is not None and currency == "USD":
+        note = f"{amount:g} USD"
     return krw, rmb, note
 
 
@@ -1856,6 +1968,16 @@ def korea_cover_bucket(category: str) -> str:
     if category in {"materials", "consumables", "office"}:
         return "consumables"
     return "other"
+
+
+def korea_receipt_slot_count(items: List["ReceiptItem"], has_exchange_rate: bool = False) -> int:
+    slot_index = 2 if has_exchange_rate else 0
+    for item in items:
+        wide = korea_receipt_block_is_wide(item)
+        if wide and slot_index % 2:
+            slot_index += 1
+        slot_index += 2 if wide else 1
+    return max(1, slot_index)
 
 
 def export_korea(
@@ -1884,9 +2006,9 @@ def export_korea(
     except Exception:
         pass
     clear_freeze_panes(detail_ws)
-    detail_ws.print_area = "A1:S35"
+    detail_ws.print_area = "A1:S34"
     if detail_ws.sheet_properties.pageSetUpPr is not None:
-        detail_ws.sheet_properties.pageSetUpPr.fitToPage = False
+        detail_ws.sheet_properties.pageSetUpPr.fitToPage = True
     detail_ws.page_setup.orientation = "landscape"
     detail_ws.page_setup.scale = 34
     detail_ws.page_setup.fitToWidth = None
@@ -1924,6 +2046,9 @@ def export_korea(
     detail_ws["Q33"].number_format = KRW_NUMBER_FORMAT
     detail_ws["A34"] = "合计（人民币）\nTotal"
     detail_ws["R34"] = "=SUM(R3:R33)"
+    detail_ws.row_dimensions[33].height = 35.4
+    detail_ws.row_dimensions[34].height = 50.4
+    detail_ws.row_dimensions[35].height = None
 
     summary: Dict[str, Tuple[float, float]] = {
         key: (0.0, 0.0) for key in KOREA_COVER_ROWS
@@ -1937,8 +2062,8 @@ def export_korea(
         krw, rmb, original_note = korea_amounts(item, krw_to_rmb_rate, usd_to_rmb_rate, usd_to_krw_rate)
         krw_whole = truncate_amount(krw)
         detail_ws[f"A{index}"] = excel_date_formula_or_value(item.date)
-        detail_ws[f"B{index}"] = item.purpose.strip() or item.details.strip()
-        detail_ws[f"C{index}"] = item.place.strip()
+        detail_ws[f"B{index}"] = korea_detail_content(item)
+        detail_ws[f"C{index}"] = korea_detail_location(item)
         detail_ws[f"D{index}"] = ""
         detail_ws[f"E{index}"] = item.project_number.strip()
         category_col = KOREA_CATEGORY_COLUMNS[category]
@@ -1948,7 +2073,7 @@ def export_korea(
         detail_ws[f"Q{index}"] = krw_whole
         detail_ws[f"Q{index}"].number_format = KRW_NUMBER_FORMAT
         detail_ws[f"R{index}"] = rmb
-        detail_ws[f"S{index}"] = item.payment_method.strip()
+        detail_ws[f"S{index}"] = korea_payment_method_text(item)
         bucket = korea_cover_bucket(category)
         cur_krw, cur_rmb = summary[bucket]
         summary[bucket] = (cur_krw + (krw_whole or 0), cur_rmb + (rmb or 0.0))
@@ -1963,7 +2088,7 @@ def export_korea(
     clear_images(receipts_ws)
     fit_columns_for_receipts(receipts_ws)
     exchange_rate_attachments = [attachment_from_item(item) for item in exchange_rate_items or []]
-    slot_count = len(sorted_items) + (2 if exchange_rate_attachments else 0)
+    slot_count = korea_receipt_slot_count(sorted_items, bool(exchange_rate_attachments))
     configure_korea_receipt_page(receipts_ws, slot_count)
     page_height = 60
     slots_per_page = 4
@@ -1974,16 +2099,21 @@ def export_korea(
             receipts_ws[f"{col}{row}"] = None
     block_index = 0
     if exchange_rate_attachments:
-        add_korea_receipt_block(receipts_ws, block_index, "汇率 / Exchange Rate", exchange_rate_attachments, wide=True)
+        add_korea_receipt_block(receipts_ws, block_index, "汇率 / Exchange Rate", exchange_rate_attachments, wide=True, stretch_tiles=False)
         block_index += 2
     for idx, item in enumerate(sorted_items):
+        wide = korea_receipt_block_is_wide(item)
+        if wide and block_index % 2:
+            block_index += 1
         add_korea_receipt_block(
             receipts_ws,
             block_index,
             korea_receipt_payment_label(idx + 1, item),
             ensure_receipt_images(item),
+            wide=wide,
+            stretch_tiles=True,
         )
-        block_index += 1
+        block_index += 2 if wide else 1
 
     wb.save(output_path)
 

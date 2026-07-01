@@ -4,9 +4,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { receipt } from "./test/factories";
 import {
   exportKoreaWorkbook,
+  koreaDetailContent,
+  koreaDetailLocation,
+  koreaPaymentMethodText,
   koreaReceiptImageSlots,
   koreaReceiptLastRow,
   koreaReceiptPaymentLabel,
+  koreaReceiptShouldBeWide,
   koreaReceiptWideSlot,
   mapKoreaDetailRows,
   mapUsaExpenseRows
@@ -39,7 +43,7 @@ describe("Excel row mapping", () => {
     expect(rows[0].categoryColumn).toBe("F");
     expect(rows[0].krw).toBe(14000);
     expect(rows[0].rmb).toBe(70);
-    expect(rows[0].note).toBe("(10 USD)");
+    expect(rows[0].note).toBe("10 USD");
   });
 
   it("truncates Korea KRW values instead of rounding them", () => {
@@ -61,17 +65,17 @@ describe("Excel row mapping", () => {
     expect(rows[0].item.paymentMethod).toBe("Visa");
   });
 
-  it("sorts Korea detail rows by category order and then date", () => {
+  it("sorts Korea detail rows by invoice kind and then date", () => {
     const rows = mapKoreaDetailRows(
       [
-        receipt({ id: "other", category: "other", date: "2026-06-01" }),
-        receipt({ id: "transport-late", category: "transportation", date: "2026-06-20" }),
-        receipt({ id: "transport-early", category: "transportation", date: "2026-06-10" })
+        receipt({ id: "usb", category: "materials", purpose: "USB", date: "2026-06-28" }),
+        receipt({ id: "fuel", category: "transportation", purpose: "Fuel", date: "2026-06-10" }),
+        receipt({ id: "rental", category: "transportation", purpose: "National car rental", date: "2026-06-16" })
       ],
       { usdToRmb: 7, usdToKrw: 1400, krwToRmb: 0.005 }
     );
 
-    expect(rows.map((row) => row.item.id)).toEqual(["transport-early", "transport-late", "other"]);
+    expect(rows.map((row) => row.item.id)).toEqual(["rental", "fuel", "usb"]);
   });
 
   it("exports eSIM-like Korea expenses to other column O", () => {
@@ -98,8 +102,18 @@ describe("Excel row mapping", () => {
 
   it("builds Korea payment labels from only date, content, and amount", () => {
     expect(koreaReceiptPaymentLabel(0, receipt({ paymentMethod: "Visa", date: "2026-06-19", purpose: "Parking", amount: "27.00", currency: "USD" }))).toBe(
-      "2026-06-19 | Parking | 27.00 USD"
+      "2026-06-19 | \u505c\u8f66\u8d39 | 27.00 USD"
     );
+  });
+
+  it("cleans common Korea detail labels, location, payment method, and wide receipt choice", () => {
+    const rental = receipt({ purpose: "National car rental", place: "ATLANTA INTL ARPT, GA", paymentMethod: "MASTERCARD (1723)", currency: "USD" });
+    const esim = receipt({ purpose: "eSIM data plan", details: "internet access", currency: "RMB" });
+
+    expect(koreaDetailContent(rental)).toBe("\u79df\u8f66\u8d39\u7528");
+    expect(koreaDetailLocation(esim)).toBe("\u7f8e\u56fd");
+    expect(koreaPaymentMethodText(rental)).toBe("MASTERCARD");
+    expect(koreaReceiptShouldBeWide(rental)).toBe(true);
   });
 
   it("ships the Korea web template without a frozen detail pane", async () => {
@@ -157,6 +171,6 @@ describe("Excel row mapping", () => {
     const rawWorkbook = await downloadedBlob!.arrayBuffer();
     await workbook.xlsx.load(Buffer.from(new Uint8Array(rawWorkbook)));
     expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual(["报销明细", "境外同事报销使用", "发票"]);
-    expect(workbook.getWorksheet("发票")?.getCell("A1").value).toBe("2026-06-19 | Parking | 27 USD");
+    expect(workbook.getWorksheet("发票")?.getCell("A1").value).toBe("2026-06-19 | \u505c\u8f66\u8d39 | 27 USD");
   });
 });

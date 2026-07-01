@@ -25,6 +25,23 @@ export const KOREA_REPORT_CATEGORY_ORDER = [
   "other"
 ] as const;
 
+export const KOREA_INVOICE_KIND_ORDER = [
+  "car_rental",
+  "fuel",
+  "parking",
+  "transportation",
+  "esim",
+  "materials",
+  "physical_exam",
+  "lodging",
+  "nucleic_test",
+  "meals",
+  "courier",
+  "consumables",
+  "welfare",
+  "other"
+] as const;
+
 export const USA_CATEGORY_LABELS: Record<Category, string> = {
   transportation: "Transportation",
   lodging: "Lodging",

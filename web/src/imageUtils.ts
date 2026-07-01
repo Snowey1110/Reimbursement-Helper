@@ -363,10 +363,13 @@ export async function makeContactSheet(
   attachments: ImageAttachment[],
   maxWidth: number,
   maxHeight: number,
-  allowUpscale = false
+  allowUpscale = false,
+  stretchTiles = false
 ): Promise<PreparedImageData | undefined> {
   if (!attachments.length) return undefined;
-  if (attachments.length === 1) return preparedImageDataUrl(attachments[0], maxWidth, maxHeight, allowUpscale);
+  if (attachments.length === 1 && !stretchTiles && !allowUpscale) {
+    return preparedImageDataUrl(attachments[0], maxWidth, maxHeight, allowUpscale);
+  }
   const cols = Math.min(2, attachments.length);
   const rows = Math.ceil(attachments.length / cols);
   const renderScale = 2;
@@ -387,14 +390,18 @@ export async function makeContactSheet(
   context.fillRect(0, 0, canvas.width, canvas.height);
   for (let index = 0; index < prepared.length; index += 1) {
     const image = await loadImage(prepared[index].dataUrl);
-    const scale = Math.min(cellWidth / image.naturalWidth, cellHeight / image.naturalHeight, allowUpscale ? Number.POSITIVE_INFINITY : 1);
-    const width = image.naturalWidth * scale;
-    const height = image.naturalHeight * scale;
     const col = index % cols;
     const row = Math.floor(index / cols);
-    const x = col * (cellWidth + gutter) + (cellWidth - width) / 2;
-    const y = row * (cellHeight + gutter) + (cellHeight - height) / 2;
-    context.drawImage(image, x, y, width, height);
+    if (stretchTiles) {
+      context.drawImage(image, col * (cellWidth + gutter), row * (cellHeight + gutter), cellWidth, cellHeight);
+    } else {
+      const scale = Math.min(cellWidth / image.naturalWidth, cellHeight / image.naturalHeight, allowUpscale ? Number.POSITIVE_INFINITY : 1);
+      const width = image.naturalWidth * scale;
+      const height = image.naturalHeight * scale;
+      const x = col * (cellWidth + gutter) + (cellWidth - width) / 2;
+      const y = row * (cellHeight + gutter) + (cellHeight - height) / 2;
+      context.drawImage(image, x, y, width, height);
+    }
   }
   return { dataUrl: canvasToDataUrl(canvas), width: canvas.width, height: canvas.height, displayWidth: maxWidth, displayHeight: maxHeight };
 }

@@ -69,18 +69,19 @@ describe("payment proof matching", () => {
 });
 
 describe("report sorting", () => {
-  it("groups receipts by report category first and then by date", () => {
+  it("groups Korea receipts by invoice kind first and then by date", () => {
     const sorted = sortReceiptsForReport(
       [
-        receipt({ id: "late-transport", category: "transportation", date: "2026-06-20" }),
-        receipt({ id: "early-other", category: "other", date: "2026-06-01" }),
-        receipt({ id: "early-transport", category: "transportation", date: "2026-06-10" }),
-        receipt({ id: "lodging", category: "lodging", date: "2026-06-05" })
+        receipt({ id: "usb", category: "materials", purpose: "USB", date: "2026-06-28" }),
+        receipt({ id: "fuel-late", category: "transportation", purpose: "Fuel", date: "2026-06-16" }),
+        receipt({ id: "esim", category: "transportation", purpose: "eSIM data plan", date: "2026-06-25" }),
+        receipt({ id: "fuel-early", category: "transportation", purpose: "Gas", date: "2026-06-10" }),
+        receipt({ id: "rental", category: "transportation", purpose: "National car rental", date: "2026-06-16" })
       ],
       "Korea"
     );
 
-    expect(sorted.map((item) => item.id)).toEqual(["early-transport", "late-transport", "lodging", "early-other"]);
+    expect(sorted.map((item) => item.id)).toEqual(["rental", "fuel-early", "fuel-late", "esim", "usb"]);
   });
 
   it("classifies eSIM and data plans as Korea other", () => {

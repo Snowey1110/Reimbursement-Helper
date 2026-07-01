@@ -252,7 +252,7 @@ label {
   display: grid;
   grid-template-columns: 1fr;
   border: 1px solid #17202a;
-  min-height: clamp(330px, calc(100vh - 335px), 560px);
+  min-height: clamp(380px, calc(100vh - 285px), 720px);
   background: #f5f7fa;
   overflow: auto;
 }
@@ -296,7 +296,7 @@ label {
 }
 
 .crop-stage {
-  min-height: clamp(300px, calc(100vh - 360px), 560px);
+  min-height: clamp(350px, calc(100vh - 315px), 720px);
   border: 1px solid #17202a;
   background: #ffffff;
   display: flex;
@@ -320,7 +320,7 @@ label {
 .crop-image {
   display: block;
   max-width: 100%;
-  max-height: clamp(270px, calc(100vh - 410px), 520px);
+  max-height: clamp(320px, calc(100vh - 365px), 680px);
   object-fit: contain;
   user-select: none;
   pointer-events: none;
