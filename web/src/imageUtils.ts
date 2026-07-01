@@ -38,6 +38,14 @@ export function canvasToDataUrl(canvas: HTMLCanvasElement, type = "image/png"): 
   return canvas.toDataURL(type);
 }
 
+export interface PreparedImageData {
+  dataUrl: string;
+  width: number;
+  height: number;
+  displayWidth?: number;
+  displayHeight?: number;
+}
+
 export function stackedPageLayout(
   pages: Array<{ width: number; height: number }>,
   gutter = 24
@@ -320,7 +328,7 @@ export async function preparedImageDataUrl(
   maxWidth = 900,
   maxHeight = 900,
   allowUpscale = false
-): Promise<{ dataUrl: string; width: number; height: number }> {
+): Promise<PreparedImageData> {
   const image = await loadImage(attachment.dataUrl);
   const rotation = normalizedRotation(attachment.rotationDegrees);
   const rotatedWidth = rotation === 90 || rotation === 270 ? image.naturalHeight : image.naturalWidth;
@@ -356,18 +364,23 @@ export async function makeContactSheet(
   maxWidth: number,
   maxHeight: number,
   allowUpscale = false
-): Promise<{ dataUrl: string; width: number; height: number } | undefined> {
+): Promise<PreparedImageData | undefined> {
   if (!attachments.length) return undefined;
   if (attachments.length === 1) return preparedImageDataUrl(attachments[0], maxWidth, maxHeight, allowUpscale);
-  const prepared = await Promise.all(attachments.map((attachment) => preparedImageDataUrl(attachment, maxWidth / 2, maxHeight / 2, allowUpscale)));
-  const cols = Math.min(2, prepared.length);
-  const rows = Math.ceil(prepared.length / cols);
-  const gutter = 8;
-  const cellWidth = Math.floor((maxWidth - gutter * (cols - 1)) / cols);
-  const cellHeight = Math.floor((maxHeight - gutter * (rows - 1)) / rows);
+  const cols = Math.min(2, attachments.length);
+  const rows = Math.ceil(attachments.length / cols);
+  const renderScale = 2;
+  const renderWidth = Math.round(maxWidth * renderScale);
+  const renderHeight = Math.round(maxHeight * renderScale);
+  const gutter = 8 * renderScale;
+  const cellWidth = Math.floor((renderWidth - gutter * (cols - 1)) / cols);
+  const cellHeight = Math.floor((renderHeight - gutter * (rows - 1)) / rows);
+  const prepared = await Promise.all(
+    attachments.map((attachment) => preparedImageDataUrl(attachment, cellWidth, cellHeight, allowUpscale))
+  );
   const canvas = document.createElement("canvas");
-  canvas.width = maxWidth;
-  canvas.height = maxHeight;
+  canvas.width = renderWidth;
+  canvas.height = renderHeight;
   const context = canvas.getContext("2d");
   if (!context) throw new Error("Could not create contact sheet.");
   context.fillStyle = "#ffffff";
@@ -383,5 +396,5 @@ export async function makeContactSheet(
     const y = row * (cellHeight + gutter) + (cellHeight - height) / 2;
     context.drawImage(image, x, y, width, height);
   }
-  return { dataUrl: canvasToDataUrl(canvas), width: canvas.width, height: canvas.height };
+  return { dataUrl: canvasToDataUrl(canvas), width: canvas.width, height: canvas.height, displayWidth: maxWidth, displayHeight: maxHeight };
 }

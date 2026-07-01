@@ -165,7 +165,7 @@ async function addImageToCell(
   }
   sheet.addImage(imageId, {
     tl: { col: col - 1, row },
-    ext: { width: prepared.width, height: prepared.height }
+    ext: { width: prepared.displayWidth ?? prepared.width, height: prepared.displayHeight ?? prepared.height }
   });
 }
 
