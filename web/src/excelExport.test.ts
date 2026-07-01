@@ -1,8 +1,21 @@
 import ExcelJS from "exceljs";
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { receipt } from "./test/factories";
-import { koreaReceiptImageSlots, koreaReceiptLastRow, koreaReceiptPaymentLabel, koreaReceiptWideSlot, mapKoreaDetailRows, mapUsaExpenseRows } from "./excelExport";
+import {
+  exportKoreaWorkbook,
+  koreaReceiptImageSlots,
+  koreaReceiptLastRow,
+  koreaReceiptPaymentLabel,
+  koreaReceiptWideSlot,
+  mapKoreaDetailRows,
+  mapUsaExpenseRows
+} from "./excelExport";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe("Excel row mapping", () => {
   it("maps USA expenses into the existing category rows", () => {
@@ -48,6 +61,29 @@ describe("Excel row mapping", () => {
     expect(rows[0].item.paymentMethod).toBe("Visa");
   });
 
+  it("sorts Korea detail rows by category order and then date", () => {
+    const rows = mapKoreaDetailRows(
+      [
+        receipt({ id: "other", category: "other", date: "2026-06-01" }),
+        receipt({ id: "transport-late", category: "transportation", date: "2026-06-20" }),
+        receipt({ id: "transport-early", category: "transportation", date: "2026-06-10" })
+      ],
+      { usdToRmb: 7, usdToKrw: 1400, krwToRmb: 0.005 }
+    );
+
+    expect(rows.map((row) => row.item.id)).toEqual(["transport-early", "transport-late", "other"]);
+  });
+
+  it("exports eSIM-like Korea expenses to other column O", () => {
+    const rows = mapKoreaDetailRows(
+      [receipt({ id: "esim", category: "transportation", purpose: "eSIM data plan", details: "internet access", amount: "1000", currency: "KRW" })],
+      { usdToRmb: 7, usdToKrw: 1400, krwToRmb: 0.005 }
+    );
+
+    expect(rows[0].category).toBe("other");
+    expect(rows[0].categoryColumn).toBe("O");
+  });
+
   it("keeps Korea receipt payment labels next to their image slots", () => {
     expect(koreaReceiptLastRow(5)).toBe(120);
     expect(koreaReceiptImageSlots(5)).toEqual([
@@ -72,5 +108,55 @@ describe("Excel row mapping", () => {
     const details = workbook.worksheets[1];
 
     expect(details?.views.some((view) => view.state === "frozen")).toBe(false);
+  });
+
+  it("generates a Korea workbook download without ExcelJS write errors", async () => {
+    const template = readFileSync("public/templates/korea_reimbursement_template.xlsx");
+    class TestBlob {
+      parts: Array<ArrayBuffer | ArrayBufferView | string>;
+      type: string;
+
+      constructor(parts: Array<ArrayBuffer | ArrayBufferView | string>, options: { type?: string } = {}) {
+        this.parts = parts;
+        this.type = options.type ?? "";
+      }
+
+      async arrayBuffer(): Promise<ArrayBuffer> {
+        const part = this.parts[0];
+        if (part instanceof ArrayBuffer) return part;
+        if (ArrayBuffer.isView(part)) return part.buffer.slice(part.byteOffset, part.byteOffset + part.byteLength) as ArrayBuffer;
+        return new TextEncoder().encode(String(part)).buffer as ArrayBuffer;
+      }
+    }
+    vi.stubGlobal("Blob", TestBlob);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(template))
+    );
+    let downloadedBlob: TestBlob | undefined;
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn((blob: TestBlob) => {
+        downloadedBlob = blob;
+        return "blob:workbook";
+      }),
+      revokeObjectURL: vi.fn()
+    });
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+
+    await expect(
+      exportKoreaWorkbook(
+        [receipt({ id: "r1", category: "transportation", date: "2026-06-19", amount: "27", currency: "USD", images: [] })],
+        { usdToRmb: 6.8175, usdToKrw: 1548.86, krwToRmb: 0.004402959 },
+        []
+      )
+    ).resolves.toBeUndefined();
+
+    expect(clickSpy).toHaveBeenCalled();
+    expect(downloadedBlob).toBeDefined();
+    const workbook = new ExcelJS.Workbook();
+    const rawWorkbook = await downloadedBlob!.arrayBuffer();
+    await workbook.xlsx.load(Buffer.from(new Uint8Array(rawWorkbook)));
+    expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual(["报销明细", "境外同事报销使用", "发票"]);
+    expect(workbook.getWorksheet("发票")?.getCell("A1").value).toBe("2026-06-19 | Parking | 27 USD");
   });
 });

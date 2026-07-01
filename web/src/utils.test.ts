@@ -4,7 +4,9 @@ import {
   matchPaymentProofs,
   mergeSameUsaReceipts,
   normalizeCurrency,
+  reportCategoryForItem,
   swapProofForReceipt,
+  sortReceiptsForReport,
   updateAmounts
 } from "./utils";
 
@@ -63,5 +65,27 @@ describe("payment proof matching", () => {
     expect(result.selectedProofId).toBe("p2");
     expect(result.proofs.find((entry) => entry.id === "p1")?.matchedReceiptId).toBe("");
     expect(result.proofs.find((entry) => entry.id === "p2")?.matchedReceiptId).toBe("r1");
+  });
+});
+
+describe("report sorting", () => {
+  it("groups receipts by report category first and then by date", () => {
+    const sorted = sortReceiptsForReport(
+      [
+        receipt({ id: "late-transport", category: "transportation", date: "2026-06-20" }),
+        receipt({ id: "early-other", category: "other", date: "2026-06-01" }),
+        receipt({ id: "early-transport", category: "transportation", date: "2026-06-10" }),
+        receipt({ id: "lodging", category: "lodging", date: "2026-06-05" })
+      ],
+      "Korea"
+    );
+
+    expect(sorted.map((item) => item.id)).toEqual(["early-transport", "late-transport", "lodging", "early-other"]);
+  });
+
+  it("classifies eSIM and data plans as Korea other", () => {
+    const item = receipt({ category: "transportation", purpose: "eSIM data plan", details: "internet access" });
+
+    expect(reportCategoryForItem(item, "Korea")).toBe("other");
   });
 });

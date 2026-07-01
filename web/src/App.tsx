@@ -21,13 +21,13 @@ import {
   DEFAULT_USD_TO_KRW,
   DEFAULT_USD_TO_RMB,
   FORM_VERSION_STORAGE_KEY,
+  LANGUAGE_STORAGE_KEY,
   KOREA_TEMPLATE_URL,
-  KOREA_CATEGORY_LABELS,
   USA_TEMPLATE_URL,
-  USA_CATEGORY_LABELS
 } from "./constants";
 import { exportKoreaWorkbook, exportUsaWorkbook } from "./excelExport";
 import { defaultCropPoints, fileToAttachment, orientedImageDataUrl, orientedImageSize, rotateCropPoints } from "./imageUtils";
+import { CATEGORY_LABELS, LANGUAGE_OPTIONS, normalizeLanguage, text, type AppLanguage } from "./i18n";
 import type { Category, CropPoint, Currency, ExchangeRates, ImageAttachment, PaymentProof, ReceiptItem, SelectedTile } from "./types";
 import {
   blankReceipt,
@@ -35,6 +35,7 @@ import {
   matchPaymentProofs,
   mergeSameUsaReceipts,
   normalizeCurrency,
+  sortReceiptsForReport,
   swapProofForReceipt,
   updateAmounts,
   uid
@@ -53,7 +54,17 @@ function readStoredFormVersion(): FormVersion {
   }
 }
 
+function readStoredLanguage(): AppLanguage {
+  try {
+    return normalizeLanguage(localStorage.getItem(LANGUAGE_STORAGE_KEY));
+  } catch {
+    return "en";
+  }
+}
+
 export default function App() {
+  const initialLanguage = readStoredLanguage();
+  const [language, setLanguage] = useState<AppLanguage>(initialLanguage);
   const [formVersion, setFormVersion] = useState<FormVersion>(() => readStoredFormVersion());
   const [items, setItems] = useState<ReceiptItem[]>([]);
   const [proofs, setProofs] = useState<PaymentProof[]>([]);
@@ -65,7 +76,7 @@ export default function App() {
   const [showApiKey, setShowApiKey] = useState(false);
   const [model, setModel] = useState(DEFAULT_MODEL);
   const [rates, setRates] = useState<ExchangeRates>({ usdToRmb: DEFAULT_USD_TO_RMB, usdToKrw: DEFAULT_USD_TO_KRW, krwToRmb: DEFAULT_KRW_TO_RMB });
-  const [status, setStatus] = useState("Ready");
+  const [status, setStatus] = useState(() => text(initialLanguage, "ready"));
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
   const [readyForExport, setReadyForExport] = useState(false);
@@ -76,7 +87,8 @@ export default function App() {
 
   const selectedItem = selectedIds.length ? items.find((item) => item.id === selectedIds[selectedIds.length - 1]) ?? null : null;
   const selectedProofs = selectedItem ? proofs.filter((proof) => proof.matchedReceiptId === selectedItem.id) : [];
-  const categoryLabels = formVersion === "USA" ? USA_CATEGORY_LABELS : KOREA_CATEGORY_LABELS;
+  const t = (key: Parameters<typeof text>[1], values?: Record<string, string | number>) => text(language, key, values);
+  const categoryLabels = CATEGORY_LABELS[language];
   const suggestedAction = useMemo<SuggestedAction | undefined>(() => {
     if (busy) return undefined;
     if (items.length && readyForExport) return "generateExcel";
@@ -103,6 +115,19 @@ export default function App() {
       // Ignore private browsing or storage-disabled environments.
     }
   }, [formVersion]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
+    } catch {
+      // Ignore private browsing or storage-disabled environments.
+    }
+  }, [language]);
+
+  useEffect(() => {
+    const readyMessages = LANGUAGE_OPTIONS.map((option) => text(option.value, "ready"));
+    setStatus((current) => (readyMessages.includes(current) ? t("ready") : current));
+  }, [language]);
 
   useEffect(() => {
     setItems((current) =>
@@ -141,9 +166,9 @@ export default function App() {
         selectionAnchorIdRef.current = next[0].id;
         setSelectedTile({ kind: "receipt", receiptId: next[0].id, imageId: next[0].images[0].id });
       }
-      setStatus(`Added ${next.length} receipt file(s).`);
+      setStatus(t("addedReceipts", { count: next.length }));
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Could not add receipt files.");
+      setStatus(error instanceof Error ? error.message : t("receiptAddFailed"));
     } finally {
       setBusy(false);
       if (receiptInputRef.current) receiptInputRef.current.value = "";
@@ -167,9 +192,9 @@ export default function App() {
         image
       }));
       setProofs((current) => [...current, ...nextProofs]);
-      setStatus(`Added ${nextProofs.length} payment proof file(s).`);
+      setStatus(t("addedProofs", { count: nextProofs.length }));
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Could not add payment proof files.");
+      setStatus(error instanceof Error ? error.message : t("proofAddFailed"));
     } finally {
       setBusy(false);
       if (proofInputRef.current) proofInputRef.current.value = "";
@@ -184,9 +209,9 @@ export default function App() {
       const attachments = await Promise.all(Array.from(files).map(fileToAttachment));
       setExchangeRateImages(attachments);
       if (!apiKey.trim()) {
-        setStatus(`Selected ${attachments.length} 汇率 image file(s). Enter an API key to auto-read the rate.`);
+        setStatus(t("selectedExchangeNoKey", { count: attachments.length }));
       } else {
-        setStatus("Reading 汇率 image...");
+        setStatus(t("readingExchange"));
         const extractedRates = await extractKoreaExchangeRatesWithOpenAI(apiKey.trim(), model.trim() || DEFAULT_MODEL, attachments, rates.usdToRmb);
         const updated: string[] = [];
         const patch: Partial<ExchangeRates> = {};
@@ -199,10 +224,10 @@ export default function App() {
           updated.push(`KRW -> RMB ${patch.krwToRmb}`);
         }
         setRates((current) => ({ ...current, ...patch }));
-        setStatus(`Selected ${attachments.length} 汇率 image file(s). Updated ${updated.join(", ")}.`);
+        setStatus(t("selectedExchangeUpdated", { count: attachments.length, updates: updated.join(", ") }));
       }
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Could not add 汇率 image files.");
+      setStatus(error instanceof Error ? error.message : t("exchangeAddFailed"));
     } finally {
       setBusy(false);
       if (exchangeRateInputRef.current) exchangeRateInputRef.current.value = "";
@@ -212,7 +237,7 @@ export default function App() {
   async function generateSelected() {
     const targets = selectedIds.map((id) => items.find((item) => item.id === id)).filter(Boolean) as ReceiptItem[];
     if (!targets.length) {
-      setStatus("Select one or more receipts first.");
+      setStatus(t("selectReceiptsFirst"));
       return;
     }
     await generateDetails(targets, false);
@@ -220,7 +245,7 @@ export default function App() {
 
   async function generateAll() {
     if (!items.length) {
-      setStatus("Upload receipts first.");
+      setStatus(t("uploadReceiptsFirst"));
       return;
     }
     await generateDetails(items, true);
@@ -228,7 +253,7 @@ export default function App() {
 
   async function generateDetails(targets: ReceiptItem[], includeProofs: boolean) {
     if (!apiKey.trim()) {
-      setStatus("Enter an OpenAI API key first.");
+      setStatus(t("enterApiKeyFirst"));
       return;
     }
     setBusy(true);
@@ -242,7 +267,7 @@ export default function App() {
       let workingProofs = proofs;
       const total = Math.max(1, targets.length + (includeProofs && formVersion === "USA" ? workingProofs.length : 0));
       for (const item of targets) {
-        setStatus(`Reading ${item.filename}...`);
+        setStatus(t("readingReceipt", { filename: item.filename }));
         const currentItem = workingItems.find((candidate) => candidate.id === item.id) ?? item;
         const extraction = await extractReceiptWithOpenAI(apiKey.trim(), model.trim() || DEFAULT_MODEL, formVersion, currentItem);
         workingItems = workingItems.map((candidate) =>
@@ -254,10 +279,9 @@ export default function App() {
       }
       if (includeProofs && formVersion === "USA" && proofs.length) {
         workingItems = mergeSameUsaReceipts(workingItems);
-        setItems(workingItems);
         setSelectedIds((current) => current.filter((id) => workingItems.some((item) => item.id === id)));
         for (const proof of workingProofs) {
-          setStatus(`Reading payment proof ${proof.filename}...`);
+          setStatus(t("readingProof", { filename: proof.filename }));
           const tempReceipt = blankReceipt("USA", proof.image);
           const extraction = await extractReceiptWithOpenAI(apiKey.trim(), model.trim() || DEFAULT_MODEL, "USA", tempReceipt);
           workingProofs = workingProofs.map((candidate) =>
@@ -279,14 +303,17 @@ export default function App() {
         setProofs(workingProofs);
       }
       if (includeProofs) {
+        workingItems = sortReceiptsForReport(workingItems, formVersion);
+        setItems(workingItems);
+        setSelectedIds((current) => current.filter((id) => workingItems.some((item) => item.id === id)));
         setReadyForExport(true);
       }
-      setStatus("AI details generated. Review before exporting.");
+      setStatus(t("detailsGenerated"));
     } catch (error) {
       if (includeProofs) {
         setReadyForExport(false);
       }
-      setStatus(error instanceof Error ? error.message : "AI generation failed.");
+      setStatus(error instanceof Error ? error.message : t("aiFailed"));
     } finally {
       setBusy(false);
     }
@@ -304,14 +331,14 @@ export default function App() {
 
   function removeSelectedRows() {
     if (!selectedIds.length) return;
-    if (!confirm(`Remove ${selectedIds.length} selected receipt row(s)?`)) return;
+    if (!confirm(t("removeConfirm", { count: selectedIds.length }))) return;
     setItems((current) => current.filter((item) => !selectedIds.includes(item.id)));
     setProofs((current) => current.map((proof) => (selectedIds.includes(proof.matchedReceiptId) ? { ...proof, matchedReceiptId: "", status: "Needs manual review" } : proof)));
     setSelectedIds([]);
     selectionAnchorIdRef.current = null;
     setSelectedTile(null);
     setReadyForExport(false);
-    setStatus(`Removed ${selectedIds.length} receipt row(s).`);
+    setStatus(t("removedReceipts", { count: selectedIds.length }));
   }
 
   function deleteSelectedTile() {
@@ -389,7 +416,7 @@ export default function App() {
 
   async function generateExcel() {
     if (!items.length) {
-      setStatus("Upload receipts first.");
+      setStatus(t("uploadReceiptsFirst"));
       return;
     }
     setBusy(true);
@@ -399,9 +426,9 @@ export default function App() {
       } else {
         await exportKoreaWorkbook(items, rates, exchangeRateImages);
       }
-      setStatus("Workbook generated.");
+      setStatus(t("workbookGenerated"));
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Workbook generation failed.");
+      setStatus(error instanceof Error ? error.message : t("workbookFailed"));
     } finally {
       setBusy(false);
     }
@@ -444,10 +471,10 @@ export default function App() {
   return (
     <div className="app-shell">
       <header className="app-header">
-        <h1>Reimbursement Helper</h1>
+        <h1>{t("appTitle")}</h1>
         <div className="api-panel">
           <label>
-            API key
+            {t("apiKey")}
             <span className="secret-input">
               <input
                 type={showApiKey ? "text" : "password"}
@@ -456,32 +483,40 @@ export default function App() {
                 placeholder="sk-..."
                 autoComplete="off"
               />
-              <button type="button" onClick={() => setShowApiKey((value) => !value)} aria-label="Toggle API key visibility">
+              <button type="button" onClick={() => setShowApiKey((value) => !value)} aria-label={t("toggleApiKey")}>
                 {showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
             </span>
           </label>
           <label className="check-row">
             <input type="checkbox" checked={rememberKey} onChange={(event) => setRememberKey(event.target.checked)} />
-            Remember on this device
+            {t("rememberKey")}
           </label>
           <label>
-            Model
+            {t("model")}
             <input value={model} onChange={(event) => setModel(event.target.value)} list="model-options" />
             <datalist id="model-options">
               <option value={DEFAULT_MODEL} />
               <option value={ADVANCED_MODEL} />
             </datalist>
           </label>
+          <label>
+            {t("language")}
+            <select value={language} onChange={(event) => setLanguage(normalizeLanguage(event.target.value))}>
+              {LANGUAGE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
       </header>
-      <p className="security-note">
-        Static GitHub Pages calls OpenAI directly from your browser using the key you enter here. Do not use this on a shared or untrusted computer.
-      </p>
+      <p className="security-note">{t("securityNote")}</p>
 
       <section className="toolbar">
         <label className="toolbar-control">
-          Form
+          {t("form")}
           <select
             value={formVersion}
             onChange={(event) => {
@@ -494,7 +529,7 @@ export default function App() {
           </select>
         </label>
         <button type="button" className={suggestedAction === "selectFiles" ? "recommended" : ""} onClick={() => receiptInputRef.current?.click()} disabled={busy}>
-          <Upload size={17} /> Select Files
+          <Upload size={17} /> {t("selectFiles")}
         </button>
         <button
           type="button"
@@ -502,16 +537,16 @@ export default function App() {
           onClick={() => (formVersion === "USA" ? proofInputRef.current?.click() : exchangeRateInputRef.current?.click())}
           disabled={busy}
         >
-          <Upload size={17} /> {formVersion === "USA" ? "Select Payment Proof" : "Select 汇率 Image"}
+          <Upload size={17} /> {formVersion === "USA" ? t("selectPaymentProof") : t("selectExchangeRate")}
         </button>
         <button type="button" onClick={generateSelected} disabled={busy || !selectedIds.length}>
-          <Wand2 size={17} /> Generate Details
+          <Wand2 size={17} /> {t("generateDetails")}
         </button>
         <button type="button" className={suggestedAction === "generateAll" ? "recommended" : ""} onClick={generateAll} disabled={busy || !items.length}>
-          {busy ? <Loader2 className="spin" size={17} /> : <Wand2 size={17} />} Generate All
+          {busy ? <Loader2 className="spin" size={17} /> : <Wand2 size={17} />} {t("generateAll")}
         </button>
         <button type="button" className={suggestedAction === "generateExcel" ? "recommended" : ""} onClick={generateExcel} disabled={busy || !items.length}>
-          <FileSpreadsheet size={17} /> Generate Excel
+          <FileSpreadsheet size={17} /> {t("generateExcel")}
         </button>
         <input ref={receiptInputRef} type="file" multiple accept="image/*,.pdf" hidden onChange={(event) => addReceiptFiles(event.currentTarget.files)} />
         <input ref={proofInputRef} type="file" multiple accept="image/*,.pdf" hidden onChange={(event) => addProofFiles(event.currentTarget.files)} />
@@ -520,13 +555,13 @@ export default function App() {
 
       <main className="workspace">
         <section className="panel receipt-panel">
-          <h2>Inserted receipts and details</h2>
+          <h2>{t("insertedReceipts")}</h2>
           <div className="receipt-table" tabIndex={0} onKeyDown={handleRowKeyDown}>
             <div className="receipt-row receipt-heading">
-              <span>File</span>
-              <span>Status</span>
-              <span>Date</span>
-              <span>Amount</span>
+              <span>{t("file")}</span>
+              <span>{t("status")}</span>
+              <span>{t("date")}</span>
+              <span>{t("amount")}</span>
             </div>
             {items.map((item, index) => (
               <button
@@ -544,32 +579,32 @@ export default function App() {
           </div>
           <div className="row-actions">
             <button type="button" onClick={removeSelectedRows} disabled={!selectedIds.length}>
-              Remove
+              {t("remove")}
             </button>
             <button type="button" onClick={() => { setItems([]); setProofs([]); setExchangeRateImages([]); setSelectedIds([]); selectionAnchorIdRef.current = null; setSelectedTile(null); setReadyForExport(false); }}>
-              Clear
+              {t("clear")}
             </button>
           </div>
         </section>
 
         <section className="panel details-panel">
-          <h2>Details</h2>
+          <h2>{t("details")}</h2>
           <div className="rate-row">
             {formVersion === "USA" && (
               <label>
-                USD -&gt; RMB
+                {t("usdToRmb")}
                 <input type="number" value={rates.usdToRmb} step="0.0001" onChange={(event) => setRates({ ...rates, usdToRmb: Number(event.target.value) })} />
               </label>
             )}
             {formVersion === "Korea" && (
               <label>
-                USD -&gt; KRW
+                {t("usdToKrw")}
                 <input type="number" value={rates.usdToKrw} step="0.01" onChange={(event) => setRates({ ...rates, usdToKrw: Number(event.target.value) })} />
               </label>
             )}
             {formVersion === "Korea" && (
               <label>
-                KRW -&gt; RMB
+                {t("krwToRmb")}
                 <input type="number" value={rates.krwToRmb} step="0.000001" onChange={(event) => setRates({ ...rates, krwToRmb: Number(event.target.value) })} />
               </label>
             )}
@@ -579,34 +614,36 @@ export default function App() {
               item={selectedItem}
               formVersion={formVersion}
               categoryLabels={categoryLabels}
+              t={t}
               onChange={(patch, source) => updateItem(selectedItem.id, patch, source)}
             />
           ) : (
-            <p className="empty-state">Select a receipt row to edit details.</p>
+            <p className="empty-state">{t("selectReceiptToEdit")}</p>
           )}
         </section>
 
         <section className="panel preview-panel">
           <div className="preview-header">
-            <h2>Receipt preview</h2>
+            <h2>{t("receiptPreview")}</h2>
             <div className="icon-row">
-              <button type="button" onClick={() => rotateSelected(-90)} disabled={!selectedTile} title="Rotate left">
+              <button type="button" onClick={() => rotateSelected(-90)} disabled={!selectedTile} title={t("rotateLeft")}>
                 <RotateCcw size={17} />
               </button>
-              <button type="button" onClick={() => rotateSelected(90)} disabled={!selectedTile} title="Rotate right">
+              <button type="button" onClick={() => rotateSelected(90)} disabled={!selectedTile} title={t("rotateRight")}>
                 <RotateCw size={17} />
               </button>
               <button type="button" onClick={revertSelected} disabled={!selectedTile}>
-                Revert
+                {t("revert")}
               </button>
-              <button type="button" onClick={deleteSelectedTile} disabled={!selectedTile} title="Delete screenshot">
+              <button type="button" onClick={deleteSelectedTile} disabled={!selectedTile} title={t("deleteScreenshot")}>
                 <Trash2 size={17} />
               </button>
             </div>
           </div>
           <div className={`preview-grid ${proofs.length ? "with-proof" : ""}`}>
             <ImageStack
-              title="Receipt screenshots"
+              title={t("receiptScreenshots")}
+              emptyText={t("receiptImagePrompt")}
               item={selectedItem}
               selectedTile={selectedTile}
               onSelect={setSelectedTile}
@@ -630,6 +667,9 @@ export default function App() {
                   item={selectedItem}
                   proofs={selectedProofs}
                   selectedTile={selectedTile}
+                  title={t("paymentProof")}
+                  emptyText={t("proofDropPrompt")}
+                  listLabel={t("paymentProofList")}
                   onSelect={setSelectedTile}
                   onDropProof={moveImageToProof}
                   onCropChange={(proofId, cropPoints) =>
@@ -650,9 +690,9 @@ export default function App() {
         <span>{status}</span>
         <progress value={progress} max={100} />
         {progress === 100 && <CheckCircle2 size={16} />}
-        <div className="template-links" aria-label="Template downloads">
+        <div className="template-links" aria-label={t("templates")}>
           <Download size={16} />
-          <span>Templates</span>
+          <span>{t("templates")}</span>
           <a href={USA_TEMPLATE_URL} download>
             USA
           </a>
@@ -669,22 +709,24 @@ function DetailsForm({
   item,
   formVersion,
   categoryLabels,
+  t,
   onChange
 }: {
   item: ReceiptItem;
   formVersion: "USA" | "Korea";
   categoryLabels: Record<string, string>;
+  t: (key: Parameters<typeof text>[1], values?: Record<string, string | number>) => string;
   onChange: (patch: Partial<ReceiptItem>, source?: "amount" | "krw" | "rmb" | "currency") => void;
 }) {
   const categories = Object.keys(categoryLabels) as Category[];
   return (
     <div className="details-grid">
-      <Field label="Date" value={item.date} onChange={(date) => onChange({ date })} />
-      <Field label="Place / Vendor" value={item.place} onChange={(place) => onChange({ place })} />
-      <Field label={formVersion === "USA" ? "USD amount" : "Original amount"} value={item.amount} onChange={(amount) => onChange({ amount }, "amount")} />
+      <Field label={t("date")} value={item.date} onChange={(date) => onChange({ date })} />
+      <Field label={t("placeVendor")} value={item.place} onChange={(place) => onChange({ place })} />
+      <Field label={formVersion === "USA" ? t("usdAmount") : t("originalAmount")} value={item.amount} onChange={(amount) => onChange({ amount }, "amount")} />
       {formVersion === "Korea" && (
         <label>
-          Currency
+          {t("currency")}
           <select value={item.currency} onChange={(event) => onChange({ currency: event.target.value as Currency }, "currency")}>
             <option>USD</option>
             <option>KRW</option>
@@ -693,23 +735,23 @@ function DetailsForm({
           </select>
         </label>
       )}
-      {formVersion === "Korea" && <Field label="KRW amount" value={item.krwAmount} onChange={(krwAmount) => onChange({ krwAmount }, "krw")} />}
-      <Field label="RMB amount" value={item.rmbAmount} onChange={(rmbAmount) => onChange({ rmbAmount }, "rmb")} />
-      <Field label="Purpose" value={item.purpose} onChange={(purpose) => onChange({ purpose })} />
-      <Field label="Details" value={item.details} onChange={(details) => onChange({ details })} />
-      <Field label="Project number" value={item.projectNumber} onChange={(projectNumber) => onChange({ projectNumber })} />
+      {formVersion === "Korea" && <Field label={t("krwAmount")} value={item.krwAmount} onChange={(krwAmount) => onChange({ krwAmount }, "krw")} />}
+      <Field label={t("rmbAmount")} value={item.rmbAmount} onChange={(rmbAmount) => onChange({ rmbAmount }, "rmb")} />
+      <Field label={t("purpose")} value={item.purpose} onChange={(purpose) => onChange({ purpose })} />
+      <Field label={t("details")} value={item.details} onChange={(details) => onChange({ details })} />
+      <Field label={t("projectNumber")} value={item.projectNumber} onChange={(projectNumber) => onChange({ projectNumber })} />
       <label>
-        Category
+        {t("category")}
         <select value={item.category} onChange={(event) => onChange({ category: event.target.value as Category })}>
           {categories.map((category) => (
             <option key={category} value={category}>
-              {category} - {categoryLabels[category]}
+              {categoryLabels[category]}
             </option>
           ))}
         </select>
       </label>
-      <Field label="Payment method" value={item.paymentMethod} onChange={(paymentMethod) => onChange({ paymentMethod })} />
-      <Field label="Receipt label" value={item.receiptLabel} onChange={(receiptLabel) => onChange({ receiptLabel })} />
+      <Field label={t("paymentMethod")} value={item.paymentMethod} onChange={(paymentMethod) => onChange({ paymentMethod })} />
+      <Field label={t("receiptLabel")} value={item.receiptLabel} onChange={(receiptLabel) => onChange({ receiptLabel })} />
     </div>
   );
 }
@@ -727,6 +769,7 @@ function ImageStack({
   title,
   item,
   selectedTile,
+  emptyText,
   onSelect,
   onMoveToProof,
   onCropChange
@@ -734,6 +777,7 @@ function ImageStack({
   title: string;
   item: ReceiptItem | null;
   selectedTile: SelectedTile | null;
+  emptyText: string;
   onSelect: (tile: SelectedTile) => void;
   onMoveToProof: (receiptId: string, imageId: string) => void;
   onCropChange: (imageId: string, points: CropPoint[]) => void;
@@ -765,7 +809,7 @@ function ImageStack({
           </div>
         </>
       ) : (
-        <p className="empty-state">Select receipt image or PDF files to begin.</p>
+        <p className="empty-state">{emptyText}</p>
       )}
       <div
         className="hidden-drop"
@@ -781,16 +825,22 @@ function ImageStack({
 }
 
 function ProofStack({
+  title,
   item,
   proofs,
   selectedTile,
+  emptyText,
+  listLabel,
   onSelect,
   onDropProof,
   onCropChange
 }: {
+  title: string;
   item: ReceiptItem | null;
   proofs: PaymentProof[];
   selectedTile: SelectedTile | null;
+  emptyText: string;
+  listLabel: string;
   onSelect: (tile: SelectedTile) => void;
   onDropProof: (receiptId: string, imageId: string) => void;
   onCropChange: (proofId: string, points: CropPoint[]) => void;
@@ -807,11 +857,11 @@ function ProofStack({
         if (data.receiptId && data.imageId) onDropProof(data.receiptId, data.imageId);
       }}
     >
-      <h3>Payment proof</h3>
+      <h3>{title}</h3>
       {selectedProof ? (
         <>
           <CropEditor attachment={selectedProof.image} onChange={(points) => onCropChange(selectedProof.id, points)} />
-          <div className="thumbnail-strip" aria-label="Payment proof list">
+          <div className="thumbnail-strip" aria-label={listLabel}>
             {proofs.map((proof) => (
               <button
                 type="button"
@@ -826,7 +876,7 @@ function ProofStack({
           </div>
         </>
       ) : (
-        <p className="empty-state">Drag a receipt screenshot here or run Generate All.</p>
+        <p className="empty-state">{emptyText}</p>
       )}
     </div>
   );

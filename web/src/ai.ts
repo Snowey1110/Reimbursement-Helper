@@ -118,7 +118,7 @@ export async function extractKoreaExchangeRatesWithOpenAI(
   images: ImageAttachment[],
   usdToRmb: number
 ): Promise<KoreaExchangeRateExtraction> {
-  if (!images.length) throw new Error("Select 汇率 image files first.");
+  if (!images.length) throw new Error("Select exchange-rate image files first.");
   const prompt = [
     "Read these exchange-rate screenshots for the Korea reimbursement form.",
     "Return only JSON.",

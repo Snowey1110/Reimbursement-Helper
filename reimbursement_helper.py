@@ -317,6 +317,29 @@ KOREA_CATEGORY_COLUMNS: Dict[str, str] = {
     "other": "O",
 }
 
+USA_REPORT_CATEGORY_ORDER = [
+    "transportation",
+    "lodging",
+    "meals",
+    "advertising",
+    "office",
+    "entertainment",
+    "other",
+]
+
+KOREA_REPORT_CATEGORY_ORDER = [
+    "transportation",
+    "physical_exam",
+    "lodging",
+    "nucleic_test",
+    "materials",
+    "meals",
+    "courier",
+    "consumables",
+    "welfare",
+    "other",
+]
+
 KOREA_COVER_ROWS: Dict[str, Tuple[int, str]] = {
     "transportation": (4, "交通费"),
     "consumables": (5, "消耗品"),
@@ -368,6 +391,207 @@ KOREA_CATEGORY_LABELS = {
     "consumables": "Consumables / \u6d88\u8017\u54c1",
     "welfare": "Welfare / \u798f\u5229\u8d39",
     "other": "Other / \u5176\u4ed6",
+}
+
+CATEGORY_LABELS_BY_LANGUAGE: Dict[str, Dict[str, str]] = {
+    "en": {
+        "transportation": "Transportation",
+        "lodging": "Lodging",
+        "meals": "Meals",
+        "advertising": "Advertising",
+        "office": "Office",
+        "entertainment": "Entertainment",
+        "materials": "Materials",
+        "consumables": "Consumables",
+        "physical_exam": "Physical exam",
+        "nucleic_test": "Nucleic acid test",
+        "courier": "Courier",
+        "welfare": "Welfare",
+        "other": "Other",
+    },
+    "zh": {
+        "transportation": "\u4ea4\u901a\u8d39",
+        "lodging": "\u4f4f\u5bbf\u8d39",
+        "meals": "\u4e1a\u52a1\u62db\u5f85\u8d39-\u9910\u8d39",
+        "advertising": "\u5e7f\u544a\u8d39",
+        "office": "\u529e\u516c\u8d39",
+        "entertainment": "\u4e1a\u52a1\u62db\u5f85\u8d39",
+        "materials": "\u7269\u6599\u8d39",
+        "consumables": "\u6d88\u8017\u54c1",
+        "physical_exam": "\u5165\u804c\u4f53\u68c0\u8d39",
+        "nucleic_test": "\u6838\u9178\u68c0\u6d4b\u8d39",
+        "courier": "\u5feb\u9012\u8d39",
+        "welfare": "\u798f\u5229\u8d39",
+        "other": "\u5176\u4ed6",
+    },
+    "ko": {
+        "transportation": "\uad50\ud1b5\ube44",
+        "lodging": "\uc219\ubc15\ube44",
+        "meals": "\uc2dd\ub300",
+        "advertising": "\uad11\uace0\ube44",
+        "office": "\uc0ac\ubb34\ube44",
+        "entertainment": "\uc811\ub300\ube44",
+        "materials": "\uc790\uc7ac\ube44",
+        "consumables": "\uc18c\ubaa8\ud488",
+        "physical_exam": "\uac74\uac15\uac80\uc9c4\ube44",
+        "nucleic_test": "\ud575\uc0b0 \uac80\uc0ac\ube44",
+        "courier": "\ud0dd\ubc30\ube44",
+        "welfare": "\ubcf5\ub9ac\ud6c4\uc0dd\ube44",
+        "other": "\uae30\ud0c0",
+    },
+}
+
+LANGUAGE_LABELS = {
+    "en": "English",
+    "zh": "\u4e2d\u6587",
+    "ko": "\ud55c\uad6d\uc5b4",
+}
+
+UI_TEXT: Dict[str, Dict[str, str]] = {
+    "en": {
+        "app_title": "Reimbursement Helper",
+        "header_title": "REIMBURSEMENT HELPER",
+        "form": "Form",
+        "language": "Language",
+        "select_files": "Select Files",
+        "select_payment_proof": "Select Payment Proof",
+        "select_exchange_rate": "Select Exchange Rate Images",
+        "generate_details": "Generate Details",
+        "generate_all": "Generate All",
+        "generate_excel": "Generate Excel",
+        "inserted_receipts": "Inserted receipts and details",
+        "file": "File",
+        "status": "Status",
+        "date": "Date",
+        "amount": "Amount",
+        "remove": "Remove",
+        "clear": "Clear",
+        "details": "Details",
+        "receipt_preview": "Receipt preview",
+        "rotate_left": "Rotate left",
+        "rotate_right": "Rotate right",
+        "revert": "Revert",
+        "delete_screenshot": "Delete selected screenshot",
+        "open_output_folder": "Open output folder",
+        "ready": "Ready",
+        "place_vendor": "Place / Vendor",
+        "usd_amount": "USD amount",
+        "original_amount": "Original amount",
+        "currency": "Currency",
+        "krw_amount": "KRW amount",
+        "rmb_amount": "RMB amount",
+        "purpose": "Purpose",
+        "project_number": "Project number",
+        "category": "Category",
+        "payment_method": "Payment method",
+        "receipt_label": "Receipt label",
+        "select_receipt_prompt": "Select receipt image or PDF files to begin.",
+        "proof_prompt": "Select Payment Proof, then Generate All.",
+        "no_receipt_screenshot": "No receipt screenshot.",
+        "exchange_only_korea": "Exchange-rate images are only used for the Korea form.",
+        "selected_exchange_files": "Selected {count} exchange-rate image file(s).",
+        "selected_exchange_no_key": "Selected exchange-rate image(s). Add an API key to auto-read the rate.",
+        "reading_exchange": "Reading exchange-rate image...",
+        "reading_exchange_short": "Reading exchange rate",
+        "selected_exchange_failed": "Selected exchange-rate image(s), but could not auto-read rate: {message}",
+        "updated_exchange_rate": "Updated rate from exchange-rate image: {updates}",
+    },
+    "zh": {
+        "app_title": "\u62a5\u9500\u52a9\u624b",
+        "header_title": "\u62a5\u9500\u52a9\u624b",
+        "form": "\u8868\u683c",
+        "language": "\u8bed\u8a00",
+        "select_files": "\u9009\u62e9\u6587\u4ef6",
+        "select_payment_proof": "\u9009\u62e9\u4ed8\u6b3e\u51ed\u8bc1",
+        "select_exchange_rate": "\u9009\u62e9\u6c47\u7387\u56fe\u7247",
+        "generate_details": "\u751f\u6210\u660e\u7ec6",
+        "generate_all": "\u5168\u90e8\u751f\u6210",
+        "generate_excel": "\u751f\u6210 Excel",
+        "inserted_receipts": "\u5df2\u63d2\u5165\u53d1\u7968\u548c\u660e\u7ec6",
+        "file": "\u6587\u4ef6",
+        "status": "\u72b6\u6001",
+        "date": "\u65e5\u671f",
+        "amount": "\u91d1\u989d",
+        "remove": "\u5220\u9664",
+        "clear": "\u6e05\u7a7a",
+        "details": "\u660e\u7ec6",
+        "receipt_preview": "\u53d1\u7968\u9884\u89c8",
+        "rotate_left": "\u5411\u5de6\u65cb\u8f6c",
+        "rotate_right": "\u5411\u53f3\u65cb\u8f6c",
+        "revert": "\u8fd8\u539f",
+        "delete_screenshot": "\u5220\u9664\u9009\u4e2d\u622a\u56fe",
+        "open_output_folder": "\u6253\u5f00\u8f93\u51fa\u6587\u4ef6\u5939",
+        "ready": "\u5c31\u7eea",
+        "place_vendor": "\u5730\u70b9 / \u5546\u5bb6",
+        "usd_amount": "\u7f8e\u5143\u91d1\u989d",
+        "original_amount": "\u539f\u5e01\u91d1\u989d",
+        "currency": "\u5e01\u79cd",
+        "krw_amount": "\u97e9\u5143\u91d1\u989d",
+        "rmb_amount": "\u4eba\u6c11\u5e01\u91d1\u989d",
+        "purpose": "\u7528\u9014",
+        "project_number": "\u9879\u76ee\u53f7",
+        "category": "\u7c7b\u522b",
+        "payment_method": "\u4ed8\u6b3e\u65b9\u5f0f",
+        "receipt_label": "\u53d1\u7968\u6807\u7b7e",
+        "select_receipt_prompt": "\u8bf7\u9009\u62e9\u53d1\u7968\u56fe\u7247\u6216 PDF \u6587\u4ef6\u3002",
+        "proof_prompt": "\u8bf7\u5148\u9009\u62e9\u4ed8\u6b3e\u51ed\u8bc1\uff0c\u7136\u540e\u5168\u90e8\u751f\u6210\u3002",
+        "no_receipt_screenshot": "\u6ca1\u6709\u53d1\u7968\u622a\u56fe\u3002",
+        "exchange_only_korea": "\u6c47\u7387\u56fe\u7247\u4ec5\u7528\u4e8e\u97e9\u56fd\u8868\u683c\u3002",
+        "selected_exchange_files": "\u5df2\u9009\u62e9 {count} \u4e2a\u6c47\u7387\u56fe\u7247\u6587\u4ef6\u3002",
+        "selected_exchange_no_key": "\u5df2\u9009\u62e9\u6c47\u7387\u56fe\u7247\u3002\u6dfb\u52a0 API \u5bc6\u94a5\u540e\u53ef\u81ea\u52a8\u8bfb\u53d6\u6c47\u7387\u3002",
+        "reading_exchange": "\u6b63\u5728\u8bfb\u53d6\u6c47\u7387\u56fe\u7247...",
+        "reading_exchange_short": "\u6b63\u5728\u8bfb\u53d6\u6c47\u7387",
+        "selected_exchange_failed": "\u5df2\u9009\u62e9\u6c47\u7387\u56fe\u7247\uff0c\u4f46\u65e0\u6cd5\u81ea\u52a8\u8bfb\u53d6\u6c47\u7387\uff1a{message}",
+        "updated_exchange_rate": "\u5df2\u6839\u636e\u6c47\u7387\u56fe\u7247\u66f4\u65b0\uff1a{updates}",
+    },
+    "ko": {
+        "app_title": "\ud658\uae09 \ub3c4\uc6b0\ubbf8",
+        "header_title": "\ud658\uae09 \ub3c4\uc6b0\ubbf8",
+        "form": "\uc591\uc2dd",
+        "language": "\uc5b8\uc5b4",
+        "select_files": "\ud30c\uc77c \uc120\ud0dd",
+        "select_payment_proof": "\uacb0\uc81c \uc99d\ube59 \uc120\ud0dd",
+        "select_exchange_rate": "\ud658\uc728 \uc774\ubbf8\uc9c0 \uc120\ud0dd",
+        "generate_details": "\uc138\ubd80 \uc815\ubcf4 \uc0dd\uc131",
+        "generate_all": "\uc804\uccb4 \uc0dd\uc131",
+        "generate_excel": "Excel \uc0dd\uc131",
+        "inserted_receipts": "\ucd94\uac00\ub41c \uc601\uc218\uc99d \ubc0f \uc138\ubd80 \uc815\ubcf4",
+        "file": "\ud30c\uc77c",
+        "status": "\uc0c1\ud0dc",
+        "date": "\ub0a0\uc9dc",
+        "amount": "\uae08\uc561",
+        "remove": "\uc0ad\uc81c",
+        "clear": "\ucd08\uae30\ud654",
+        "details": "\uc138\ubd80 \uc815\ubcf4",
+        "receipt_preview": "\uc601\uc218\uc99d \ubbf8\ub9ac\ubcf4\uae30",
+        "rotate_left": "\uc67c\ucabd \ud68c\uc804",
+        "rotate_right": "\uc624\ub978\ucabd \ud68c\uc804",
+        "revert": "\ub418\ub3cc\ub9ac\uae30",
+        "delete_screenshot": "\uc120\ud0dd\ud55c \uc2a4\ud06c\ub9b0\uc0f7 \uc0ad\uc81c",
+        "open_output_folder": "\ucd9c\ub825 \ud3f4\ub354 \uc5f4\uae30",
+        "ready": "\uc900\ube44\ub428",
+        "place_vendor": "\uc7a5\uc18c / \uc5c5\uccb4",
+        "usd_amount": "USD \uae08\uc561",
+        "original_amount": "\uc6d0\ud654 \uae08\uc561",
+        "currency": "\ud1b5\ud654",
+        "krw_amount": "KRW \uae08\uc561",
+        "rmb_amount": "RMB \uae08\uc561",
+        "purpose": "\ubaa9\uc801",
+        "project_number": "\ud504\ub85c\uc81d\ud2b8 \ubc88\ud638",
+        "category": "\ubd84\ub958",
+        "payment_method": "\uacb0\uc81c \uc218\ub2e8",
+        "receipt_label": "\uc601\uc218\uc99d \ub77c\ubca8",
+        "select_receipt_prompt": "\uc601\uc218\uc99d \uc774\ubbf8\uc9c0 \ub610\ub294 PDF \ud30c\uc77c\uc744 \uc120\ud0dd\ud558\uc138\uc694.",
+        "proof_prompt": "\uacb0\uc81c \uc99d\ube59\uc744 \uc120\ud0dd\ud55c \ub4a4 \uc804\uccb4 \uc0dd\uc131\uc744 \uc2e4\ud589\ud558\uc138\uc694.",
+        "no_receipt_screenshot": "\uc601\uc218\uc99d \uc2a4\ud06c\ub9b0\uc0f7\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "exchange_only_korea": "\ud658\uc728 \uc774\ubbf8\uc9c0\ub294 \ud55c\uad6d \uc591\uc2dd\uc5d0\ub9cc \uc0ac\uc6a9\ub429\ub2c8\ub2e4.",
+        "selected_exchange_files": "\ud658\uc728 \uc774\ubbf8\uc9c0 \ud30c\uc77c {count}\uac1c\ub97c \uc120\ud0dd\ud588\uc2b5\ub2c8\ub2e4.",
+        "selected_exchange_no_key": "\ud658\uc728 \uc774\ubbf8\uc9c0\ub97c \uc120\ud0dd\ud588\uc2b5\ub2c8\ub2e4. API \ud0a4\ub97c \ucd94\uac00\ud558\uba74 \uc790\ub3d9\uc73c\ub85c \ud658\uc728\uc744 \uc77d\uc2b5\ub2c8\ub2e4.",
+        "reading_exchange": "\ud658\uc728 \uc774\ubbf8\uc9c0\ub97c \uc77d\ub294 \uc911...",
+        "reading_exchange_short": "\ud658\uc728 \uc77d\ub294 \uc911",
+        "selected_exchange_failed": "\ud658\uc728 \uc774\ubbf8\uc9c0\ub97c \uc120\ud0dd\ud588\uc9c0\ub9cc \uc790\ub3d9\uc73c\ub85c \uc77d\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4: {message}",
+        "updated_exchange_rate": "\ud658\uc728 \uc774\ubbf8\uc9c0\uc5d0\uc11c \ud658\uc728\uc744 \uc5c5\ub370\uc774\ud2b8\ud588\uc2b5\ub2c8\ub2e4: {updates}",
+    },
 }
 
 
@@ -471,6 +695,17 @@ def save_user_settings(settings: Dict[str, Any]) -> None:
 
 def normalized_form_version(value: Any) -> str:
     return "Korea" if str(value) == "Korea" else "USA"
+
+
+def normalize_language(value: Any) -> str:
+    return str(value) if str(value) in UI_TEXT else "en"
+
+
+def ui_text(language: str, key: str, **values: Any) -> str:
+    template = UI_TEXT.get(normalize_language(language), UI_TEXT["en"]).get(key, UI_TEXT["en"].get(key, key))
+    for name, value in values.items():
+        template = template.replace("{" + name + "}", str(value))
+    return template
 
 
 def load_templates_config() -> Dict[str, Any]:
@@ -825,7 +1060,19 @@ def normalize_currency(value: Any, default: str = "USD") -> str:
 
 
 def category_value_to_key(value: str, form_version: str) -> str:
-    return normalized_category((value or "").split(" - ", 1)[0], form_version)
+    raw = (value or "").strip()
+    if not raw:
+        return "other"
+    if " - " in raw:
+        raw = raw.split(" - ", 1)[0].strip()
+    normalized = normalized_category(raw, form_version)
+    if normalized != "other" or raw.lower() == "other":
+        return normalized
+    for labels in CATEGORY_LABELS_BY_LANGUAGE.values():
+        for key, label in labels.items():
+            if raw == label:
+                return normalized_category(key, form_version)
+    return normalized
 
 
 def format_amount(value: float) -> str:
@@ -871,6 +1118,8 @@ def excel_date_formula_or_value(value: str) -> Any:
 
 def normalized_category(category: str, form_version: str) -> str:
     raw = (category or "").strip().lower()
+    if is_korea_other_text(raw):
+        return "other"
     lookup = {
         "transport": "transportation",
         "transportation": "transportation",
@@ -908,6 +1157,60 @@ def normalized_category(category: str, form_version: str) -> str:
     if form_version == "USA" and raw in USA_CATEGORY_ROWS:
         return raw
     return "other"
+
+
+def is_korea_other_text(value: str) -> bool:
+    raw = (value or "").lower()
+    return bool(re.search(r"\b(e-?sim|sim card|data plan|internet access)\b", raw)) or any(
+        token in raw for token in ("\u6d41\u91cf", "\u865a\u62df\u5361", "\uc720\uc2ec", "\ub370\uc774\ud130")
+    )
+
+
+def report_category_for_item(item: Any, form_version: str) -> str:
+    version = normalized_form_version(form_version)
+    category = category_value_to_key(str(getattr(item, "category", "") or ""), version)
+    if version == "Korea":
+        searchable = " ".join(
+            str(getattr(item, attr, "") or "")
+            for attr in ("category", "purpose", "details", "receipt_label", "place", "filename")
+        )
+        if is_korea_other_text(searchable):
+            return "other"
+        if category in KOREA_CATEGORY_COLUMNS:
+            return category
+        if category in {"advertising", "office"}:
+            return "materials"
+        if category == "entertainment":
+            return "meals"
+        return "other"
+    if category in USA_CATEGORY_ROWS:
+        return category
+    if category in {"materials", "consumables"}:
+        return "office"
+    return "other"
+
+
+def date_sort_value(value: str) -> float:
+    parsed = parse_date_value(value)
+    if isinstance(parsed, date):
+        return float(parsed.toordinal())
+    return float("inf")
+
+
+def sort_receipts_for_report(items: List[Any], form_version: str) -> List[Any]:
+    version = normalized_form_version(form_version)
+    order = KOREA_REPORT_CATEGORY_ORDER if version == "Korea" else USA_REPORT_CATEGORY_ORDER
+    order_index = {category: index for index, category in enumerate(order)}
+    indexed = [
+        (
+            order_index.get(report_category_for_item(item, version), len(order)),
+            date_sort_value(str(getattr(item, "date", "") or "")),
+            index,
+            item,
+        )
+        for index, item in enumerate(items)
+    ]
+    return [entry[3] for entry in sorted(indexed, key=lambda entry: (entry[0], entry[1], entry[2]))]
 
 
 def normalize_rotation(value: Any) -> int:
@@ -1271,9 +1574,10 @@ def configure_korea_receipt_page(sheet: Any, slot_count: int) -> None:
         except Exception:
             pass
     if sheet.sheet_properties.pageSetUpPr is not None:
-        sheet.sheet_properties.pageSetUpPr.fitToPage = True
+        sheet.sheet_properties.pageSetUpPr.fitToPage = False
     sheet.page_setup.orientation = "portrait"
-    sheet.page_setup.fitToWidth = 1
+    sheet.page_setup.scale = 78
+    sheet.page_setup.fitToWidth = None
     sheet.page_setup.fitToHeight = 0
     sheet.page_margins.left = 0.45
     sheet.page_margins.right = 0.45
@@ -1379,6 +1683,8 @@ def add_korea_receipt_block(
         allow_upscale=True,
     )
     if receipt_image is not None:
+        receipt_image.width = int(slot["max_width"])
+        receipt_image.height = int(slot["max_height"])
         sheet.add_image(receipt_image, str(slot["image_cell"]))
 
 
@@ -1394,6 +1700,7 @@ def export_usa(
     wb = load_workbook(template)
     ws = wb["Expense report"]
     receipts_ws = wb["Receipt and Payment of expenses"]
+    sorted_items = sort_receipts_for_report(items, "USA")
 
     ws["A3"] = f"Date / 填表日期： {date.today().strftime('%m/%d/%Y')}"
     ws["A4"] = "Employee: / 申请人："
@@ -1404,8 +1711,8 @@ def export_usa(
         ws[f"G{row}"] = f"=F{row}*$J$1"
 
     row_cursors = {cat: 0 for cat in USA_CATEGORY_ROWS}
-    for item in items:
-        category = normalized_category(item.category, "USA")
+    for item in sorted_items:
+        category = report_category_for_item(item, "USA")
         if category not in USA_CATEGORY_ROWS:
             category = "other"
         rows = USA_CATEGORY_ROWS[category]
@@ -1424,7 +1731,7 @@ def export_usa(
         ws[f"G{row}"] = f"=F{row}*$J$1"
 
     clear_images(receipts_ws)
-    for row in range(2, max(56, len(items) + 3)):
+    for row in range(2, max(56, len(sorted_items) + 3)):
         for col in "ABCDE":
             receipts_ws[f"{col}{row}"] = None
     receipts_ws.column_dimensions["D"].width = 38
@@ -1433,7 +1740,7 @@ def export_usa(
     for bank_item in bank_items or []:
         if bank_item.matched_receipt_id:
             proof_by_receipt_id.setdefault(bank_item.matched_receipt_id, []).append(attachment_from_item(bank_item))
-    for index, item in enumerate(items, start=1):
+    for index, item in enumerate(sorted_items, start=1):
         row = index + 1
         receipts_ws[f"A{row}"] = index
         receipts_ws[f"B{row}"] = excel_date_formula_or_value(item.date)
@@ -1570,8 +1877,24 @@ def export_korea(
     detail_template_wb = load_workbook(details_template)
     cover_ws = wb.worksheets[0]
     receipts_ws = wb.worksheets[1]
-    detail_ws = clone_sheet(detail_template_wb.worksheets[0], wb, "报销明细", index=1, min_rows=35, min_cols=20)
+    detail_ws = clone_sheet(detail_template_wb.worksheets[0], wb, "报销明细", index=0, min_rows=35, min_cols=20)
+    sorted_items = sort_receipts_for_report(items, "Korea")
+    try:
+        wb._sheets = [detail_ws, cover_ws, receipts_ws]
+    except Exception:
+        pass
     clear_freeze_panes(detail_ws)
+    detail_ws.print_area = "A1:S35"
+    if detail_ws.sheet_properties.pageSetUpPr is not None:
+        detail_ws.sheet_properties.pageSetUpPr.fitToPage = False
+    detail_ws.page_setup.orientation = "landscape"
+    detail_ws.page_setup.scale = 34
+    detail_ws.page_setup.fitToWidth = None
+    detail_ws.page_setup.fitToHeight = None
+    detail_ws.page_margins.left = 0.25
+    detail_ws.page_margins.right = 0.25
+    detail_ws.page_margins.top = 0.75
+    detail_ws.page_margins.bottom = 0.75
     for col in "KLMNOPQRS":
         detail_ws.column_dimensions[col].hidden = False
 
@@ -1585,22 +1908,30 @@ def export_korea(
     cover_ws["D9"] = "=SUM(D4:D8)"
     cover_ws["B10"] = "=D9"
 
-    for row in range(3, 34):
-        for col in list("ABCDEFGHIJKLMNOPQRS"):
-            detail_ws[f"{col}{row}"] = None
-    detail_ws["A34"] = "合计（外币）\nTotal"
-    detail_ws["Q34"] = "=SUM(Q3:Q33)"
-    detail_ws["Q34"].number_format = KRW_NUMBER_FORMAT
-    detail_ws["A35"] = "合计（人民币）\nTotal"
-    detail_ws["R35"] = "=SUM(R3:R34)"
+    for merged_range in ("A33:B33", "A34:B34", "A35:B35"):
+        try:
+            detail_ws.unmerge_cells(merged_range)
+        except Exception:
+            pass
+    clear_cells(detail_ws, range(3, 36), list("ABCDEFGHIJKLMNOPQRS"))
+    try:
+        detail_ws.merge_cells("A33:B33")
+        detail_ws.merge_cells("A34:B34")
+    except Exception:
+        pass
+    detail_ws["A33"] = "合计（外币）\nTotal"
+    detail_ws["Q33"] = "=SUM(Q3:Q32)"
+    detail_ws["Q33"].number_format = KRW_NUMBER_FORMAT
+    detail_ws["A34"] = "合计（人民币）\nTotal"
+    detail_ws["R34"] = "=SUM(R3:R33)"
 
     summary: Dict[str, Tuple[float, float]] = {
         key: (0.0, 0.0) for key in KOREA_COVER_ROWS
     }
-    for index, item in enumerate(items, start=3):
-        if index > 33:
-            raise RuntimeError("Korea template supports up to 31 detail rows in this version.")
-        category = normalized_category(item.category, "Korea")
+    for index, item in enumerate(sorted_items, start=3):
+        if index > 32:
+            raise RuntimeError("Korea template supports up to 30 detail rows in this version.")
+        category = report_category_for_item(item, "Korea")
         if category not in KOREA_CATEGORY_COLUMNS:
             category = "other"
         krw, rmb, original_note = korea_amounts(item, krw_to_rmb_rate, usd_to_rmb_rate, usd_to_krw_rate)
@@ -1632,7 +1963,7 @@ def export_korea(
     clear_images(receipts_ws)
     fit_columns_for_receipts(receipts_ws)
     exchange_rate_attachments = [attachment_from_item(item) for item in exchange_rate_items or []]
-    slot_count = len(items) + (2 if exchange_rate_attachments else 0)
+    slot_count = len(sorted_items) + (2 if exchange_rate_attachments else 0)
     configure_korea_receipt_page(receipts_ws, slot_count)
     page_height = 60
     slots_per_page = 4
@@ -1645,7 +1976,7 @@ def export_korea(
     if exchange_rate_attachments:
         add_korea_receipt_block(receipts_ws, block_index, "汇率 / Exchange Rate", exchange_rate_attachments, wide=True)
         block_index += 2
-    for idx, item in enumerate(items):
+    for idx, item in enumerate(sorted_items):
         add_korea_receipt_block(
             receipts_ws,
             block_index,
@@ -1696,17 +2027,29 @@ class ReimbursementHelperApp:
         self._dragging_crop_handle: Optional[str] = None
         self.settings = load_user_settings()
         self.form_version = tk.StringVar(value=normalized_form_version(self.settings.get("last_form_version", "USA")))
+        self.language = tk.StringVar(value=normalize_language(self.settings.get("language", "en")))
+        self.language_display = tk.StringVar(value=LANGUAGE_LABELS.get(self.language.get(), "English"))
         self.exchange_rate = tk.StringVar(value=str(self.settings.get("usa_exchange_rate", DEFAULT_USD_TO_RMB_RATE)))
         self.usd_to_krw_rate = tk.StringVar(value=str(self.settings.get("usd_to_krw_rate", DEFAULT_USD_TO_KRW_RATE)))
         self.krw_to_rmb_rate = tk.StringVar(value=str(self.settings.get("krw_to_rmb_rate", DEFAULT_KRW_TO_RMB_RATE)))
-        self.status_text = tk.StringVar(value="Ready")
+        self.status_text = tk.StringVar(value=self.tr("ready"))
         self.progress_text = tk.StringVar(value="")
         self.progress_value = tk.DoubleVar(value=0)
         self.field_vars: Dict[str, Any] = {}
         self.field_labels: Dict[str, Any] = {}
         self.field_widgets: Dict[str, Any] = {}
         self.category_values: List[str] = []
+        self.category_label_to_key: Dict[str, str] = {}
         self.category_combo: Optional[Any] = None
+        self.header_label: Optional[Any] = None
+        self.form_label: Optional[Any] = None
+        self.language_label: Optional[Any] = None
+        self.manager_label: Optional[Any] = None
+        self.details_label: Optional[Any] = None
+        self.preview_label: Optional[Any] = None
+        self.remove_btn: Optional[Any] = None
+        self.clear_btn: Optional[Any] = None
+        self.open_output_btn: Optional[Any] = None
         self.usa_rate_label: Optional[Any] = None
         self.usa_rate_entry: Optional[Any] = None
         self.usd_krw_rate_label: Optional[Any] = None
@@ -1726,8 +2069,11 @@ class ReimbursementHelperApp:
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.after(250, self.restore_previous_session_if_available)
 
+    def tr(self, key: str, **values: Any) -> str:
+        return ui_text(self.language.get(), key, **values)
+
     def _build_ui(self) -> None:
-        self.root.title("Reimbursement Helper")
+        self.root.title(self.tr("app_title"))
         self.root.geometry("1220x760")
         self.root.minsize(980, 640)
         app_bg = "#E9EEF3"
@@ -1893,10 +2239,12 @@ class ReimbursementHelperApp:
 
         header = ttk.Frame(self.root, padding=(18, 16, 18, 10))
         header.pack(fill="x")
-        ttk.Label(header, text="REIMBURSEMENT HELPER", style="Header.TLabel").pack(side="left")
+        self.header_label = ttk.Label(header, text=self.tr("header_title"), style="Header.TLabel")
+        self.header_label.pack(side="left")
         controls = ttk.Frame(header)
         controls.pack(side="right")
-        ttk.Label(controls, text="Form").pack(side="left", padx=(0, 6))
+        self.form_label = ttk.Label(controls, text=self.tr("form"))
+        self.form_label.pack(side="left", padx=(0, 6))
         form_combo = ttk.Combobox(
             controls,
             textvariable=self.form_version,
@@ -1906,19 +2254,30 @@ class ReimbursementHelperApp:
         )
         form_combo.pack(side="left", padx=(0, 12))
         form_combo.bind("<<ComboboxSelected>>", lambda _event: self._on_form_version_changed())
-        self.upload_folder_btn = ttk.Button(controls, text="Select Files", command=self.select_files)
+        self.language_label = ttk.Label(controls, text=self.tr("language"))
+        self.language_label.pack(side="left", padx=(0, 6))
+        language_combo = ttk.Combobox(
+            controls,
+            textvariable=self.language_display,
+            values=list(LANGUAGE_LABELS.values()),
+            state="readonly",
+            width=10,
+        )
+        language_combo.pack(side="left", padx=(0, 12))
+        language_combo.bind("<<ComboboxSelected>>", lambda _event: self._on_language_changed())
+        self.upload_folder_btn = ttk.Button(controls, text=self.tr("select_files"), command=self.select_files)
         self.upload_folder_btn.pack(side="left", padx=4)
         self.select_payment_proof_btn = ttk.Button(
             controls,
-            text="Select Payment Proof",
+            text=self.tr("select_payment_proof"),
             command=self.select_support_files,
         )
         self.select_payment_proof_btn.pack(side="left", padx=4)
-        self.generate_details_btn = ttk.Button(controls, text="Generate Details", command=self.generate_selected_details)
+        self.generate_details_btn = ttk.Button(controls, text=self.tr("generate_details"), command=self.generate_selected_details)
         self.generate_details_btn.pack(side="left", padx=4)
-        self.generate_all_btn = ttk.Button(controls, text="Generate All", command=self.generate_all_details)
+        self.generate_all_btn = ttk.Button(controls, text=self.tr("generate_all"), command=self.generate_all_details)
         self.generate_all_btn.pack(side="left", padx=4)
-        self.generate_excel_btn = ttk.Button(controls, text="Generate Excel", command=self.generate_excel)
+        self.generate_excel_btn = ttk.Button(controls, text=self.tr("generate_excel"), command=self.generate_excel)
         self.generate_excel_btn.pack(side="left", padx=4)
 
         body = ttk.Frame(self.root, padding=(14, 0, 14, 10))
@@ -1932,7 +2291,8 @@ class ReimbursementHelperApp:
         manager.grid_columnconfigure(0, minsize=270, weight=1)
         manager.grid_columnconfigure(1, minsize=350, weight=1)
         manager.grid_rowconfigure(1, weight=1)
-        ttk.Label(manager, text="Inserted receipts and details", style="PanelHeader.TLabel").grid(
+        self.manager_label = ttk.Label(manager, text=self.tr("inserted_receipts"), style="PanelHeader.TLabel")
+        self.manager_label.grid(
             row=0, column=0, columnspan=2, sticky="w", pady=(0, 8)
         )
 
@@ -1945,10 +2305,10 @@ class ReimbursementHelperApp:
             height=20,
             selectmode="extended",
         )
-        self.tree.heading("#0", text="File")
-        self.tree.heading("status", text="Status")
-        self.tree.heading("date", text="Date")
-        self.tree.heading("amount", text="Amount")
+        self.tree.heading("#0", text=self.tr("file"))
+        self.tree.heading("status", text=self.tr("status"))
+        self.tree.heading("date", text=self.tr("date"))
+        self.tree.heading("amount", text=self.tr("amount"))
         self.tree.column("#0", width=140, stretch=True)
         self.tree.column("status", width=78, stretch=False)
         self.tree.column("date", width=78, stretch=False)
@@ -1962,12 +2322,15 @@ class ReimbursementHelperApp:
         self.tree.bind("<Control-A>", self.select_all_receipts)
         left_buttons = ttk.Frame(left, style="Panel.TFrame")
         left_buttons.pack(fill="x", pady=(10, 0))
-        ttk.Button(left_buttons, text="Remove", command=self.remove_selected).pack(side="left")
-        ttk.Button(left_buttons, text="Clear", command=self.clear_all).pack(side="left", padx=(8, 0))
+        self.remove_btn = ttk.Button(left_buttons, text=self.tr("remove"), command=self.remove_selected)
+        self.remove_btn.pack(side="left")
+        self.clear_btn = ttk.Button(left_buttons, text=self.tr("clear"), command=self.clear_all)
+        self.clear_btn.pack(side="left", padx=(8, 0))
 
         middle = ttk.Frame(manager, style="Panel.TFrame", padding=(10, 0, 0, 0))
         middle.grid(row=1, column=1, sticky="nsew")
-        ttk.Label(middle, text="Details", style="PanelHeader.TLabel").grid(row=0, column=0, columnspan=2, sticky="w")
+        self.details_label = ttk.Label(middle, text=self.tr("details"), style="PanelHeader.TLabel")
+        self.details_label.grid(row=0, column=0, columnspan=2, sticky="w")
         rate_frame = ttk.Frame(middle, style="Panel.TFrame")
         rate_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 10))
         self.usa_rate_label = ttk.Label(rate_frame, text="USD -> RMB", style="Panel.TLabel")
@@ -1984,18 +2347,18 @@ class ReimbursementHelperApp:
         self.krw_rate_entry.pack(side="left", padx=(6, 0))
 
         fields = [
-            ("date", "Date"),
-            ("place", "Place / Vendor"),
-            ("amount", "USD amount"),
-            ("currency", "Currency"),
-            ("krw_amount", "KRW amount"),
-            ("rmb_amount", "RMB amount"),
-            ("purpose", "Purpose"),
-            ("details", "Details"),
-            ("project_number", "Project number"),
-            ("category", "Category"),
-            ("payment_method", "Payment method"),
-            ("receipt_label", "Receipt label"),
+            ("date", self.tr("date")),
+            ("place", self.tr("place_vendor")),
+            ("amount", self.tr("usd_amount")),
+            ("currency", self.tr("currency")),
+            ("krw_amount", self.tr("krw_amount")),
+            ("rmb_amount", self.tr("rmb_amount")),
+            ("purpose", self.tr("purpose")),
+            ("details", self.tr("details")),
+            ("project_number", self.tr("project_number")),
+            ("category", self.tr("category")),
+            ("payment_method", self.tr("payment_method")),
+            ("receipt_label", self.tr("receipt_label")),
         ]
         for row, (key, label) in enumerate(fields, start=2):
             label_widget = ttk.Label(middle, text=label, style="Panel.TLabel")
@@ -2023,7 +2386,8 @@ class ReimbursementHelperApp:
         preview_header = ttk.Frame(right, style="Panel.TFrame")
         preview_header.grid(row=0, column=0, sticky="ew")
         preview_header.grid_columnconfigure(0, weight=1)
-        ttk.Label(preview_header, text="Receipt preview", style="PanelHeader.TLabel").grid(row=0, column=0, sticky="w")
+        self.preview_label = ttk.Label(preview_header, text=self.tr("receipt_preview"), style="PanelHeader.TLabel")
+        self.preview_label.grid(row=0, column=0, sticky="w")
         self.rotate_left_btn = ttk.Button(
             preview_header,
             text="\u27F2",
@@ -2032,7 +2396,7 @@ class ReimbursementHelperApp:
             style="Icon.TButton",
         )
         self.rotate_left_btn.grid(row=0, column=1, sticky="e", padx=(0, 6))
-        ToolTip(self.rotate_left_btn, "Rotate left")
+        ToolTip(self.rotate_left_btn, self.tr("rotate_left"))
         self.rotate_right_btn = ttk.Button(
             preview_header,
             text="\u27F3",
@@ -2041,15 +2405,15 @@ class ReimbursementHelperApp:
             style="Icon.TButton",
         )
         self.rotate_right_btn.grid(row=0, column=2, sticky="e", padx=(0, 6))
-        ToolTip(self.rotate_right_btn, "Rotate right")
+        ToolTip(self.rotate_right_btn, self.tr("rotate_right"))
         self.revert_crop_btn = ttk.Button(
             preview_header,
-            text="Revert",
+            text=self.tr("revert"),
             command=self.revert_crop,
             state="disabled",
         )
         self.revert_crop_btn.grid(row=0, column=3, sticky="e")
-        ToolTip(self.revert_crop_btn, "Revert image to original")
+        ToolTip(self.revert_crop_btn, self.tr("revert"))
         self.delete_screenshot_btn = ttk.Button(
             preview_header,
             text="\u2715",
@@ -2058,7 +2422,7 @@ class ReimbursementHelperApp:
             style="Icon.TButton",
         )
         self.delete_screenshot_btn.grid(row=0, column=4, sticky="e", padx=(6, 0))
-        ToolTip(self.delete_screenshot_btn, "Delete selected screenshot")
+        ToolTip(self.delete_screenshot_btn, self.tr("delete_screenshot"))
         preview_frame = ttk.Frame(right, style="Panel.TFrame")
         preview_frame.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
         preview_frame.grid_rowconfigure(0, weight=1)
@@ -2089,7 +2453,8 @@ class ReimbursementHelperApp:
             mode="determinate",
         )
         self.progress_bar.pack(side="left")
-        ttk.Button(footer, text="Open output folder", command=self.open_output_folder).pack(side="right")
+        self.open_output_btn = ttk.Button(footer, text=self.tr("open_output_folder"), command=self.open_output_folder)
+        self.open_output_btn.pack(side="right")
 
     def _attach_amount_traces(self) -> None:
         for key in ("amount", "currency", "krw_amount", "rmb_amount"):
@@ -2112,6 +2477,75 @@ class ReimbursementHelperApp:
         self.exchange_rate.trace_add("write", lambda *_args: self._sync_amount_fields("rate"))
         self.usd_to_krw_rate.trace_add("write", lambda *_args: self._sync_amount_fields("rate"))
         self.krw_to_rmb_rate.trace_add("write", lambda *_args: self._sync_amount_fields("rate"))
+
+    def category_display_label(self, category: str) -> str:
+        labels = CATEGORY_LABELS_BY_LANGUAGE.get(self.language.get(), CATEGORY_LABELS_BY_LANGUAGE["en"])
+        return labels.get(category, category)
+
+    def category_key_from_display(self, value: str) -> str:
+        return self.category_label_to_key.get(value, category_value_to_key(value, self.form_version.get()))
+
+    def _on_language_changed(self) -> None:
+        chosen_label = self.language_display.get()
+        for code, label in LANGUAGE_LABELS.items():
+            if label == chosen_label:
+                self.language.set(code)
+                break
+        else:
+            self.language.set("en")
+            self.language_display.set(LANGUAGE_LABELS["en"])
+        self.settings["language"] = self.language.get()
+        save_user_settings(self.settings)
+        self.refresh_language_texts()
+
+    def refresh_language_texts(self) -> None:
+        self.root.title(self.tr("app_title"))
+        for widget, key in (
+            (self.header_label, "header_title"),
+            (self.form_label, "form"),
+            (self.language_label, "language"),
+            (self.upload_folder_btn, "select_files"),
+            (self.generate_details_btn, "generate_details"),
+            (self.generate_all_btn, "generate_all"),
+            (self.generate_excel_btn, "generate_excel"),
+            (self.manager_label, "inserted_receipts"),
+            (self.details_label, "details"),
+            (self.preview_label, "receipt_preview"),
+            (self.remove_btn, "remove"),
+            (self.clear_btn, "clear"),
+            (self.revert_crop_btn, "revert"),
+            (self.open_output_btn, "open_output_folder"),
+        ):
+            if widget is not None:
+                try:
+                    widget.configure(text=self.tr(key))
+                except Exception:
+                    pass
+        self.tree.heading("#0", text=self.tr("file"))
+        self.tree.heading("status", text=self.tr("status"))
+        self.tree.heading("date", text=self.tr("date"))
+        self.tree.heading("amount", text=self.tr("amount"))
+        for key, text_key in {
+            "date": "date",
+            "place": "place_vendor",
+            "currency": "currency",
+            "krw_amount": "krw_amount",
+            "rmb_amount": "rmb_amount",
+            "purpose": "purpose",
+            "details": "details",
+            "project_number": "project_number",
+            "category": "category",
+            "payment_method": "payment_method",
+            "receipt_label": "receipt_label",
+        }.items():
+            label = self.field_labels.get(key)
+            if label is not None:
+                label.configure(text=self.tr(text_key))
+        self._update_field_visibility()
+        self._on_form_version_changed(refresh_language_only=True)
+        if self.status_text.get() in {ui_text(code, "ready") for code in UI_TEXT}:
+            self.status_text.set(self.tr("ready"))
+        self.update_preview()
 
     def _on_field_changed(self, key: str) -> None:
         if self._loading_fields or self._syncing_amounts:
@@ -2287,7 +2721,7 @@ class ReimbursementHelperApp:
         for index in self.selected_indices():
             item = self.items[index]
             if key == "category":
-                setattr(item, key, category_value_to_key(value, version))
+                setattr(item, key, self.category_key_from_display(value))
             else:
                 setattr(item, key, value)
         if refresh:
@@ -2339,8 +2773,8 @@ class ReimbursementHelperApp:
     def _update_field_visibility(self) -> None:
         version = self.form_version.get()
         if version == "USA":
-            self.field_labels["amount"].configure(text="USD amount")
-            self.field_labels["rmb_amount"].configure(text="RMB amount")
+            self.field_labels["amount"].configure(text=self.tr("usd_amount"))
+            self.field_labels["rmb_amount"].configure(text=self.tr("rmb_amount"))
             self.field_vars["currency"].set("USD")
             self._set_field_visible("currency", False)
             self._set_field_visible("krw_amount", False)
@@ -2359,10 +2793,10 @@ class ReimbursementHelperApp:
             if self.krw_rate_entry is not None:
                 self.krw_rate_entry.pack_forget()
             if self.select_payment_proof_btn is not None:
-                self.select_payment_proof_btn.configure(text="Select Payment Proof", command=self.select_support_files, state="normal")
+                self.select_payment_proof_btn.configure(text=self.tr("select_payment_proof"), command=self.select_support_files, state="normal")
         else:
-            self.field_labels["amount"].configure(text="Original amount")
-            self.field_labels["rmb_amount"].configure(text="RMB amount")
+            self.field_labels["amount"].configure(text=self.tr("original_amount"))
+            self.field_labels["rmb_amount"].configure(text=self.tr("rmb_amount"))
             self._set_field_visible("currency", True)
             self._set_field_visible("krw_amount", True)
             self._set_field_visible("amount", True)
@@ -2380,7 +2814,7 @@ class ReimbursementHelperApp:
             if self.krw_rate_entry is not None:
                 self.krw_rate_entry.pack(side="left", padx=(6, 0))
             if self.select_payment_proof_btn is not None:
-                self.select_payment_proof_btn.configure(text="Select 汇率 Image", command=self.select_support_files, state="normal")
+                self.select_payment_proof_btn.configure(text=self.tr("select_exchange_rate"), command=self.select_support_files, state="normal")
 
     def suggested_toolbar_action(self) -> str:
         if self._busy:
@@ -2411,23 +2845,31 @@ class ReimbursementHelperApp:
             except Exception:
                 pass
 
-    def _on_form_version_changed(self) -> None:
+    def _on_form_version_changed(self, refresh_language_only: bool = False) -> None:
         version = normalized_form_version(self.form_version.get())
         if version != self.form_version.get():
             self.form_version.set(version)
-        form_changed = version != self._last_form_version
+        form_changed = version != self._last_form_version and not refresh_language_only
         if form_changed:
             self._details_ready_for_export = False
             self.settings["last_form_version"] = version
             save_user_settings(self.settings)
-        labels = KOREA_CATEGORY_LABELS if version == "Korea" else USA_CATEGORY_LABELS
-        self.category_values = [f"{key} - {label}" for key, label in labels.items()]
         cat_var = self.field_vars.get("category")
+        current_key = self.category_key_from_display(cat_var.get()) if cat_var is not None else ""
+        order = KOREA_REPORT_CATEGORY_ORDER if version == "Korea" else USA_REPORT_CATEGORY_ORDER
+        self.category_values = [self.category_display_label(key) for key in order]
+        self.category_label_to_key = {
+            self.category_display_label(key): key
+            for key in order
+        }
         if self.category_combo is not None:
             self.category_combo.configure(values=self.category_values)
         cat = self.field_vars.get("category")
-        if cat is not None and not cat.get():
-            cat.set(self.category_values[0] if self.category_values else "transportation")
+        if cat is not None:
+            if current_key in order:
+                cat.set(self.category_display_label(current_key))
+            elif not cat.get():
+                cat.set(self.category_values[0] if self.category_values else "transportation")
         for item in self.items:
             if version == "USA":
                 item.currency = "USD"
@@ -2641,13 +3083,13 @@ class ReimbursementHelperApp:
 
     def select_exchange_rate_images(self) -> None:
         if self.form_version.get() != "Korea":
-            self.show_info("汇率 images are only used for the Korea form.")
+            self.show_info(self.tr("exchange_only_korea"))
             return
         ensure_runtime_folders()
         if filedialog is None:
             return
         selected = filedialog.askopenfilenames(
-            title="Select 汇率 image files",
+            title=self.tr("select_exchange_rate"),
             filetypes=[
                 ("Exchange rate image files", "*.png *.jpg *.jpeg *.webp *.bmp *.gif *.pdf"),
                 ("Image files", "*.png *.jpg *.jpeg *.webp *.bmp *.gif"),
@@ -2691,13 +3133,13 @@ class ReimbursementHelperApp:
             )
             added += 1
         self.save_session()
-        self.status_text.set(f"Selected {added} 汇率 image file(s).")
+        self.status_text.set(self.tr("selected_exchange_files", count=added))
         self.update_toolbar_recommendation()
         if added:
             self.read_exchange_rate_from_images()
         if failed and messagebox:
             messagebox.showwarning(
-                "Select 汇率 Image",
+                self.tr("select_exchange_rate"),
                 "Some files could not be imported.\n\n"
                 + "\n".join(failed[:5])
                 + f"\n\nLogged to:\n{LOG_DIR / 'app.log'}",
@@ -2707,13 +3149,13 @@ class ReimbursementHelperApp:
         if not self.exchange_rate_items:
             return
         if not get_openai_api_key():
-            self.status_text.set("Selected 汇率 image(s). Add an API key to auto-read the rate.")
+            self.status_text.set(self.tr("selected_exchange_no_key"))
             return
         image_paths = [Path(item.path) for item in self.exchange_rate_items]
         usd_to_rmb_rate = safe_float(self.exchange_rate.get()) or safe_float(DEFAULT_USD_TO_RMB_RATE) or 6.8175
         self.set_busy(True)
-        self.set_progress(0, 1, "Reading 汇率")
-        self.status_text.set("Reading 汇率 image...")
+        self.set_progress(0, 1, self.tr("reading_exchange_short"))
+        self.status_text.set(self.tr("reading_exchange"))
 
         def worker() -> None:
             try:
@@ -2729,7 +3171,7 @@ class ReimbursementHelperApp:
                 def fail() -> None:
                     self.set_busy(False)
                     self.set_progress(0, 1, "")
-                    self.status_text.set(f"Selected 汇率 image(s), but could not auto-read rate: {message}")
+                    self.status_text.set(self.tr("selected_exchange_failed", message=message))
 
                 self.root.after(0, fail)
                 return
@@ -2748,7 +3190,7 @@ class ReimbursementHelperApp:
                 self.save_session()
                 self.set_busy(False)
                 self.set_progress(1, 1, "1/1")
-                self.status_text.set(f"Updated rate from 汇率 image: {', '.join(updates)}")
+                self.status_text.set(self.tr("updated_exchange_rate", updates=", ".join(updates)))
 
             self.root.after(0, done)
 
@@ -2943,6 +3385,32 @@ class ReimbursementHelperApp:
     def selected_items(self) -> List[ReceiptItem]:
         return [self.items[index] for index in self.selected_indices()]
 
+    def sort_items_for_current_report(self) -> None:
+        if not self.items:
+            return
+        selected_ids = {
+            self.items[index].item_id
+            for index in self.selected_indices()
+            if 0 <= index < len(self.items)
+        }
+        focused_id = self.selected_item().item_id if self.selected_item() is not None else ""
+        self.items = sort_receipts_for_report(self.items, self.form_version.get())
+        id_to_index = {item.item_id: index for index, item in enumerate(self.items)}
+        if focused_id in id_to_index:
+            self.selected_index = id_to_index[focused_id]
+        elif selected_ids:
+            self.selected_index = id_to_index.get(next(iter(selected_ids)), 0)
+        elif self.items:
+            self.selected_index = 0
+        else:
+            self.selected_index = None
+        selection = [str(id_to_index[item_id]) for item_id in selected_ids if item_id in id_to_index]
+        self.refresh_tree()
+        if selection:
+            self.tree.selection_set(selection)
+        elif self.selected_index is not None:
+            self.tree.selection_set(str(self.selected_index))
+
     def selected_item(self) -> Optional[ReceiptItem]:
         if self.selected_index is None:
             return None
@@ -2957,7 +3425,7 @@ class ReimbursementHelperApp:
         for key, var in self.field_vars.items():
             value = var.get()
             if key == "category":
-                value = category_value_to_key(value, self.form_version.get())
+                value = self.category_key_from_display(value)
             elif key == "currency":
                 value = normalize_currency(value, "USD" if self.form_version.get() == "USA" else "KRW")
             setattr(item, key, value)
@@ -2978,8 +3446,7 @@ class ReimbursementHelperApp:
             for key, var in self.field_vars.items():
                 value = getattr(item, key)
                 if key == "category":
-                    labels = KOREA_CATEGORY_LABELS if self.form_version.get() == "Korea" else USA_CATEGORY_LABELS
-                    value = f"{value} - {labels.get(value, value)}"
+                    value = self.category_display_label(category_value_to_key(value, self.form_version.get()))
                 var.set(value)
         finally:
             self._loading_fields = False
@@ -4127,7 +4594,10 @@ class ReimbursementHelperApp:
         if ready_for_export and successes > 0:
             self._details_ready_for_export = True
         self.set_progress(total, total, f"{total}/{total}")
-        self.refresh_tree()
+        if ready_for_export and successes > 0:
+            self.sort_items_for_current_report()
+        else:
+            self.refresh_tree()
         self.refresh_bank_tree()
         if reload_selected:
             self.load_selected_into_fields()
@@ -4416,6 +4886,7 @@ class ReimbursementHelperApp:
         self.settings["usd_to_krw_rate"] = self.usd_to_krw_rate.get()
         self.settings["krw_to_rmb_rate"] = self.krw_to_rmb_rate.get()
         self.settings["last_form_version"] = normalized_form_version(self.form_version.get())
+        self.settings["language"] = normalize_language(self.language.get())
         save_user_settings(self.settings)
         self.save_session()
         self.root.destroy()

@@ -1,4 +1,12 @@
-import { DEFAULT_KRW_TO_RMB, DEFAULT_USD_TO_KRW, DEFAULT_USD_TO_RMB } from "./constants";
+import {
+  DEFAULT_KRW_TO_RMB,
+  DEFAULT_USD_TO_KRW,
+  DEFAULT_USD_TO_RMB,
+  KOREA_CATEGORY_COLUMNS,
+  KOREA_REPORT_CATEGORY_ORDER,
+  USA_CATEGORY_ROWS,
+  USA_REPORT_CATEGORY_ORDER
+} from "./constants";
 import type { Category, Currency, ExchangeRates, ImageAttachment, PaymentProof, ReceiptItem } from "./types";
 
 export function uid(prefix = "id"): string {
@@ -38,6 +46,7 @@ export function normalizeCurrency(value: unknown, fallback: Currency): Currency 
 export function normalizeCategory(value: unknown): Category {
   const raw = String(value ?? "").trim().toLowerCase();
   if (!raw) return "other";
+  if (isKoreaOtherText(raw)) return "other";
   if (raw.includes("parking") || raw.includes("transport") || raw.includes("taxi") || raw.includes("toll") || raw.includes("fuel")) return "transportation";
   if (raw.includes("hotel") || raw.includes("lodging") || raw.includes("accommodation")) return "lodging";
   if (raw.includes("meal") || raw.includes("food") || raw.includes("restaurant")) return "meals";
@@ -70,6 +79,52 @@ export function normalizeCategory(value: unknown): Category {
     return raw as Category;
   }
   return "other";
+}
+
+export function isKoreaOtherText(value: string): boolean {
+  const raw = value.toLowerCase();
+  return /\b(e-?sim|sim card|data plan|internet access)\b/.test(raw) || /流量|虚拟卡|유심|데이터/.test(raw);
+}
+
+export function reportCategoryForItem(item: ReceiptItem, formVersion: "USA" | "Korea"): Category {
+  if (formVersion === "Korea") {
+    const text = [item.category, item.purpose, item.details, item.receiptLabel, item.place, item.filename].join(" ");
+    if (isKoreaOtherText(text)) return "other";
+    if (item.category in KOREA_CATEGORY_COLUMNS) return item.category;
+    if (item.category === "advertising" || item.category === "office") return "materials";
+    if (item.category === "entertainment") return "meals";
+    return "other";
+  }
+  if (item.category in USA_CATEGORY_ROWS) return item.category;
+  if (item.category === "materials" || item.category === "consumables") return "office";
+  return "other";
+}
+
+function dateSortValue(value: string): number {
+  const key = parseDateKey(value);
+  if (!key) return Number.POSITIVE_INFINITY;
+  const iso = /^\d{4}-\d{2}-\d{2}$/.test(key) ? `${key}T00:00:00` : key;
+  const time = Date.parse(iso);
+  return Number.isNaN(time) ? Number.POSITIVE_INFINITY : time;
+}
+
+export function sortReceiptsForReport(items: ReceiptItem[], formVersion: "USA" | "Korea"): ReceiptItem[] {
+  const order = formVersion === "Korea" ? KOREA_REPORT_CATEGORY_ORDER : USA_REPORT_CATEGORY_ORDER;
+  const orderIndex = new Map<string, number>(order.map((category, index) => [category, index]));
+  return items
+    .map((item, index) => ({
+      item,
+      index,
+      category: reportCategoryForItem(item, formVersion),
+      date: dateSortValue(item.date)
+    }))
+    .sort((left, right) => {
+      const categoryDiff = (orderIndex.get(left.category) ?? order.length) - (orderIndex.get(right.category) ?? order.length);
+      if (categoryDiff) return categoryDiff;
+      if (left.date !== right.date) return left.date - right.date;
+      return left.index - right.index;
+    })
+    .map(({ item }) => item);
 }
 
 export function blankReceipt(formVersion: "USA" | "Korea", image: ImageAttachment): ReceiptItem {

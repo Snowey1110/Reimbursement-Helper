@@ -19,7 +19,7 @@ https://snowey1110.github.io/Reimbursement-Helper/
 4. Click the blue suggested button and follow the flow:
    - `Select Files`
    - USA only: `Select Payment Proof`
-   - Korea only: `Select 汇率 Image` for the exchange-rate screenshot(s)
+   - Korea only: `Select Exchange Rate Images` for the exchange-rate screenshot(s)
    - `Generate All`
    - `Generate Excel`
 
@@ -43,6 +43,8 @@ The app supports:
 - USA and Korea Excel outputs from stored blank templates
 - local error logs for debugging without sharing private files
 - saved working session with restore prompt on reopen
+- language selector for English, Chinese, and Korean app labels
+- report ordering by expense category first, then date, with the same order on the details sheet and receipt-photo sheet
 
 ## Privacy Defaults
 
@@ -152,7 +154,7 @@ The app has editable exchange-rate fields. Current defaults are:
 - USD to KRW: `1548.86`
 - KRW to RMB: `0.004433`
 
-For Korea, `Original amount` plus `Currency` fills the KRW and RMB charged amounts. USD receipts calculate as USD -> KRW -> RMB. Change `Currency` to the receipt's real currency, such as `USD`, and the converted fields update immediately. Upload one or two `汇率` screenshots to update the visible Korea rate fields before export.
+For Korea, `Original amount` plus `Currency` fills the KRW and RMB charged amounts. USD receipts calculate as USD -> KRW -> RMB. Change `Currency` to the receipt's real currency, such as `USD`, and the converted fields update immediately. Upload one or two exchange-rate screenshots to update the visible Korea rate fields before export.
 
 ## Bulk Edits
 
@@ -189,6 +191,6 @@ The app copies these templates on export and fills the copy only. Original templ
 ## Notes
 
 - Receipt upload currently supports PNG, JPG, JPEG, WEBP, BMP, GIF, and PDF.
-- Korea output is one workbook with three sheets: cover, details, and receipts.
-- Korea receipts are grouped by payment on the `发票` sheet, with a compact payment label directly above each larger full-width receipt image. Optional Korea `汇率` screenshots are placed in the first `发票` image slot; overflow continues on the next printed page below.
+- Korea output is one workbook with three sheets: details, cover, and receipts.
+- Korea receipts are grouped by expense category and then sorted by date on both `报销明细` and `发票`. Each receipt label contains only date, content, and cost. Optional Korea exchange-rate screenshots are placed in the first `发票` image slot; overflow continues on the next printed page below.
 - USA output preserves the provided workbook format and puts matched payment proof images in column E.

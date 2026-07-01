@@ -8,7 +8,7 @@ import {
   USA_TEMPLATE_URL
 } from "./constants";
 import { makeContactSheet, preparedImageDataUrl } from "./imageUtils";
-import { downloadBlob, formatAmount, safeNumber } from "./utils";
+import { downloadBlob, formatAmount, reportCategoryForItem, safeNumber, sortReceiptsForReport } from "./utils";
 
 const KOREA_DETAIL_COLUMNS = "ABCDEFGHIJKLMNOPQRS".split("");
 const KRW_NUMBER_FORMAT = "₩#,##0";
@@ -39,16 +39,11 @@ function clearWorksheetPanes(sheet: ExcelJS.Worksheet): void {
 }
 
 function categoryForUsa(item: ReceiptItem): string {
-  if (item.category in USA_CATEGORY_ROWS) return item.category;
-  if (item.category === "materials" || item.category === "consumables") return "office";
-  return "other";
+  return reportCategoryForItem(item, "USA");
 }
 
 function categoryForKorea(item: ReceiptItem): string {
-  if (item.category in KOREA_CATEGORY_COLUMNS) return item.category;
-  if (item.category === "advertising" || item.category === "office") return "materials";
-  if (item.category === "entertainment") return "meals";
-  return "other";
+  return reportCategoryForItem(item, "Korea");
 }
 
 function koreaBucket(category: string): keyof typeof KOREA_COVER_ROWS {
@@ -97,7 +92,7 @@ export interface UsaExpenseRow {
 
 export function mapUsaExpenseRows(items: ReceiptItem[]): UsaExpenseRow[] {
   const cursors: Record<string, number> = {};
-  return items.map((item) => {
+  return sortReceiptsForReport(items, "USA").map((item) => {
     const category = categoryForUsa(item);
     const rows = USA_CATEGORY_ROWS[category] ?? USA_CATEGORY_ROWS.other;
     const cursor = cursors[category] ?? 0;
@@ -119,9 +114,9 @@ export interface KoreaDetailRow {
 }
 
 export function mapKoreaDetailRows(items: ReceiptItem[], rates: ExchangeRates): KoreaDetailRow[] {
-  return items.map((item, index) => {
+  return sortReceiptsForReport(items, "Korea").map((item, index) => {
     const row = index + 3;
-    if (row > 33) throw new Error("Korea template supports up to 31 detail rows.");
+    if (row > 32) throw new Error("Korea template supports up to 30 detail rows.");
     const category = categoryForKorea(item);
     const amounts = koreaAmounts(item, rates);
     return {
@@ -144,7 +139,8 @@ async function addImageToCell(
   cell: string,
   maxWidth: number,
   maxHeight: number,
-  allowUpscale = false
+  allowUpscale = false,
+  stretchToFit = false
 ): Promise<void> {
   if (!attachment) return;
   const prepared = Array.isArray(attachment)
@@ -165,7 +161,10 @@ async function addImageToCell(
   }
   sheet.addImage(imageId, {
     tl: { col: col - 1, row },
-    ext: { width: prepared.displayWidth ?? prepared.width, height: prepared.displayHeight ?? prepared.height }
+    ext: {
+      width: stretchToFit ? maxWidth : prepared.displayWidth ?? prepared.width,
+      height: stretchToFit ? maxHeight : prepared.displayHeight ?? prepared.height
+    }
   });
 }
 
@@ -247,8 +246,9 @@ function configureKoreaReceiptPage(sheet: ExcelJS.Worksheet, slotCount: number):
   sheet.pageSetup = {
     ...sheet.pageSetup,
     orientation: "portrait",
-    fitToPage: true,
-    fitToWidth: 1,
+    fitToPage: false,
+    scale: 78,
+    fitToWidth: undefined,
     fitToHeight: 0,
     printArea: `A1:H${lastRow}`,
     margins: {
@@ -272,6 +272,7 @@ export async function exportUsaWorkbook(items: ReceiptItem[], proofs: PaymentPro
   const expense = workbook.getWorksheet("Expense report");
   const receipts = workbook.getWorksheet("Receipt and Payment of expenses");
   if (!expense || !receipts) throw new Error("USA template is missing required sheets.");
+  const sortedItems = sortReceiptsForReport(items, "USA");
   expense.getCell("A3").value = `Date / 填表日期： ${new Date().toLocaleDateString("en-US")}`;
   expense.getCell("A4").value = "Employee: / 申请人：";
   expense.getCell("J1").value = rates.usdToRmb;
@@ -280,7 +281,7 @@ export async function exportUsaWorkbook(items: ReceiptItem[], proofs: PaymentPro
   for (const row of allRows) {
     expense.getCell(`G${row}`).value = { formula: `F${row}*$J$1` };
   }
-  for (const { item, row } of mapUsaExpenseRows(items)) {
+  for (const { item, row } of mapUsaExpenseRows(sortedItems)) {
     expense.getCell(`A${row}`).value = item.place;
     expense.getCell(`B${row}`).value = item.date;
     expense.getCell(`C${row}`).value = item.details || item.receiptLabel || item.filename;
@@ -297,8 +298,8 @@ export async function exportUsaWorkbook(items: ReceiptItem[], proofs: PaymentPro
   }
   receipts.getColumn("D").width = 38;
   receipts.getColumn("E").width = 26;
-  for (let index = 0; index < items.length; index += 1) {
-    const item = items[index];
+  for (let index = 0; index < sortedItems.length; index += 1) {
+    const item = sortedItems[index];
     const row = index + 2;
     receipts.getCell(`A${row}`).value = index + 1;
     receipts.getCell(`B${row}`).value = item.date;
@@ -317,7 +318,27 @@ export async function exportKoreaWorkbook(items: ReceiptItem[], rates: ExchangeR
   const details = workbook.getWorksheet("报销明细") ?? workbook.worksheets[1];
   const receipts = workbook.worksheets[2];
   if (!cover || !details || !receipts) throw new Error("Korea template is missing required sheets.");
+  const sortedItems = sortReceiptsForReport(items, "Korea");
+  (details as unknown as { orderNo: number }).orderNo = 0;
+  (cover as unknown as { orderNo: number }).orderNo = 1;
+  (receipts as unknown as { orderNo: number }).orderNo = 2;
   clearWorksheetPanes(details);
+  details.pageSetup = {
+    ...details.pageSetup,
+    orientation: "landscape",
+    fitToPage: false,
+    scale: 34,
+    fitToWidth: undefined,
+    fitToHeight: undefined,
+    margins: {
+      left: 0.25,
+      right: 0.25,
+      top: 0.75,
+      bottom: 0.75,
+      header: 0.3,
+      footer: 0.3
+    }
+  };
   const now = new Date();
   cover.getCell("A2").value = `报销部门：  ${now.getFullYear()}年 ${now.getMonth() + 1}月 ${now.getDate()}日 填 单据及附件共  页`;
   cover.getCell("A11").value = "领导审批           会计主管              会计                  出纳                 报销人                   领款人 ";
@@ -329,19 +350,39 @@ export async function exportKoreaWorkbook(items: ReceiptItem[], rates: ExchangeR
   cover.getCell("C9").value = { formula: "SUM(C4:C8)" };
   cover.getCell("D9").value = { formula: "SUM(D4:D8)" };
   cover.getCell("B10").value = { formula: "D9" };
-  for (let row = 3; row <= 34; row += 1) {
+  for (let row = 3; row <= 35; row += 1) {
     for (const col of KOREA_DETAIL_COLUMNS) {
       details.getCell(`${col}${row}`).value = null;
     }
+  }
+  try {
+    details.unMergeCells("A34:B34");
+    details.unMergeCells("A35:B35");
+  } catch {
+    // Template may already use the target merged ranges.
+  }
+  try {
+    details.mergeCells("A33:B33");
+    details.mergeCells("A34:B34");
+  } catch {
+    // Ignore if already merged.
   }
   details.getCell("A34").value = "合计（外币）\nTotal";
   details.getCell("Q34").value = { formula: "SUM(Q3:Q33)" };
   details.getCell("Q34").numFmt = KRW_NUMBER_FORMAT;
   details.getCell("A35").value = "合计（人民币）\nTotal";
   details.getCell("R35").value = { formula: "SUM(R3:R34)" };
+  details.getCell("A35").value = null;
+  details.getCell("Q34").value = null;
+  details.getCell("R35").value = null;
+  details.getCell("A33").value = "合计（外币）\nTotal";
+  details.getCell("Q33").value = { formula: "SUM(Q3:Q32)" };
+  details.getCell("Q33").numFmt = KRW_NUMBER_FORMAT;
+  details.getCell("A34").value = "合计（人民币）\nTotal";
+  details.getCell("R34").value = { formula: "SUM(R3:R33)" };
   const summary: Record<string, { krw: number; rmb: number }> = {};
   for (const key of Object.keys(KOREA_COVER_ROWS)) summary[key] = { krw: 0, rmb: 0 };
-  for (const mapped of mapKoreaDetailRows(items, rates)) {
+  for (const mapped of mapKoreaDetailRows(sortedItems, rates)) {
     const { row, item } = mapped;
     details.getCell(`A${row}`).value = item.date;
     details.getCell(`B${row}`).value = item.purpose || item.details;
@@ -367,7 +408,7 @@ export async function exportKoreaWorkbook(items: ReceiptItem[], rates: ExchangeR
   cover.getCell("C9").numFmt = KRW_NUMBER_FORMAT;
   const blocks = [
     ...(exchangeRateImages.length ? [{ label: "汇率 / Exchange Rate", images: exchangeRateImages, wide: true }] : []),
-    ...items.map((item, index) => ({ label: koreaReceiptPaymentLabel(index, item), images: item.images, wide: false }))
+    ...sortedItems.map((item, index) => ({ label: koreaReceiptPaymentLabel(index, item), images: item.images, wide: false }))
   ];
   const slotCount = blocks.reduce((count, block) => count + (block.wide ? 2 : 1), 0);
   const lastReceiptRow = configureKoreaReceiptPage(receipts, slotCount);
@@ -384,8 +425,8 @@ export async function exportKoreaWorkbook(items: ReceiptItem[], rates: ExchangeR
     receipts.getCell(slot.labelCell).font = { bold: true, size: 10, color: { argb: "FF1F2937" } };
     receipts.getCell(slot.labelCell).alignment = { vertical: "middle", horizontal: "left", wrapText: true };
     receipts.getCell(slot.labelCell).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE9EEF3" } };
-    receipts.getRow(Number(slot.labelCell.replace(/^[A-Z]+/, ""))).height = 20;
-    await addImageToCell(workbook, receipts, blocks[index].images, slot.imageCell, slot.maxWidth, slot.maxHeight, true);
+    receipts.getRow(Number(slot.labelCell.replace(/^[A-Z]+/, ""))).height = 22;
+    await addImageToCell(workbook, receipts, blocks[index].images, slot.imageCell, slot.maxWidth, slot.maxHeight, true, true);
     slotIndex += blocks[index].wide ? 2 : 1;
   }
   const buffer = await workbook.xlsx.writeBuffer();

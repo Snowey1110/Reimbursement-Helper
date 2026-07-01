@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import App from "./App";
-import { FORM_VERSION_STORAGE_KEY } from "./constants";
+import { FORM_VERSION_STORAGE_KEY, LANGUAGE_STORAGE_KEY } from "./constants";
 import type { ImageAttachment } from "./types";
 
 vi.mock("./imageUtils", () => ({
@@ -62,10 +62,21 @@ describe("Reimbursement Helper web app", () => {
 
     await screen.findAllByText("1.png");
 
-    const exchangeButton = screen.getByRole("button", { name: /Select 汇率 Image/ });
+    const exchangeButton = screen.getByRole("button", { name: /Select Exchange Rate Images/ });
     expect(exchangeButton).toHaveClass("recommended");
     expect(screen.getByLabelText("USD -> KRW")).toBeInTheDocument();
     expect(screen.queryByLabelText("USD -> RMB")).not.toBeInTheDocument();
+  });
+
+  it("persists language and avoids mixed exchange-rate labels", () => {
+    localStorage.setItem(FORM_VERSION_STORAGE_KEY, "Korea");
+    localStorage.setItem(LANGUAGE_STORAGE_KEY, "zh");
+
+    render(<App />);
+
+    expect(screen.getByLabelText("语言")).toHaveValue("zh");
+    expect(screen.getByRole("button", { name: /选择汇率图片/ })).toBeInTheDocument();
+    expect(screen.queryByText(/Select 汇率/)).not.toBeInTheDocument();
   });
 
   it("selects all receipt rows with Ctrl+A and bulk edits project number", async () => {
