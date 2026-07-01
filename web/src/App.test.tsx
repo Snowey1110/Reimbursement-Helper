@@ -94,6 +94,36 @@ describe("Reimbursement Helper web app", () => {
     });
   });
 
+  it("selects the receipt range between normal click and Shift-click", async () => {
+    render(<App />);
+
+    const receiptInput = document.querySelector('input[type="file"][accept="image/*,.pdf"]') as HTMLInputElement;
+    fireEvent.change(receiptInput, {
+      target: {
+        files: [
+          new File(["one"], "1.png", { type: "image/png" }),
+          new File(["two"], "2.png", { type: "image/png" }),
+          new File(["three"], "3.png", { type: "image/png" })
+        ]
+      }
+    });
+
+    await screen.findAllByText("3.png");
+
+    const rows = Array.from(document.querySelectorAll(".receipt-row:not(.receipt-heading)")) as HTMLButtonElement[];
+    fireEvent.click(rows[0]);
+    fireEvent.click(rows[2], { shiftKey: true });
+
+    expect(rows.filter((row) => row.classList.contains("selected"))).toHaveLength(3);
+
+    fireEvent.change(screen.getByLabelText("Project number"), { target: { value: "ZH26002" } });
+    fireEvent.click(rows[1]);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Project number")).toHaveValue("ZH26002");
+    });
+  });
+
   it("shows direct template download links", () => {
     render(<App />);
 

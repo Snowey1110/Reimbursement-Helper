@@ -72,6 +72,7 @@ export default function App() {
   const receiptInputRef = useRef<HTMLInputElement>(null);
   const proofInputRef = useRef<HTMLInputElement>(null);
   const exchangeRateInputRef = useRef<HTMLInputElement>(null);
+  const selectionAnchorIdRef = useRef<string | null>(null);
 
   const selectedItem = selectedIds.length ? items.find((item) => item.id === selectedIds[selectedIds.length - 1]) ?? null : null;
   const selectedProofs = selectedItem ? proofs.filter((proof) => proof.matchedReceiptId === selectedItem.id) : [];
@@ -137,6 +138,7 @@ export default function App() {
       setItems((current) => [...current, ...next]);
       if (!selectedIds.length && next.length) {
         setSelectedIds([next[0].id]);
+        selectionAnchorIdRef.current = next[0].id;
         setSelectedTile({ kind: "receipt", receiptId: next[0].id, imageId: next[0].images[0].id });
       }
       setStatus(`Added ${next.length} receipt file(s).`);
@@ -306,6 +308,7 @@ export default function App() {
     setItems((current) => current.filter((item) => !selectedIds.includes(item.id)));
     setProofs((current) => current.map((proof) => (selectedIds.includes(proof.matchedReceiptId) ? { ...proof, matchedReceiptId: "", status: "Needs manual review" } : proof)));
     setSelectedIds([]);
+    selectionAnchorIdRef.current = null;
     setSelectedTile(null);
     setReadyForExport(false);
     setStatus(`Removed ${selectedIds.length} receipt row(s).`);
@@ -408,12 +411,34 @@ export default function App() {
     if (event.key === "a" && event.ctrlKey) {
       event.preventDefault();
       setSelectedIds(items.map((item) => item.id));
+      selectionAnchorIdRef.current = items[0]?.id ?? null;
       if (items[0]) setSelectedTile({ kind: "receipt", receiptId: items[0].id, imageId: items[0].images[0]?.id });
     }
     if (event.key === "Delete" || event.key === "Backspace") {
       event.preventDefault();
       removeSelectedRows();
     }
+  }
+
+  function selectReceiptRow(item: ReceiptItem, index: number, event: React.MouseEvent<HTMLButtonElement>) {
+    let nextSelectedIds: string[];
+    if (event.shiftKey) {
+      const anchorId = selectionAnchorIdRef.current ?? selectedIds[selectedIds.length - 1] ?? item.id;
+      const anchorIndex = items.findIndex((candidate) => candidate.id === anchorId);
+      const start = Math.min(anchorIndex >= 0 ? anchorIndex : index, index);
+      const end = Math.max(anchorIndex >= 0 ? anchorIndex : index, index);
+      const rangeIds = items.slice(start, end + 1).map((candidate) => candidate.id);
+      const baseIds = event.ctrlKey || event.metaKey ? selectedIds.filter((id) => !rangeIds.includes(id) && id !== item.id) : [];
+      nextSelectedIds = [...baseIds, ...rangeIds.filter((id) => id !== item.id), item.id];
+    } else {
+      nextSelectedIds = event.ctrlKey || event.metaKey ? toggle(selectedIds, item.id) : [item.id];
+      selectionAnchorIdRef.current = item.id;
+    }
+
+    setSelectedIds(nextSelectedIds);
+    const focusedId = nextSelectedIds.includes(item.id) ? item.id : nextSelectedIds[nextSelectedIds.length - 1];
+    const focusedItem = items.find((candidate) => candidate.id === focusedId);
+    setSelectedTile(focusedItem ? { kind: "receipt", receiptId: focusedItem.id, imageId: focusedItem.images[0]?.id } : null);
   }
 
   return (
@@ -503,16 +528,12 @@ export default function App() {
               <span>Date</span>
               <span>Amount</span>
             </div>
-            {items.map((item) => (
+            {items.map((item, index) => (
               <button
                 type="button"
                 key={item.id}
                 className={`receipt-row ${selectedIds.includes(item.id) ? "selected" : ""}`}
-                onClick={(event) => {
-                  const next = event.ctrlKey || event.metaKey ? toggle(selectedIds, item.id) : [item.id];
-                  setSelectedIds(next);
-                  setSelectedTile({ kind: "receipt", receiptId: item.id, imageId: item.images[0]?.id });
-                }}
+                onClick={(event) => selectReceiptRow(item, index, event)}
               >
                 <span>{item.filename}</span>
                 <span>{item.status}</span>
@@ -525,7 +546,7 @@ export default function App() {
             <button type="button" onClick={removeSelectedRows} disabled={!selectedIds.length}>
               Remove
             </button>
-            <button type="button" onClick={() => { setItems([]); setProofs([]); setExchangeRateImages([]); setSelectedIds([]); setSelectedTile(null); setReadyForExport(false); }}>
+            <button type="button" onClick={() => { setItems([]); setProofs([]); setExchangeRateImages([]); setSelectedIds([]); selectionAnchorIdRef.current = null; setSelectedTile(null); setReadyForExport(false); }}>
               Clear
             </button>
           </div>

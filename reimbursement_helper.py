@@ -1681,6 +1681,7 @@ class ReimbursementHelperApp:
         self.generate_excel_btn: Optional[Any] = None
         self.selected_attachment_kind = "receipt"
         self.selected_attachment_index = 0
+        self._selection_anchor_index: Optional[int] = None
         self.preview_tiles: List[Dict[str, Any]] = []
         self.preview_photos: List[Any] = []
         self.preview_action_regions: Dict[str, Dict[str, Any]] = {}
@@ -1954,6 +1955,7 @@ class ReimbursementHelperApp:
         self.tree.column("amount", width=70, stretch=False)
         self.tree.pack(fill="both", expand=True)
         self.tree.bind("<<TreeviewSelect>>", self._on_tree_select)
+        self.tree.bind("<Shift-Button-1>", self._on_tree_shift_click)
         self.tree.bind("<Delete>", self.remove_selected)
         self.tree.bind("<BackSpace>", self.remove_selected)
         self.tree.bind("<Control-a>", self.select_all_receipts)
@@ -2871,12 +2873,42 @@ class ReimbursementHelperApp:
         except Exception:
             return
         self.select_index(index)
+        if len(selection) == 1:
+            self._selection_anchor_index = index
+
+    def _on_tree_shift_click(self, event: Any) -> str:
+        iid = self.tree.identify_row(event.y)
+        if not iid:
+            return ""
+        try:
+            index = int(iid)
+        except Exception:
+            return "break"
+        if index < 0 or index >= len(self.items):
+            return "break"
+        anchor = self._selection_anchor_index
+        if anchor is None or anchor < 0 or anchor >= len(self.items):
+            anchor = self.selected_index if self.selected_index is not None else index
+        if anchor is None or anchor < 0 or anchor >= len(self.items):
+            anchor = index
+        start, end = sorted((anchor, index))
+        selection = [str(row) for row in range(start, end + 1)]
+        self.save_current_fields()
+        self.tree.selection_set(selection)
+        self.tree.focus(str(index))
+        self.selected_index = index
+        self.selected_attachment_kind = "receipt"
+        self.selected_attachment_index = 0
+        self.load_selected_into_fields()
+        self.update_preview()
+        return "break"
 
     def select_index(self, index: int) -> None:
         if self.selected_index == index:
             return
         self.save_current_fields()
         self.selected_index = index
+        self._selection_anchor_index = index
         self.tree.focus(str(index))
         if str(index) not in self.tree.selection():
             self.tree.selection_set(str(index))
@@ -2902,6 +2934,7 @@ class ReimbursementHelperApp:
         self.tree.selection_set([str(index) for index in range(len(self.items))])
         self.tree.focus(str(0))
         self.selected_index = 0
+        self._selection_anchor_index = 0
         self.load_selected_into_fields()
         self.update_preview()
         self.status_text.set(f"Selected all {len(self.items)} receipt row(s).")
@@ -3759,8 +3792,11 @@ class ReimbursementHelperApp:
         self.refresh_tree()
         self.refresh_bank_tree()
         if self.items:
-            self.select_index(min(indices[0], len(self.items) - 1))
+            next_index = min(indices[0], len(self.items) - 1)
+            self._selection_anchor_index = next_index
+            self.select_index(next_index)
         else:
+            self._selection_anchor_index = None
             self.load_selected_into_fields()
             self.update_preview()
         self.status_text.set(f"Removed {len(indices)} selected receipt(s).")
@@ -3779,6 +3815,7 @@ class ReimbursementHelperApp:
         self.exchange_rate_items.clear()
         self.selected_index = None
         self.selected_bank_index = None
+        self._selection_anchor_index = None
         self.refresh_tree()
         self.refresh_bank_tree()
         self.load_selected_into_fields()
