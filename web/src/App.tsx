@@ -28,7 +28,7 @@ import { exportKoreaWorkbook, exportUsaWorkbook } from "./excelExport";
 import { defaultCropPoints, fileToAttachments, orientedImageDataUrl, orientedImageSize, rotateCropPoints } from "./imageUtils";
 import { CATEGORY_LABELS, LANGUAGE_OPTIONS, normalizeLanguage, text, type AppLanguage } from "./i18n";
 import { loadTrackerConfig, loadTrackerStats, trackReportGenerated, type ReportTrackerConfig, type ReportTrackerStats } from "./tracker";
-import type { Category, CropPoint, Currency, DocumentType, ExchangeRates, ImageAttachment, PaymentProof, ReceiptItem, SelectedTile } from "./types";
+import type { Category, CropPoint, Currency, DocumentType, ExchangeRates, ImageAttachment, PaymentProof, ReceiptExtraction, ReceiptItem, SelectedTile } from "./types";
 import {
   blankReceipt,
   formatAmount,
@@ -44,8 +44,27 @@ import {
 } from "./utils";
 
 const STORAGE_KEY = "reimbursement-helper-web-api-key";
+const AI_REQUEST_CONCURRENCY = 4;
 type SuggestedAction = "selectFiles" | "selectExchangeRate" | "generateEmpty" | "generateAll" | "generateExcel";
 type FormVersion = "USA" | "Korea";
+
+async function runWithConcurrency<T>(
+  values: T[],
+  concurrency: number,
+  worker: (value: T, index: number) => Promise<void>
+): Promise<void> {
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, concurrency), values.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < values.length) {
+        const currentIndex = nextIndex;
+        nextIndex += 1;
+        await worker(values[currentIndex], currentIndex);
+      }
+    })
+  );
+}
 
 function normalizeFormVersion(value: unknown): FormVersion | undefined {
   if (typeof value !== "string") return undefined;
@@ -305,6 +324,7 @@ export default function App() {
       setStatus(t("enterApiKeyFirst"));
       return;
     }
+    const apiKeyValue = apiKey.trim();
     setBusy(true);
     setProgress(0);
     if (includeProofs) {
@@ -312,43 +332,91 @@ export default function App() {
     }
     try {
       let done = 0;
+      let successes = 0;
+      const failures: string[] = [];
+      const receiptResults = new Map<string, ReceiptExtraction>();
+      const failedReceiptIds = new Set<string>();
       let workingItems = items;
       let workingProofs = proofs;
       const total = Math.max(1, targets.length + (includeProofs && formVersion === "USA" ? workingProofs.length : 0));
-      for (const item of targets) {
-        setStatus(t("readingReceipt", { filename: item.filename }));
-        const currentItem = workingItems.find((candidate) => candidate.id === item.id) ?? item;
-        const extraction = await extractReceiptWithOpenAI(apiKey.trim(), DEFAULT_MODEL, formVersion, currentItem);
-        workingItems = workingItems.map((candidate) =>
-          candidate.id === currentItem.id ? updateAmounts(applyExtraction(candidate, extraction, formVersion), rates, "amount") : candidate
-        );
-        setItems(workingItems);
+      const completeOne = () => {
         done += 1;
         setProgress(Math.round((done / total) * 100));
-      }
+      };
+      await runWithConcurrency(targets, AI_REQUEST_CONCURRENCY, async (item) => {
+        setStatus(t("readingReceipt", { filename: item.filename }));
+        try {
+          const extraction = await extractReceiptWithOpenAI(apiKeyValue, DEFAULT_MODEL, formVersion, item);
+          receiptResults.set(item.id, extraction);
+          successes += 1;
+          setItems((current) =>
+            current.map((candidate) =>
+              candidate.id === item.id ? updateAmounts(applyExtraction(candidate, extraction, formVersion), rates, "amount") : candidate
+            )
+          );
+        } catch (error) {
+          failedReceiptIds.add(item.id);
+          failures.push(`${item.filename}: ${error instanceof Error ? error.message : t("aiFailed")}`);
+          setItems((current) => current.map((candidate) => (candidate.id === item.id ? { ...candidate, status: "Failed" } : candidate)));
+        } finally {
+          completeOne();
+        }
+      });
+      workingItems = items.map((candidate) => {
+        const extraction = receiptResults.get(candidate.id);
+        if (extraction) return updateAmounts(applyExtraction(candidate, extraction, formVersion), rates, "amount");
+        if (failedReceiptIds.has(candidate.id)) return { ...candidate, status: "Failed" };
+        return candidate;
+      });
       if (includeProofs && formVersion === "USA" && proofs.length) {
         workingItems = mergeSameUsaReceipts(workingItems);
         workingItems = matchUsaPaymentProofItems(workingItems);
         setSelectedIds((current) => current.filter((id) => workingItems.some((item) => item.id === id)));
-        for (const proof of workingProofs) {
+        setItems(workingItems);
+        const proofResults = new Map<string, ReceiptExtraction>();
+        const failedProofIds = new Set<string>();
+        await runWithConcurrency(workingProofs, AI_REQUEST_CONCURRENCY, async (proof) => {
           setStatus(t("readingProof", { filename: proof.filename }));
-          const tempReceipt = blankReceipt("USA", proof.image);
-          const extraction = await extractReceiptWithOpenAI(apiKey.trim(), DEFAULT_MODEL, "USA", tempReceipt);
-          workingProofs = workingProofs.map((candidate) =>
-            candidate.id === proof.id
-              ? {
-                  ...candidate,
-                  date: String(extraction.date ?? candidate.date ?? ""),
-                  amount: String(extraction.amount ?? candidate.amount ?? ""),
-                  place: String(extraction.place ?? extraction.vendor ?? candidate.place ?? ""),
-                  status: "Needs match"
-                }
-              : candidate
-          );
-          setProofs(workingProofs);
-          done += 1;
-          setProgress(Math.round((done / total) * 100));
-        }
+          try {
+            const tempReceipt = blankReceipt("USA", proof.image);
+            const extraction = await extractReceiptWithOpenAI(apiKeyValue, DEFAULT_MODEL, "USA", tempReceipt);
+            proofResults.set(proof.id, extraction);
+            successes += 1;
+            setProofs((current) =>
+              current.map((candidate) =>
+                candidate.id === proof.id
+                  ? {
+                      ...candidate,
+                      date: String(extraction.date ?? candidate.date ?? ""),
+                      amount: String(extraction.amount ?? candidate.amount ?? ""),
+                      place: String(extraction.place ?? extraction.vendor ?? candidate.place ?? ""),
+                      status: "Needs match"
+                    }
+                  : candidate
+              )
+            );
+          } catch (error) {
+            failedProofIds.add(proof.id);
+            failures.push(`${proof.filename}: ${error instanceof Error ? error.message : t("aiFailed")}`);
+            setProofs((current) => current.map((candidate) => (candidate.id === proof.id ? { ...candidate, status: "Needs manual review" } : candidate)));
+          } finally {
+            completeOne();
+          }
+        });
+        workingProofs = workingProofs.map((candidate) => {
+          const extraction = proofResults.get(candidate.id);
+          if (extraction) {
+            return {
+              ...candidate,
+              date: String(extraction.date ?? candidate.date ?? ""),
+              amount: String(extraction.amount ?? candidate.amount ?? ""),
+              place: String(extraction.place ?? extraction.vendor ?? candidate.place ?? ""),
+              status: "Needs match"
+            };
+          }
+          if (failedProofIds.has(candidate.id)) return { ...candidate, status: "Needs manual review" };
+          return candidate;
+        });
         workingProofs = matchPaymentProofs(workingProofs, workingItems);
         setProofs(workingProofs);
       } else if (includeProofs && formVersion === "USA") {
@@ -359,9 +427,9 @@ export default function App() {
         workingItems = formVersion === "USA" ? workingItems : sortReceiptsForReport(workingItems, formVersion);
         setItems(workingItems);
         setSelectedIds((current) => current.filter((id) => workingItems.some((item) => item.id === id)));
-        setReadyForExport(true);
+        setReadyForExport(successes > 0);
       }
-      setStatus(t("detailsGenerated"));
+      setStatus(failures.length ? t("aiFinishedWithFailures", { successes, failures: failures.length }) : t("detailsGenerated"));
     } catch (error) {
       if (includeProofs) {
         setReadyForExport(false);

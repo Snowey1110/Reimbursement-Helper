@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import copy
 import json
 import logging
@@ -74,6 +75,7 @@ DEFAULT_USD_TO_KRW_RATE = "1548.86"
 DEFAULT_KRW_TO_RMB_RATE = "0.004433"
 PDF_RENDER_SCALE = 3
 KRW_NUMBER_FORMAT = "\u20a9#,##0"
+AI_REQUEST_CONCURRENCY = 4
 LOGGER = logging.getLogger("reimbursement_helper")
 
 
@@ -5234,12 +5236,26 @@ class ReimbursementHelperApp:
         def worker() -> None:
             successes = 0
             failures: List[str] = []
-            for idx, item in enumerate(items, start=1):
+            completed = 0
+            progress_lock = threading.Lock()
+
+            def next_done() -> int:
+                nonlocal completed
+                with progress_lock:
+                    completed += 1
+                    return completed
+
+            def current_done() -> int:
+                with progress_lock:
+                    return completed
+
+            def process_receipt(index: int, item: ReceiptItem) -> Optional[str]:
+                display_index = index + 1
                 self.root.after(
                     0,
-                    lambda i=item, n=idx: self.mark_item_status(i, f"Processing {n}/{total}", n - 1, total),
+                    lambda i=item, n=display_index: self.mark_item_status(i, f"Processing {n}/{total}", current_done(), total),
                 )
-                self.set_status(f"Generating details {idx}/{total}: {item.filename}")
+                self.set_status(f"Generating details {display_index}/{len(items)}: {item.filename}")
                 try:
                     data = call_openai_receipt_extraction(
                         Path(item.path),
@@ -5249,36 +5265,46 @@ class ReimbursementHelperApp:
                     )
                     self.apply_ai_data_to_item(item, data)
                     self.move_item_to_processed(item)
-                    successes += 1
+                    done = next_done()
                     self.root.after(
                         0,
-                        lambda i=item, n=idx: self.mark_item_status(i, "AI filled", n, total),
+                        lambda i=item, d=done: self.mark_item_status(i, "AI filled", d, total),
                     )
+                    return None
                 except Exception as exc:
                     setup_logging()
                     LOGGER.exception("AI extraction failed for %s", item.filename)
-                    failures.append(f"{item.filename}: {exc}")
+                    done = next_done()
                     self.root.after(
                         0,
-                        lambda i=item, n=idx: self.mark_item_status(i, "Failed", n, total),
+                        lambda i=item, d=done: self.mark_item_status(i, "Failed", d, total),
                     )
-                    continue
+                    return f"{item.filename}: {exc}"
+
+            receipt_workers = min(AI_REQUEST_CONCURRENCY, max(1, len(items)))
+            with ThreadPoolExecutor(max_workers=receipt_workers) as executor:
+                futures = [executor.submit(process_receipt, idx, item) for idx, item in enumerate(items)]
+                for future in as_completed(futures):
+                    failure = future.result()
+                    if failure:
+                        failures.append(failure)
+                    else:
+                        successes += 1
             if include_bank and form_version == "USA":
                 merged_count = self.merge_same_usa_receipts()
                 match_usa_payment_proof_items(self.items)
                 if merged_count:
                     self.root.after(0, self.refresh_tree)
                     self.set_status(f"Merged {merged_count} duplicate receipt screenshot(s).")
-            offset = len(items)
-            for bank_index, bank_item in enumerate(bank_items, start=1):
-                progress_index = offset + bank_index
+            def process_bank_proof(index: int, bank_item: BankStatementItem) -> Optional[str]:
+                display_index = index + 1
                 self.root.after(
                     0,
-                    lambda i=bank_item, n=progress_index: self.mark_bank_item_status(
-                        i, f"Processing {n}/{total}", n - 1, total
+                    lambda i=bank_item, n=display_index: self.mark_bank_item_status(
+                        i, f"Processing proof {n}/{len(bank_items)}", current_done(), total
                     ),
                 )
-                self.set_status(f"Reading payment proof {bank_index}/{len(bank_items)}: {bank_item.filename}")
+                self.set_status(f"Reading payment proof {display_index}/{len(bank_items)}: {bank_item.filename}")
                 try:
                     temp = ReceiptItem(
                         item_id=bank_item.item_id,
@@ -5301,26 +5327,40 @@ class ReimbursementHelperApp:
                         progress=self.set_status,
                     )
                     self.apply_ai_data_to_bank_item(bank_item, data)
-                    self.match_bank_item(bank_item)
-                    successes += 1
+                    done = next_done()
                     self.root.after(
                         0,
-                        lambda i=bank_item, n=progress_index: self.mark_bank_item_status(i, i.status, n, total),
+                        lambda i=bank_item, d=done: self.mark_bank_item_status(i, i.status, d, total),
                     )
+                    return None
                 except Exception as exc:
                     setup_logging()
                     LOGGER.exception("Bank statement extraction failed for %s", bank_item.filename)
                     bank_item.status = "Needs manual review"
-                    failures.append(f"{bank_item.filename}: {exc}")
+                    done = next_done()
                     self.root.after(
                         0,
-                        lambda i=bank_item, n=progress_index: self.mark_bank_item_status(
-                            i, "Needs manual review", n, total
+                        lambda i=bank_item, d=done: self.mark_bank_item_status(
+                            i, "Needs manual review", d, total
                         ),
                     )
-                    continue
+                    return f"{bank_item.filename}: {exc}"
             if bank_items:
+                bank_workers = min(AI_REQUEST_CONCURRENCY, max(1, len(bank_items)))
+                with ThreadPoolExecutor(max_workers=bank_workers) as executor:
+                    futures = [executor.submit(process_bank_proof, idx, bank_item) for idx, bank_item in enumerate(bank_items)]
+                    for future in as_completed(futures):
+                        failure = future.result()
+                        if failure:
+                            failures.append(failure)
+                        else:
+                            successes += 1
+            if bank_items:
+                for bank_item in bank_items:
+                    if bank_item.status != "Needs manual review":
+                        self.match_bank_item(bank_item)
                 self.resolve_payment_proof_conflicts()
+                self.root.after(0, self.refresh_bank_tree)
             self.root.after(0, lambda: self.after_ai_complete(successes, failures, total, reload_selected, include_bank))
 
         threading.Thread(target=worker, daemon=True).start()
