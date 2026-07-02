@@ -1,5 +1,6 @@
 export type FormVersion = "USA" | "Korea";
 export type Currency = "USD" | "KRW" | "RMB" | "CNY";
+export type DocumentType = "unknown" | "receipt" | "payment_proof";
 
 export type Category =
   | "transportation"
@@ -51,6 +52,8 @@ export interface ReceiptItem {
   category: Category;
   paymentMethod: string;
   receiptLabel: string;
+  documentType: DocumentType;
+  matchedReceiptId: string;
   images: ImageAttachment[];
 }
 
@@ -85,6 +88,7 @@ export interface ReceiptExtraction {
   category?: string;
   payment_method?: string;
   receipt_label?: string;
+  document_type?: string;
 }
 
 export interface SelectedTile {

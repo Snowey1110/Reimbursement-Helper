@@ -1,5 +1,5 @@
 import type { FormVersion, ImageAttachment, ReceiptExtraction, ReceiptItem } from "./types";
-import { normalizeCategory, normalizeCurrency, updateAmounts } from "./utils";
+import { normalizeCategory, normalizeCurrency, normalizeDocumentType, updateAmounts } from "./utils";
 import { DEFAULT_KRW_TO_RMB, DEFAULT_USD_TO_KRW, DEFAULT_USD_TO_RMB } from "./constants";
 
 const RECEIPT_SCHEMA = {
@@ -18,7 +18,8 @@ const RECEIPT_SCHEMA = {
     project_number: { type: "string" },
     category: { type: "string" },
     payment_method: { type: "string" },
-    receipt_label: { type: "string" }
+    receipt_label: { type: "string" },
+    document_type: { type: "string" }
   },
   required: [
     "date",
@@ -33,7 +34,8 @@ const RECEIPT_SCHEMA = {
     "project_number",
     "category",
     "payment_method",
-    "receipt_label"
+    "receipt_label",
+    "document_type"
   ]
 };
 
@@ -66,6 +68,8 @@ export async function extractReceiptWithOpenAI(apiKey: string, model: string, fo
     "Use the actual receipt currency. If the receipt is USD, currency must be USD even on the Korea form.",
     "Prefer charged/paid total amount over subtotal, tax-only, or authorization metadata.",
     "Choose category from transportation, lodging, meals, advertising, office, entertainment, materials, consumables, physical_exam, nucleic_test, courier, welfare, other.",
+    "For USA uploads, classify document_type as receipt, payment_proof, or unknown. Payment proof means a bank/card transaction screenshot or statement, not the merchant receipt.",
+    "For Korea uploads, document_type should normally be receipt unless the image is clearly not reimbursement support.",
     "Keep applicant/personal identity fields blank."
   ].join("\n");
   const response = await fetch("https://api.openai.com/v1/responses", {
@@ -196,6 +200,7 @@ export function applyExtraction(item: ReceiptItem, extraction: ReceiptExtraction
     category: normalizeCategory(extraction.category ?? item.category),
     paymentMethod: String(extraction.payment_method ?? item.paymentMethod ?? ""),
     receiptLabel: String(extraction.receipt_label ?? item.receiptLabel ?? item.filename),
+    documentType: formVersion === "USA" ? normalizeDocumentType(extraction.document_type, item.documentType) : item.documentType,
     status: "AI filled"
   };
   return updateAmounts(next, { usdToRmb: DEFAULT_USD_TO_RMB, usdToKrw: DEFAULT_USD_TO_KRW, krwToRmb: DEFAULT_KRW_TO_RMB }, "amount");

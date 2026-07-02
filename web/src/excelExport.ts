@@ -8,7 +8,18 @@ import {
   USA_TEMPLATE_URL
 } from "./constants";
 import { makeContactSheet, preparedImageDataUrl, splitAttachmentForFullPage } from "./imageUtils";
-import { downloadBlob, formatAmount, isKoreaOtherText, itemSearchText, koreaInvoiceKindForItem, reportCategoryForItem, safeNumber, sortReceiptsForReport } from "./utils";
+import {
+  buildUsaReportRows,
+  downloadBlob,
+  formatAmount,
+  isKoreaOtherText,
+  isUsaReceiptItem,
+  itemSearchText,
+  koreaInvoiceKindForItem,
+  reportCategoryForItem,
+  safeNumber,
+  sortReceiptsForReport
+} from "./utils";
 
 const KOREA_DETAIL_COLUMNS = "ABCDEFGHIJKLMNOPQRS".split("");
 const KRW_NUMBER_FORMAT = "₩#,##0";
@@ -99,7 +110,7 @@ export interface UsaExpenseRow {
 
 export function mapUsaExpenseRows(items: ReceiptItem[]): UsaExpenseRow[] {
   const cursors: Record<string, number> = {};
-  return sortReceiptsForReport(items, "USA").map((item) => {
+  return sortReceiptsForReport(items.filter(isUsaReceiptItem), "USA").map((item) => {
     const category = categoryForUsa(item);
     const rows = USA_CATEGORY_ROWS[category] ?? USA_CATEGORY_ROWS.other;
     const cursor = cursors[category] ?? 0;
@@ -434,7 +445,8 @@ export async function exportUsaWorkbook(items: ReceiptItem[], proofs: PaymentPro
   const expense = workbook.getWorksheet("Expense report");
   const receipts = workbook.getWorksheet("Receipt and Payment of expenses");
   if (!expense || !receipts) throw new Error("USA template is missing required sheets.");
-  const sortedItems = sortReceiptsForReport(items, "USA");
+  const reportRows = buildUsaReportRows(items, proofs);
+  const expenseItems = reportRows.flatMap((row) => (row.item ? [row.item] : []));
   expense.getCell("A3").value = `Date / 填表日期： ${new Date().toLocaleDateString("en-US")}`;
   expense.getCell("A4").value = "Employee: / 申请人：";
   expense.getCell("J1").value = rates.usdToRmb;
@@ -443,7 +455,7 @@ export async function exportUsaWorkbook(items: ReceiptItem[], proofs: PaymentPro
   for (const row of allRows) {
     expense.getCell(`G${row}`).value = { formula: `F${row}*$J$1` };
   }
-  for (const { item, row } of mapUsaExpenseRows(sortedItems)) {
+  for (const { item, row } of mapUsaExpenseRows(expenseItems)) {
     expense.getCell(`A${row}`).value = item.place;
     expense.getCell(`B${row}`).value = item.date;
     expense.getCell(`C${row}`).value = item.details || item.receiptLabel || item.filename;
@@ -452,7 +464,7 @@ export async function exportUsaWorkbook(items: ReceiptItem[], proofs: PaymentPro
     expense.getCell(`F${row}`).value = safeNumber(item.amount) ?? null;
     expense.getCell(`G${row}`).value = { formula: `F${row}*$J$1` };
   }
-  for (let row = 2; row < Math.max(56, items.length + 3); row += 1) {
+  for (let row = 2; row < Math.max(56, reportRows.length + 3); row += 1) {
     for (const col of ["A", "B", "C", "D", "E"]) {
       receipts.getCell(`${col}${row}`).value = null;
     }
@@ -460,15 +472,17 @@ export async function exportUsaWorkbook(items: ReceiptItem[], proofs: PaymentPro
   }
   receipts.getColumn("D").width = 38;
   receipts.getColumn("E").width = 26;
-  for (let index = 0; index < sortedItems.length; index += 1) {
-    const item = sortedItems[index];
+  for (let index = 0; index < reportRows.length; index += 1) {
+    const rowData = reportRows[index];
+    const item = rowData.item;
     const row = index + 2;
     receipts.getCell(`A${row}`).value = index + 1;
-    receipts.getCell(`B${row}`).value = item.date;
-    receipts.getCell(`C${row}`).value = safeNumber(item.amount) ?? null;
-    await addImageToCell(workbook, receipts, item.images, `D${row}`, 260, 150);
-    const proofImages = proofs.filter((proof) => proof.matchedReceiptId === item.id).map((proof) => proof.image);
-    await addImageToCell(workbook, receipts, proofImages, `E${row}`, 180, 150);
+    receipts.getCell(`B${row}`).value = rowData.date;
+    receipts.getCell(`C${row}`).value = safeNumber(rowData.amount) ?? null;
+    if (item) {
+      await addImageToCell(workbook, receipts, rowData.receiptImages, `D${row}`, 260, 150);
+    }
+    await addImageToCell(workbook, receipts, rowData.proofImages, `E${row}`, 180, 150);
   }
   const buffer = await workbook.xlsx.writeBuffer();
   downloadBlob(new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `reimbursement_usa_${dateStamp()}.xlsx`);

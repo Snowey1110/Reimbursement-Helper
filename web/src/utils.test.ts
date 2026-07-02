@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { image, proof, receipt } from "./test/factories";
 import {
+  buildUsaReportRows,
   matchPaymentProofs,
   mergeSameUsaReceipts,
   normalizeCurrency,
+  receiptNeedsAi,
   reportCategoryForItem,
   swapProofForReceipt,
   sortReceiptsForReport,
@@ -65,6 +67,36 @@ describe("payment proof matching", () => {
     expect(result.selectedProofId).toBe("p2");
     expect(result.proofs.find((entry) => entry.id === "p1")?.matchedReceiptId).toBe("");
     expect(result.proofs.find((entry) => entry.id === "p2")?.matchedReceiptId).toBe("r1");
+  });
+
+  it("builds USA rows with blank receipt or proof sides when one side is missing", () => {
+    const rows = buildUsaReportRows([
+      receipt({ id: "receipt-only", date: "2026-06-19", amount: "27", documentType: "receipt", images: [image({ id: "receipt-img" })] }),
+      receipt({ id: "proof-only", date: "2026-06-20", amount: "13.99", documentType: "payment_proof", images: [image({ id: "proof-img" })] })
+    ]);
+
+    expect(rows).toHaveLength(2);
+    expect(rows[0].receiptImages.map((entry) => entry.id)).toEqual(["receipt-img"]);
+    expect(rows[0].proofImages).toEqual([]);
+    expect(rows[1].receiptImages).toEqual([]);
+    expect(rows[1].proofImages.map((entry) => entry.id)).toEqual(["proof-img"]);
+  });
+
+  it("matches imported payment proof rows to grouped USA receipts", () => {
+    const rows = buildUsaReportRows([
+      receipt({ id: "r1", date: "2026-06-19", amount: "27", documentType: "receipt", images: [image({ id: "receipt-img" })] }),
+      receipt({ id: "p1", date: "2026-06-19", amount: "27.00", documentType: "payment_proof", images: [image({ id: "proof-img" })] })
+    ]);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].receiptImages.map((entry) => entry.id)).toEqual(["receipt-img"]);
+    expect(rows[0].proofImages.map((entry) => entry.id)).toEqual(["proof-img"]);
+  });
+
+  it("identifies only unprocessed or incomplete rows for Generate Empty", () => {
+    expect(receiptNeedsAi(receipt({ status: "AI filled", documentType: "receipt" }), "USA")).toBe(false);
+    expect(receiptNeedsAi(receipt({ status: "AI filled", documentType: "unknown" }), "USA")).toBe(true);
+    expect(receiptNeedsAi(receipt({ status: "Empty", documentType: "receipt" }), "USA")).toBe(true);
   });
 });
 

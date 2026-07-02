@@ -51,6 +51,14 @@ describe("Reimbursement Helper web app", () => {
     expect(screen.getByLabelText("Form")).toHaveValue("Korea");
   });
 
+  it("uses one USA receipt upload button and Generate Empty", () => {
+    render(<App />);
+
+    expect(screen.getByRole("button", { name: /Select Receipts/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Generate Empty/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Select Payment Proof/ })).not.toBeInTheDocument();
+  });
+
   it("recommends the Korea exchange-rate image after receipts are selected", async () => {
     localStorage.setItem(FORM_VERSION_STORAGE_KEY, "Korea");
     render(<App />);

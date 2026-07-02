@@ -17,10 +17,10 @@ https://snowey1110.github.io/Reimbursement-Helper/
 2. Extract the zip.
 3. Double-click `run_reimbursement_helper.bat`.
 4. Click the blue suggested button and follow the flow:
-   - `Select Files`
-   - USA only: `Select Payment Proof`
+   - USA: `Select Receipts` for receipts and payment proof screenshots together
+   - Korea: `Select Files`
    - Korea only: `Select Exchange Rate Images` for the exchange-rate screenshot(s)
-   - `Generate All`
+   - `Generate Empty` for new or unfinished rows, or `Generate All` to reprocess everything
    - `Generate Excel`
 
 The app leaves `申请人` / applicant blank and does not include personal defaults in the shared project.
@@ -33,7 +33,8 @@ The app supports:
 - receipt preview beside editable fields
 - receipt screenshot rotation for sideways images
 - manual receipt image perspective cropping with four independent corner points and revert
-- USA payment proof images for the proof-of-payment column
+- USA receipt and payment proof classification from one upload button
+- USA missing-side visibility: receipt-only rows leave proof blank, proof-only rows leave receipt blank
 - manual entry when AI is not needed
 - one-click AI extraction when an OpenAI API key is available locally
 - Korea exchange-rate screenshot import, with AI reading to update USD/KRW and/or KRW/RMB when an API key is available
@@ -127,12 +128,12 @@ To publish a desktop download on GitHub:
 
 ## File Workflow
 
-1. Open the app and click `Select Files`.
-2. Choose one or more receipt images or PDFs.
+1. Open the app and click `Select Receipts` for USA, or `Select Files` for Korea.
+2. Choose one or more receipt images or PDFs. For USA, include payment proof screenshots in the same selection.
 3. Review or generate details.
-4. Click `Select Files` again later to add more receipts without clearing the current list.
+4. Click the same select button again later to add more files without clearing the current list.
 5. Each PDF is imported as one combined image with page 1, page 2, and later pages stacked together.
-6. For USA reports, click `Select Payment Proof` separately to add card or bank proof screenshots/PDFs.
+6. Use `Generate Empty` when you only want AI to process new or unfinished rows.
 
 ## AI Extraction
 
@@ -162,9 +163,11 @@ Highlight multiple receipt rows, then edit a field such as `Project number`, `Ca
 
 ## USA Payment Proof
 
-For the USA form, use `Select Files` for receipts and `Select Payment Proof` for card or bank proof images. `Generate All` reads both groups, merges receipt screenshots that have the same date and USD amount, and matches one proof image by date and charge amount.
+For the USA form, use `Select Receipts` for both merchant receipts and card or bank payment proof screenshots/PDFs. `Generate Empty` reads only rows that still need AI, classifies each screenshot as `Receipt`, `Payment proof`, or `Unknown`, and skips already completed rows. `Generate All` reprocesses everything.
 
-The preview shows receipt screenshots on the left. After payment proof files are loaded, a Payment proof section appears on the right. Use the divider swap icon to switch proof images when another proof is available. If a payment proof was added as a receipt by mistake, drag that screenshot tile into the Payment proof section. Select any screenshot tile and use the delete icon to remove only that image. In the receipt list, press `Delete` or `Backspace` to remove selected receipt rows after confirmation.
+The USA export merges receipt screenshots that have the same date and USD amount into one expense entry. Matching payment proof goes in the proof-of-payment column to the right. If only the receipt exists, the payment proof side is blank. If only the payment proof exists, the receipt side is blank. Unknown document types must be changed manually before export, so the app does not guess.
+
+Select any screenshot tile and use the delete icon to remove only that image. In the receipt list, press `Delete` or `Backspace` to remove selected rows after confirmation.
 
 ## Receipt Cropping
 
@@ -193,4 +196,4 @@ The app copies these templates on export and fills the copy only. Original templ
 - Receipt upload currently supports PNG, JPG, JPEG, WEBP, BMP, GIF, and PDF.
 - Korea output is one workbook with three sheets: details, cover, and receipts.
 - Korea receipts are grouped by expense category and then sorted by date on both `报销明细` and `发票`. Each receipt label contains only date, content, and cost. Optional Korea exchange-rate screenshots are placed in the first `发票` image slot; overflow continues on the next printed page below.
-- USA output preserves the provided workbook format and puts matched payment proof images in column E.
+- USA output preserves the provided workbook format, puts receipt screenshots in column D, puts matched payment proof images in column E, and leaves the missing side blank when a pair is incomplete.

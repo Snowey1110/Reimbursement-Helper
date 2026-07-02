@@ -28,13 +28,15 @@ import {
 import { exportKoreaWorkbook, exportUsaWorkbook } from "./excelExport";
 import { defaultCropPoints, fileToAttachments, orientedImageDataUrl, orientedImageSize, rotateCropPoints } from "./imageUtils";
 import { CATEGORY_LABELS, LANGUAGE_OPTIONS, normalizeLanguage, text, type AppLanguage } from "./i18n";
-import type { Category, CropPoint, Currency, ExchangeRates, ImageAttachment, PaymentProof, ReceiptItem, SelectedTile } from "./types";
+import type { Category, CropPoint, Currency, DocumentType, ExchangeRates, ImageAttachment, PaymentProof, ReceiptItem, SelectedTile } from "./types";
 import {
   blankReceipt,
   formatAmount,
   matchPaymentProofs,
   mergeSameUsaReceipts,
+  matchUsaPaymentProofItems,
   normalizeCurrency,
+  receiptNeedsAi,
   sortReceiptsForReport,
   swapProofForReceipt,
   updateAmounts,
@@ -42,7 +44,7 @@ import {
 } from "./utils";
 
 const STORAGE_KEY = "reimbursement-helper-web-api-key";
-type SuggestedAction = "selectFiles" | "selectProof" | "selectExchangeRate" | "generateAll" | "generateExcel";
+type SuggestedAction = "selectFiles" | "selectExchangeRate" | "generateEmpty" | "generateAll" | "generateExcel";
 type FormVersion = "USA" | "Korea";
 
 function readStoredFormVersion(): FormVersion {
@@ -93,10 +95,10 @@ export default function App() {
     if (busy) return undefined;
     if (items.length && readyForExport) return "generateExcel";
     if (!items.length) return "selectFiles";
-    if (formVersion === "USA" && !proofs.length) return "selectProof";
     if (formVersion === "Korea" && !exchangeRateImages.length) return "selectExchangeRate";
+    if (items.some((item) => receiptNeedsAi(item, formVersion))) return "generateEmpty";
     return "generateAll";
-  }, [busy, exchangeRateImages.length, formVersion, items.length, proofs.length, readyForExport]);
+  }, [busy, exchangeRateImages.length, formVersion, items, readyForExport]);
 
   useEffect(() => {
     if (rememberKey) {
@@ -241,13 +243,13 @@ export default function App() {
     }
   }
 
-  async function generateSelected() {
-    const targets = selectedIds.map((id) => items.find((item) => item.id === id)).filter(Boolean) as ReceiptItem[];
+  async function generateEmpty() {
+    const targets = items.filter((item) => receiptNeedsAi(item, formVersion));
     if (!targets.length) {
-      setStatus(t("selectReceiptsFirst"));
+      setStatus(t("noEmptyRows"));
       return;
     }
-    await generateDetails(targets, false);
+    await generateDetails(targets, true);
   }
 
   async function generateAll() {
@@ -286,6 +288,7 @@ export default function App() {
       }
       if (includeProofs && formVersion === "USA" && proofs.length) {
         workingItems = mergeSameUsaReceipts(workingItems);
+        workingItems = matchUsaPaymentProofItems(workingItems);
         setSelectedIds((current) => current.filter((id) => workingItems.some((item) => item.id === id)));
         for (const proof of workingProofs) {
           setStatus(t("readingProof", { filename: proof.filename }));
@@ -308,9 +311,12 @@ export default function App() {
         }
         workingProofs = matchPaymentProofs(workingProofs, workingItems);
         setProofs(workingProofs);
+      } else if (includeProofs && formVersion === "USA") {
+        workingItems = matchUsaPaymentProofItems(mergeSameUsaReceipts(workingItems));
+        setSelectedIds((current) => current.filter((id) => workingItems.some((item) => item.id === id)));
       }
       if (includeProofs) {
-        workingItems = sortReceiptsForReport(workingItems, formVersion);
+        workingItems = formVersion === "USA" ? workingItems : sortReceiptsForReport(workingItems, formVersion);
         setItems(workingItems);
         setSelectedIds((current) => current.filter((id) => workingItems.some((item) => item.id === id)));
         setReadyForExport(true);
@@ -429,6 +435,11 @@ export default function App() {
     setBusy(true);
     try {
       if (formVersion === "USA") {
+        const unknownItems = items.filter((item) => item.documentType === "unknown");
+        if (unknownItems.length) {
+          setStatus(t("unknownDocumentType", { count: unknownItems.length }));
+          return;
+        }
         await exportUsaWorkbook(items, proofs, rates);
       } else {
         await exportKoreaWorkbook(items, rates, exchangeRateImages);
@@ -536,18 +547,20 @@ export default function App() {
           </select>
         </label>
         <button type="button" className={suggestedAction === "selectFiles" ? "recommended" : ""} onClick={() => receiptInputRef.current?.click()} disabled={busy}>
-          <Upload size={17} /> {t("selectFiles")}
+          <Upload size={17} /> {formVersion === "USA" ? t("selectReceipts") : t("selectFiles")}
         </button>
-        <button
-          type="button"
-          className={suggestedAction === "selectProof" || suggestedAction === "selectExchangeRate" ? "recommended" : ""}
-          onClick={() => (formVersion === "USA" ? proofInputRef.current?.click() : exchangeRateInputRef.current?.click())}
-          disabled={busy}
-        >
-          <Upload size={17} /> {formVersion === "USA" ? t("selectPaymentProof") : t("selectExchangeRate")}
-        </button>
-        <button type="button" onClick={generateSelected} disabled={busy || !selectedIds.length}>
-          <Wand2 size={17} /> {t("generateDetails")}
+        {formVersion === "Korea" && (
+          <button
+            type="button"
+            className={suggestedAction === "selectExchangeRate" ? "recommended" : ""}
+            onClick={() => exchangeRateInputRef.current?.click()}
+            disabled={busy}
+          >
+            <Upload size={17} /> {t("selectExchangeRate")}
+          </button>
+        )}
+        <button type="button" className={suggestedAction === "generateEmpty" ? "recommended" : ""} onClick={generateEmpty} disabled={busy || !items.length}>
+          <Wand2 size={17} /> {t("generateEmpty")}
         </button>
         <button type="button" className={suggestedAction === "generateAll" ? "recommended" : ""} onClick={generateAll} disabled={busy || !items.length}>
           {busy ? <Loader2 className="spin" size={17} /> : <Wand2 size={17} />} {t("generateAll")}
@@ -649,7 +662,7 @@ export default function App() {
           </div>
           <div className={`preview-grid ${proofs.length ? "with-proof" : ""}`}>
             <ImageStack
-              title={t("receiptScreenshots")}
+              title={selectedItem?.documentType === "payment_proof" ? t("paymentProof") : t("receiptScreenshots")}
               emptyText={t("receiptImagePrompt")}
               item={selectedItem}
               selectedTile={selectedTile}
@@ -759,6 +772,16 @@ function DetailsForm({
       </label>
       <Field label={t("paymentMethod")} value={item.paymentMethod} onChange={(paymentMethod) => onChange({ paymentMethod })} />
       <Field label={t("receiptLabel")} value={item.receiptLabel} onChange={(receiptLabel) => onChange({ receiptLabel })} />
+      {formVersion === "USA" && (
+        <label>
+          {t("documentType")}
+          <select value={item.documentType} onChange={(event) => onChange({ documentType: event.target.value as DocumentType })}>
+            <option value="unknown">{t("documentTypeUnknown")}</option>
+            <option value="receipt">{t("documentTypeReceipt")}</option>
+            <option value="payment_proof">{t("documentTypePaymentProof")}</option>
+          </select>
+        </label>
+      )}
     </div>
   );
 }

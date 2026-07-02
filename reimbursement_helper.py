@@ -357,6 +357,13 @@ KOREA_INVOICE_KIND_ORDER = [
     "other",
 ]
 
+DOCUMENT_TYPE_VALUES = {"unknown", "receipt", "payment_proof"}
+DOCUMENT_TYPE_LABEL_KEYS = {
+    "unknown": "document_type_unknown",
+    "receipt": "document_type_receipt",
+    "payment_proof": "document_type_payment_proof",
+}
+
 KOREA_RECEIPT_PAGE_HEIGHT = 60
 KOREA_RECEIPT_SLOTS_PER_PAGE = 4
 KOREA_RECEIPT_HALF_WIDTH = 370
@@ -479,9 +486,11 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "form": "Form",
         "language": "Language",
         "select_files": "Select Files",
+        "select_receipts": "Select Receipts",
         "select_payment_proof": "Select Payment Proof",
         "select_exchange_rate": "Select Exchange Rate Images",
         "generate_details": "Generate Details",
+        "generate_empty": "Generate Empty",
         "generate_all": "Generate All",
         "generate_excel": "Generate Excel",
         "inserted_receipts": "Inserted receipts and details",
@@ -510,8 +519,12 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "category": "Category",
         "payment_method": "Payment method",
         "receipt_label": "Receipt label",
+        "document_type": "Document type",
+        "document_type_unknown": "Unknown",
+        "document_type_receipt": "Receipt",
+        "document_type_payment_proof": "Payment proof",
         "select_receipt_prompt": "Select receipt image or PDF files to begin.",
-        "proof_prompt": "Select Payment Proof, then Generate All.",
+        "proof_prompt": "Select Receipts, then mark payment proof rows if needed.",
         "no_receipt_screenshot": "No receipt screenshot.",
         "exchange_only_korea": "Exchange-rate images are only used for the Korea form.",
         "selected_exchange_files": "Selected {count} exchange-rate image file(s).",
@@ -520,6 +533,8 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "reading_exchange_short": "Reading exchange rate",
         "selected_exchange_failed": "Selected exchange-rate image(s), but could not auto-read rate: {message}",
         "updated_exchange_rate": "Updated rate from exchange-rate image: {updates}",
+        "no_empty_rows": "No empty or unprocessed rows need AI.",
+        "unknown_document_type": "{count} row(s) still have unknown document type. Choose Receipt or Payment proof before exporting.",
     },
     "zh": {
         "app_title": "\u62a5\u9500\u52a9\u624b",
@@ -527,9 +542,11 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "form": "\u8868\u683c",
         "language": "\u8bed\u8a00",
         "select_files": "\u9009\u62e9\u6587\u4ef6",
+        "select_receipts": "\u9009\u62e9\u53d1\u7968",
         "select_payment_proof": "\u9009\u62e9\u4ed8\u6b3e\u51ed\u8bc1",
         "select_exchange_rate": "\u9009\u62e9\u6c47\u7387\u56fe\u7247",
         "generate_details": "\u751f\u6210\u660e\u7ec6",
+        "generate_empty": "\u751f\u6210\u7a7a\u767d\u9879",
         "generate_all": "\u5168\u90e8\u751f\u6210",
         "generate_excel": "\u751f\u6210 Excel",
         "inserted_receipts": "\u5df2\u63d2\u5165\u53d1\u7968\u548c\u660e\u7ec6",
@@ -558,8 +575,12 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "category": "\u7c7b\u522b",
         "payment_method": "\u4ed8\u6b3e\u65b9\u5f0f",
         "receipt_label": "\u53d1\u7968\u6807\u7b7e",
+        "document_type": "\u6587\u4ef6\u7c7b\u578b",
+        "document_type_unknown": "\u672a\u77e5",
+        "document_type_receipt": "\u53d1\u7968",
+        "document_type_payment_proof": "\u4ed8\u6b3e\u51ed\u8bc1",
         "select_receipt_prompt": "\u8bf7\u9009\u62e9\u53d1\u7968\u56fe\u7247\u6216 PDF \u6587\u4ef6\u3002",
-        "proof_prompt": "\u8bf7\u5148\u9009\u62e9\u4ed8\u6b3e\u51ed\u8bc1\uff0c\u7136\u540e\u5168\u90e8\u751f\u6210\u3002",
+        "proof_prompt": "\u8bf7\u9009\u62e9\u53d1\u7968\uff0c\u5fc5\u8981\u65f6\u5c06\u4ed8\u6b3e\u51ed\u8bc1\u884c\u6807\u8bb0\u51fa\u6765\u3002",
         "no_receipt_screenshot": "\u6ca1\u6709\u53d1\u7968\u622a\u56fe\u3002",
         "exchange_only_korea": "\u6c47\u7387\u56fe\u7247\u4ec5\u7528\u4e8e\u97e9\u56fd\u8868\u683c\u3002",
         "selected_exchange_files": "\u5df2\u9009\u62e9 {count} \u4e2a\u6c47\u7387\u56fe\u7247\u6587\u4ef6\u3002",
@@ -568,6 +589,8 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "reading_exchange_short": "\u6b63\u5728\u8bfb\u53d6\u6c47\u7387",
         "selected_exchange_failed": "\u5df2\u9009\u62e9\u6c47\u7387\u56fe\u7247\uff0c\u4f46\u65e0\u6cd5\u81ea\u52a8\u8bfb\u53d6\u6c47\u7387\uff1a{message}",
         "updated_exchange_rate": "\u5df2\u6839\u636e\u6c47\u7387\u56fe\u7247\u66f4\u65b0\uff1a{updates}",
+        "no_empty_rows": "\u6ca1\u6709\u9700\u8981 AI \u5904\u7406\u7684\u7a7a\u767d\u6216\u672a\u5904\u7406\u8bb0\u5f55\u3002",
+        "unknown_document_type": "\u8fd8\u6709 {count} \u6761\u8bb0\u5f55\u7684\u6587\u4ef6\u7c7b\u578b\u662f\u672a\u77e5\u3002\u5bfc\u51fa\u524d\u8bf7\u9009\u62e9\u53d1\u7968\u6216\u4ed8\u6b3e\u51ed\u8bc1\u3002",
     },
     "ko": {
         "app_title": "\ud658\uae09 \ub3c4\uc6b0\ubbf8",
@@ -575,9 +598,11 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "form": "\uc591\uc2dd",
         "language": "\uc5b8\uc5b4",
         "select_files": "\ud30c\uc77c \uc120\ud0dd",
+        "select_receipts": "\uc601\uc218\uc99d \uc120\ud0dd",
         "select_payment_proof": "\uacb0\uc81c \uc99d\ube59 \uc120\ud0dd",
         "select_exchange_rate": "\ud658\uc728 \uc774\ubbf8\uc9c0 \uc120\ud0dd",
         "generate_details": "\uc138\ubd80 \uc815\ubcf4 \uc0dd\uc131",
+        "generate_empty": "\ube48 \ud56d\ubaa9 \uc0dd\uc131",
         "generate_all": "\uc804\uccb4 \uc0dd\uc131",
         "generate_excel": "Excel \uc0dd\uc131",
         "inserted_receipts": "\ucd94\uac00\ub41c \uc601\uc218\uc99d \ubc0f \uc138\ubd80 \uc815\ubcf4",
@@ -606,8 +631,12 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "category": "\ubd84\ub958",
         "payment_method": "\uacb0\uc81c \uc218\ub2e8",
         "receipt_label": "\uc601\uc218\uc99d \ub77c\ubca8",
+        "document_type": "\ubb38\uc11c \uc720\ud615",
+        "document_type_unknown": "\uc54c \uc218 \uc5c6\uc74c",
+        "document_type_receipt": "\uc601\uc218\uc99d",
+        "document_type_payment_proof": "\uacb0\uc81c \uc99d\ube59",
         "select_receipt_prompt": "\uc601\uc218\uc99d \uc774\ubbf8\uc9c0 \ub610\ub294 PDF \ud30c\uc77c\uc744 \uc120\ud0dd\ud558\uc138\uc694.",
-        "proof_prompt": "\uacb0\uc81c \uc99d\ube59\uc744 \uc120\ud0dd\ud55c \ub4a4 \uc804\uccb4 \uc0dd\uc131\uc744 \uc2e4\ud589\ud558\uc138\uc694.",
+        "proof_prompt": "\uc601\uc218\uc99d\uc744 \uc120\ud0dd\ud558\uace0 \ud544\uc694\ud558\uba74 \uacb0\uc81c \uc99d\ube59 \ud589\uc744 \ud45c\uc2dc\ud558\uc138\uc694.",
         "no_receipt_screenshot": "\uc601\uc218\uc99d \uc2a4\ud06c\ub9b0\uc0f7\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
         "exchange_only_korea": "\ud658\uc728 \uc774\ubbf8\uc9c0\ub294 \ud55c\uad6d \uc591\uc2dd\uc5d0\ub9cc \uc0ac\uc6a9\ub429\ub2c8\ub2e4.",
         "selected_exchange_files": "\ud658\uc728 \uc774\ubbf8\uc9c0 \ud30c\uc77c {count}\uac1c\ub97c \uc120\ud0dd\ud588\uc2b5\ub2c8\ub2e4.",
@@ -616,6 +645,8 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "reading_exchange_short": "\ud658\uc728 \uc77d\ub294 \uc911",
         "selected_exchange_failed": "\ud658\uc728 \uc774\ubbf8\uc9c0\ub97c \uc120\ud0dd\ud588\uc9c0\ub9cc \uc790\ub3d9\uc73c\ub85c \uc77d\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4: {message}",
         "updated_exchange_rate": "\ud658\uc728 \uc774\ubbf8\uc9c0\uc5d0\uc11c \ud658\uc728\uc744 \uc5c5\ub370\uc774\ud2b8\ud588\uc2b5\ub2c8\ub2e4: {updates}",
+        "no_empty_rows": "AI\uac00 \ucc98\ub9ac\ud560 \ube48 \ud56d\ubaa9\uc774\ub098 \ubbf8\ucc98\ub9ac \ud589\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "unknown_document_type": "{count}\uac1c \ud589\uc758 \ubb38\uc11c \uc720\ud615\uc774 \uc54c \uc218 \uc5c6\uc74c\uc785\ub2c8\ub2e4. \ub0b4\ubcf4\ub0b4\uae30 \uc804\uc5d0 \uc601\uc218\uc99d \ub610\ub294 \uacb0\uc81c \uc99d\ube59\uc744 \uc120\ud0dd\ud558\uc138\uc694.",
     },
 }
 
@@ -639,6 +670,8 @@ class ReceiptItem:
     category: str = "transportation"
     payment_method: str = ""
     receipt_label: str = ""
+    document_type: str = "receipt"
+    matched_receipt_id: str = ""
     status: str = "Empty"
     crop_box: Optional[List[float]] = None
     rotation_degrees: int = 0
@@ -720,6 +753,26 @@ def save_user_settings(settings: Dict[str, Any]) -> None:
 
 def normalized_form_version(value: Any) -> str:
     return "Korea" if str(value) == "Korea" else "USA"
+
+
+def normalize_document_type(value: Any, default: str = "unknown") -> str:
+    text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if text in {"receipt", "invoice", "merchant_receipt"}:
+        return "receipt"
+    if text in {
+        "payment_proof",
+        "proof",
+        "payment",
+        "bank_statement",
+        "card_statement",
+        "credit_card",
+        "transaction",
+        "chase",
+    }:
+        return "payment_proof"
+    if text in {"unknown", "unclear", "manual_review", "needs_review"}:
+        return "unknown"
+    return default if default in DOCUMENT_TYPE_VALUES else "unknown"
 
 
 def normalize_language(value: Any) -> str:
@@ -852,7 +905,7 @@ def call_openai_receipt_extraction(
 Extract reimbursement fields from this receipt image for a {form_hint}.
 Return only compact JSON with these keys:
 date, place, amount, currency, krw_amount, rmb_amount, purpose, details,
-project_number, category, payment_method, receipt_label, confidence_notes.
+project_number, category, payment_method, receipt_label, document_type, confidence_notes.
 
 Rules:
 - date must be yyyy-mm-dd when visible, otherwise empty string.
@@ -866,6 +919,9 @@ Rules:
 - purpose should be short, for example Parking, Gas, Hotel, Meal, Baggage, Supplies.
 - details should be a natural one-line description.
 - receipt_label should be short enough to fit above a receipt image in Excel.
+- For USA, document_type must be receipt, payment_proof, or unknown. Use payment_proof
+  for bank/card transaction screenshots or statements, not merchant receipts.
+- For Korea, use receipt unless the image is clearly not reimbursement support.
 - If a field is unclear, use an empty string rather than guessing.
 
 Current editable row values, to keep if they look more specific than the image:
@@ -1329,6 +1385,217 @@ def sort_receipts_for_report(items: List[Any], form_version: str) -> List[Any]:
         for index, item in enumerate(items)
     ]
     return [entry[3] for entry in sorted(indexed, key=lambda entry: (entry[0], entry[1], entry[2]))]
+
+
+def is_usa_receipt_item(item: "ReceiptItem") -> bool:
+    return normalize_document_type(getattr(item, "document_type", "receipt"), "receipt") == "receipt"
+
+
+def is_usa_payment_proof_item(item: "ReceiptItem") -> bool:
+    return normalize_document_type(getattr(item, "document_type", "unknown"), "unknown") == "payment_proof"
+
+
+def receipt_needs_ai(item: "ReceiptItem", form_version: str) -> bool:
+    version = normalized_form_version(form_version)
+    if item.status in {"Empty", "Failed", "Needs regen"}:
+        return True
+    if not item.date.strip() or not item.amount.strip():
+        return True
+    if version == "USA":
+        document_type = normalize_document_type(item.document_type, "unknown")
+        if document_type == "unknown":
+            return True
+        if document_type == "receipt" and not (
+            item.purpose.strip() or item.details.strip() or item.receipt_label.strip()
+        ):
+            return True
+    return False
+
+
+def usa_receipt_merge_key(item: "ReceiptItem") -> Optional[Tuple[str, float]]:
+    amount = safe_float(item.amount)
+    if amount is None:
+        return None
+    date_value = parse_date_value(item.date)
+    if isinstance(date_value, date):
+        date_key = date_value.isoformat()
+    else:
+        date_key = (item.date or "").strip()
+    if not date_key:
+        return None
+    return date_key, round(amount, 2)
+
+
+def same_expense_date_values(left: str, right: str) -> bool:
+    left_value = parse_date_value(left)
+    right_value = parse_date_value(right)
+    if isinstance(left_value, date) and isinstance(right_value, date):
+        return left_value == right_value
+    return (left or "").strip() == (right or "").strip()
+
+
+def merge_same_usa_receipt_items(items: List["ReceiptItem"]) -> Tuple[List["ReceiptItem"], Dict[str, str], int]:
+    merged_count = 0
+    merged_items: List[ReceiptItem] = []
+    seen: Dict[Tuple[str, float], ReceiptItem] = {}
+    removed_to_target: Dict[str, str] = {}
+    for item in items:
+        if not is_usa_receipt_item(item):
+            merged_items.append(item)
+            continue
+        ensure_receipt_images(item)
+        key = usa_receipt_merge_key(item)
+        if key is None or key not in seen:
+            if key is not None:
+                seen[key] = item
+            merged_items.append(item)
+            continue
+        target = seen[key]
+        merge_attachment_lists(ensure_receipt_images(target), ensure_receipt_images(item))
+        for attr in (
+            "place",
+            "purpose",
+            "details",
+            "project_number",
+            "category",
+            "payment_method",
+            "receipt_label",
+            "rmb_amount",
+        ):
+            if not str(getattr(target, attr, "") or "").strip() and str(getattr(item, attr, "") or "").strip():
+                setattr(target, attr, getattr(item, attr))
+        if target.status not in {"Failed", "Processing"}:
+            target.status = "Merged"
+        removed_to_target[item.item_id] = target.item_id
+        merged_count += 1
+    if removed_to_target:
+        for item in merged_items:
+            if getattr(item, "matched_receipt_id", "") in removed_to_target:
+                item.matched_receipt_id = removed_to_target[item.matched_receipt_id]
+    return merged_items, removed_to_target, merged_count
+
+
+def match_usa_payment_proof_items(items: List["ReceiptItem"]) -> None:
+    receipts = [item for item in items if is_usa_receipt_item(item)]
+    for proof_item in items:
+        if not is_usa_payment_proof_item(proof_item):
+            continue
+        proof_amount = safe_float(proof_item.amount)
+        if proof_amount is None or not proof_item.date.strip():
+            proof_item.matched_receipt_id = ""
+            proof_item.status = "Needs manual review"
+            continue
+        matches: List[ReceiptItem] = []
+        for receipt in receipts:
+            receipt_amount = safe_float(receipt.amount)
+            if receipt_amount is None:
+                continue
+            if abs(receipt_amount - proof_amount) > 0.01:
+                continue
+            if not same_expense_date_values(receipt.date, proof_item.date):
+                continue
+            matches.append(receipt)
+        if len(matches) == 1:
+            proof_item.matched_receipt_id = matches[0].item_id
+            proof_item.status = "Matched"
+        else:
+            proof_item.matched_receipt_id = ""
+            proof_item.status = "Needs manual review"
+
+
+def match_bank_statement_to_receipt(bank_item: "BankStatementItem", receipts: List["ReceiptItem"]) -> None:
+    bank_amount = safe_float(bank_item.amount)
+    if bank_amount is None or not bank_item.date:
+        bank_item.matched_receipt_id = ""
+        bank_item.status = "Needs manual review"
+        return
+    matches: List[ReceiptItem] = []
+    for receipt in receipts:
+        receipt_amount = safe_float(receipt.amount)
+        if receipt_amount is None:
+            continue
+        if abs(receipt_amount - bank_amount) > 0.01:
+            continue
+        if not same_expense_date_values(receipt.date, bank_item.date):
+            continue
+        matches.append(receipt)
+    if len(matches) == 1:
+        bank_item.matched_receipt_id = matches[0].item_id
+        bank_item.status = "Matched"
+    else:
+        bank_item.matched_receipt_id = ""
+        bank_item.status = "Needs manual review"
+
+
+def build_usa_report_rows(
+    items: List["ReceiptItem"],
+    bank_items: Optional[List["BankStatementItem"]] = None,
+) -> List[Dict[str, Any]]:
+    working_items, removed_to_target, _merged_count = merge_same_usa_receipt_items(list(items))
+    for bank_item in bank_items or []:
+        if bank_item.matched_receipt_id in removed_to_target:
+            bank_item.matched_receipt_id = removed_to_target[bank_item.matched_receipt_id]
+    match_usa_payment_proof_items(working_items)
+    receipt_items = sort_receipts_for_report(
+        [item for item in working_items if is_usa_receipt_item(item)],
+        "USA",
+    )
+    rows: List[Dict[str, Any]] = []
+    for item in receipt_items:
+        rows.append(
+            {
+                "id": item.item_id,
+                "item": item,
+                "date": item.date,
+                "amount": item.amount,
+                "receipt_images": ensure_receipt_images(item),
+                "proof_images": [],
+            }
+        )
+    row_by_receipt_id = {str(row["id"]): row for row in rows}
+    proof_candidates: List[Dict[str, Any]] = []
+    for item in working_items:
+        if is_usa_payment_proof_item(item):
+            proof_candidates.append(
+                {
+                    "id": item.item_id,
+                    "date": item.date,
+                    "amount": item.amount,
+                    "matched_receipt_id": item.matched_receipt_id,
+                    "images": ensure_receipt_images(item),
+                }
+            )
+    for bank_item in bank_items or []:
+        if not bank_item.matched_receipt_id:
+            match_bank_statement_to_receipt(bank_item, receipt_items)
+        proof_candidates.append(
+            {
+                "id": bank_item.item_id,
+                "date": bank_item.date,
+                "amount": bank_item.amount,
+                "matched_receipt_id": bank_item.matched_receipt_id,
+                "images": [attachment_from_item(bank_item)],
+            }
+        )
+
+    proof_only_rows: List[Dict[str, Any]] = []
+    for proof in proof_candidates:
+        matched_id = str(proof.get("matched_receipt_id") or "")
+        target_row = row_by_receipt_id.get(matched_id)
+        if target_row is not None:
+            target_row["proof_images"].extend(list(proof.get("images") or []))
+            continue
+        proof_only_rows.append(
+            {
+                "id": str(proof.get("id") or uuid.uuid4().hex),
+                "item": None,
+                "date": str(proof.get("date") or ""),
+                "amount": str(proof.get("amount") or ""),
+                "receipt_images": [],
+                "proof_images": list(proof.get("images") or []),
+            }
+        )
+    return rows + proof_only_rows
 
 
 def normalize_rotation(value: Any) -> int:
@@ -1964,7 +2231,8 @@ def export_usa(
     wb = load_workbook(template)
     ws = wb["Expense report"]
     receipts_ws = wb["Receipt and Payment of expenses"]
-    sorted_items = sort_receipts_for_report(items, "USA")
+    report_rows = build_usa_report_rows(items, bank_items)
+    sorted_items = [row["item"] for row in report_rows if row.get("item") is not None]
 
     ws["A3"] = f"Date / 填表日期： {date.today().strftime('%m/%d/%Y')}"
     ws["A4"] = "Employee: / 申请人："
@@ -1995,25 +2263,21 @@ def export_usa(
         ws[f"G{row}"] = f"=F{row}*$J$1"
 
     clear_images(receipts_ws)
-    for row in range(2, max(56, len(sorted_items) + 3)):
+    for row in range(2, max(56, len(report_rows) + 3)):
         for col in "ABCDE":
             receipts_ws[f"{col}{row}"] = None
     receipts_ws.column_dimensions["D"].width = 38
     receipts_ws.column_dimensions["E"].width = 26
-    proof_by_receipt_id: Dict[str, List[Dict[str, Any]]] = {}
-    for bank_item in bank_items or []:
-        if bank_item.matched_receipt_id:
-            proof_by_receipt_id.setdefault(bank_item.matched_receipt_id, []).append(attachment_from_item(bank_item))
-    for index, item in enumerate(sorted_items, start=1):
+    for index, row_data in enumerate(report_rows, start=1):
         row = index + 1
         receipts_ws[f"A{row}"] = index
-        receipts_ws[f"B{row}"] = excel_date_formula_or_value(item.date)
-        receipts_ws[f"C{row}"] = safe_float(item.amount)
+        receipts_ws[f"B{row}"] = excel_date_formula_or_value(str(row_data.get("date") or ""))
+        receipts_ws[f"C{row}"] = safe_float(row_data.get("amount"))
         receipts_ws.row_dimensions[row].height = 126
-        receipt_image = resize_attachment_contact_sheet(ensure_receipt_images(item), 260, 150)
+        receipt_image = resize_attachment_contact_sheet(list(row_data.get("receipt_images") or []), 260, 150)
         if receipt_image is not None:
             receipts_ws.add_image(receipt_image, f"D{row}")
-        proof_image = resize_attachment_contact_sheet(proof_by_receipt_id.get(item.item_id, []), 180, 150)
+        proof_image = resize_attachment_contact_sheet(list(row_data.get("proof_images") or []), 180, 150)
         if proof_image is not None:
             receipts_ws.add_image(proof_image, f"E{row}")
 
@@ -2326,6 +2590,7 @@ class ReimbursementHelperApp:
         self.category_values: List[str] = []
         self.category_label_to_key: Dict[str, str] = {}
         self.category_combo: Optional[Any] = None
+        self.document_type_combo: Optional[Any] = None
         self.header_label: Optional[Any] = None
         self.form_label: Optional[Any] = None
         self.language_label: Optional[Any] = None
@@ -2558,7 +2823,7 @@ class ReimbursementHelperApp:
             command=self.select_support_files,
         )
         self.select_payment_proof_btn.pack(side="left", padx=4)
-        self.generate_details_btn = ttk.Button(controls, text=self.tr("generate_details"), command=self.generate_selected_details)
+        self.generate_details_btn = ttk.Button(controls, text=self.tr("generate_empty"), command=self.generate_empty_details)
         self.generate_details_btn.pack(side="left", padx=4)
         self.generate_all_btn = ttk.Button(controls, text=self.tr("generate_all"), command=self.generate_all_details)
         self.generate_all_btn.pack(side="left", padx=4)
@@ -2644,6 +2909,7 @@ class ReimbursementHelperApp:
             ("category", self.tr("category")),
             ("payment_method", self.tr("payment_method")),
             ("receipt_label", self.tr("receipt_label")),
+            ("document_type", self.tr("document_type")),
         ]
         for row, (key, label) in enumerate(fields, start=2):
             label_widget = ttk.Label(middle, text=label, style="Panel.TLabel")
@@ -2652,6 +2918,10 @@ class ReimbursementHelperApp:
                 var = tk.StringVar()
                 widget = ttk.Combobox(middle, textvariable=var, state="readonly", width=28)
                 self.category_combo = widget
+            elif key == "document_type":
+                var = tk.StringVar()
+                widget = ttk.Combobox(middle, textvariable=var, state="readonly", width=28)
+                self.document_type_combo = widget
             elif key == "currency":
                 var = tk.StringVar(value="USD")
                 widget = ttk.Combobox(middle, textvariable=var, values=["USD", "KRW", "RMB", "CNY"], width=28)
@@ -2755,6 +3025,7 @@ class ReimbursementHelperApp:
             "category",
             "payment_method",
             "receipt_label",
+            "document_type",
         ):
             var = self.field_vars.get(key)
             if var is not None:
@@ -2769,6 +3040,40 @@ class ReimbursementHelperApp:
 
     def category_key_from_display(self, value: str) -> str:
         return self.category_label_to_key.get(value, category_value_to_key(value, self.form_version.get()))
+
+    def document_type_display_label(self, document_type: str) -> str:
+        key = normalize_document_type(document_type, "unknown")
+        return self.tr(DOCUMENT_TYPE_LABEL_KEYS.get(key, "document_type_unknown"))
+
+    def document_type_key_from_display(self, value: str) -> str:
+        text = str(value or "").strip()
+        for key, text_key in DOCUMENT_TYPE_LABEL_KEYS.items():
+            if text == self.tr(text_key):
+                return key
+        return normalize_document_type(text, "unknown")
+
+    def document_type_values(self) -> List[str]:
+        return [self.document_type_display_label(key) for key in ("unknown", "receipt", "payment_proof")]
+
+    def update_document_type_options(self) -> None:
+        if self.document_type_combo is None:
+            return
+        item = self.selected_item()
+        if item is not None:
+            current_key = normalize_document_type(item.document_type, "unknown")
+        else:
+            doc_var = self.field_vars.get("document_type")
+            current_key = self.document_type_key_from_display(doc_var.get()) if doc_var is not None else "unknown"
+        values = self.document_type_values()
+        self.document_type_combo.configure(values=values)
+        doc_var = self.field_vars.get("document_type")
+        if doc_var is not None:
+            was_loading = self._loading_fields
+            self._loading_fields = True
+            try:
+                doc_var.set(self.document_type_display_label(current_key))
+            finally:
+                self._loading_fields = was_loading
 
     def _on_language_changed(self) -> None:
         chosen_label = self.language_display.get()
@@ -2790,7 +3095,7 @@ class ReimbursementHelperApp:
             (self.form_label, "form"),
             (self.language_label, "language"),
             (self.upload_folder_btn, "select_files"),
-            (self.generate_details_btn, "generate_details"),
+            (self.generate_details_btn, "generate_empty"),
             (self.generate_all_btn, "generate_all"),
             (self.generate_excel_btn, "generate_excel"),
             (self.manager_label, "inserted_receipts"),
@@ -2822,10 +3127,12 @@ class ReimbursementHelperApp:
             "category": "category",
             "payment_method": "payment_method",
             "receipt_label": "receipt_label",
+            "document_type": "document_type",
         }.items():
             label = self.field_labels.get(key)
             if label is not None:
                 label.configure(text=self.tr(text_key))
+        self.update_document_type_options()
         self._update_field_visibility()
         self._on_form_version_changed(refresh_language_only=True)
         if self.status_text.get() in {ui_text(code, "ready") for code in UI_TEXT}:
@@ -3007,6 +3314,10 @@ class ReimbursementHelperApp:
             item = self.items[index]
             if key == "category":
                 setattr(item, key, self.category_key_from_display(value))
+            elif key == "document_type":
+                item.document_type = normalize_document_type(self.document_type_key_from_display(value), "unknown")
+                if item.document_type != "payment_proof":
+                    item.matched_receipt_id = ""
             else:
                 setattr(item, key, value)
         if refresh:
@@ -3058,6 +3369,8 @@ class ReimbursementHelperApp:
     def _update_field_visibility(self) -> None:
         version = self.form_version.get()
         if version == "USA":
+            if self.upload_folder_btn is not None:
+                self.upload_folder_btn.configure(text=self.tr("select_receipts"))
             self.field_labels["amount"].configure(text=self.tr("usd_amount"))
             self.field_labels["rmb_amount"].configure(text=self.tr("rmb_amount"))
             self.field_vars["currency"].set("USD")
@@ -3065,6 +3378,7 @@ class ReimbursementHelperApp:
             self._set_field_visible("krw_amount", False)
             self._set_field_visible("amount", True)
             self._set_field_visible("rmb_amount", True)
+            self._set_field_visible("document_type", True)
             if self.usa_rate_label is not None:
                 self.usa_rate_label.pack(side="left")
             if self.usa_rate_entry is not None:
@@ -3078,14 +3392,17 @@ class ReimbursementHelperApp:
             if self.krw_rate_entry is not None:
                 self.krw_rate_entry.pack_forget()
             if self.select_payment_proof_btn is not None:
-                self.select_payment_proof_btn.configure(text=self.tr("select_payment_proof"), command=self.select_support_files, state="normal")
+                self.select_payment_proof_btn.pack_forget()
         else:
+            if self.upload_folder_btn is not None:
+                self.upload_folder_btn.configure(text=self.tr("select_files"))
             self.field_labels["amount"].configure(text=self.tr("original_amount"))
             self.field_labels["rmb_amount"].configure(text=self.tr("rmb_amount"))
             self._set_field_visible("currency", True)
             self._set_field_visible("krw_amount", True)
             self._set_field_visible("amount", True)
             self._set_field_visible("rmb_amount", True)
+            self._set_field_visible("document_type", False)
             if self.usa_rate_label is not None:
                 self.usa_rate_label.pack_forget()
             if self.usa_rate_entry is not None:
@@ -3100,6 +3417,10 @@ class ReimbursementHelperApp:
                 self.krw_rate_entry.pack(side="left", padx=(6, 0))
             if self.select_payment_proof_btn is not None:
                 self.select_payment_proof_btn.configure(text=self.tr("select_exchange_rate"), command=self.select_support_files, state="normal")
+                try:
+                    self.select_payment_proof_btn.pack(side="left", padx=4, before=self.generate_details_btn)
+                except Exception:
+                    self.select_payment_proof_btn.pack(side="left", padx=4)
 
     def suggested_toolbar_action(self) -> str:
         if self._busy:
@@ -3108,10 +3429,10 @@ class ReimbursementHelperApp:
             return "generate_excel"
         if not self.items:
             return "select_files"
-        if self.form_version.get() == "USA" and not self.bank_items:
-            return "select_payment_proof"
         if self.form_version.get() == "Korea" and not self.exchange_rate_items:
             return "select_payment_proof"
+        if any(receipt_needs_ai(item, self.form_version.get()) for item in self.items):
+            return "generate_empty"
         return "generate_all"
 
     def update_toolbar_recommendation(self) -> None:
@@ -3119,6 +3440,7 @@ class ReimbursementHelperApp:
         buttons = {
             "select_files": self.upload_folder_btn,
             "select_payment_proof": self.select_payment_proof_btn,
+            "generate_empty": self.generate_details_btn,
             "generate_all": self.generate_all_btn,
             "generate_excel": self.generate_excel_btn,
         }
@@ -3149,6 +3471,7 @@ class ReimbursementHelperApp:
         }
         if self.category_combo is not None:
             self.category_combo.configure(values=self.category_values)
+        self.update_document_type_options()
         cat = self.field_vars.get("category")
         if cat is not None:
             if current_key in order:
@@ -3158,8 +3481,11 @@ class ReimbursementHelperApp:
         for item in self.items:
             if version == "USA":
                 item.currency = "USD"
+                item.document_type = normalize_document_type(item.document_type, "receipt")
             else:
                 item.currency = normalize_currency(item.currency, "KRW")
+                item.document_type = "receipt"
+                item.matched_receipt_id = ""
             self.update_item_amount_fields(item, "amount")
             if form_changed and item.status == "AI filled":
                 item.status = "Needs regen"
@@ -3238,6 +3564,7 @@ class ReimbursementHelperApp:
                         source_page="1",
                         currency="USD" if self.form_version.get() == "USA" else "KRW",
                         category="transportation",
+                        document_type="unknown" if self.form_version.get() == "USA" else "receipt",
                         receipt_images=receipt_images,
                     )
                 )
@@ -3255,6 +3582,7 @@ class ReimbursementHelperApp:
                     source_path=str(path),
                     currency="USD" if self.form_version.get() == "USA" else "KRW",
                     category="transportation",
+                    document_type="unknown" if self.form_version.get() == "USA" else "receipt",
                     receipt_images=[
                         {
                             "id": uuid.uuid4().hex,
@@ -3559,10 +3887,10 @@ class ReimbursementHelperApp:
         return
 
     def move_selected_receipts_to_bank(self) -> None:
-        self.show_info("Use Select Payment Proof to add USA payment proof images.")
+        self.show_info("Use Document type to mark an imported USA row as Payment proof.")
 
     def move_receipts_to_bank(self, indices: List[int]) -> None:
-        self.show_info("Use Select Payment Proof to add USA payment proof images.")
+        self.show_info("Use Document type to mark imported USA rows as Payment proof.")
 
     def remove_selected_bank(self) -> None:
         item = self.selected_bank_item()
@@ -3685,7 +4013,40 @@ class ReimbursementHelperApp:
             if 0 <= index < len(self.items)
         }
         focused_id = self.selected_item().item_id if self.selected_item() is not None else ""
-        self.items = sort_receipts_for_report(self.items, self.form_version.get())
+        if self.form_version.get() == "USA":
+            self.items, _removed_to_target, _merged_count = merge_same_usa_receipt_items(self.items)
+            match_usa_payment_proof_items(self.items)
+            report_rows = build_usa_report_rows(self.items, self.bank_items)
+            ordered_ids: List[str] = []
+            for row in report_rows:
+                item = row.get("item")
+                if isinstance(item, ReceiptItem):
+                    ordered_ids.append(item.item_id)
+                    ordered_ids.extend(
+                        proof.item_id
+                        for proof in self.items
+                        if is_usa_payment_proof_item(proof) and proof.matched_receipt_id == item.item_id
+                    )
+                else:
+                    proof_images = list(row.get("proof_images") or [])
+                    proof_ids = {str(image.get("id") or "") for image in proof_images if isinstance(image, dict)}
+                    ordered_ids.extend(
+                        proof.item_id
+                        for proof in self.items
+                        if is_usa_payment_proof_item(proof)
+                        and proof.item_id in proof_ids
+                    )
+            seen_ids: set[str] = set()
+            id_to_item = {item.item_id: item for item in self.items}
+            ordered: List[ReceiptItem] = []
+            for item_id in ordered_ids:
+                if item_id in id_to_item and item_id not in seen_ids:
+                    ordered.append(id_to_item[item_id])
+                    seen_ids.add(item_id)
+            ordered.extend(item for item in self.items if item.item_id not in seen_ids)
+            self.items = ordered
+        else:
+            self.items = sort_receipts_for_report(self.items, self.form_version.get())
         id_to_index = {item.item_id: index for index, item in enumerate(self.items)}
         if focused_id in id_to_index:
             self.selected_index = id_to_index[focused_id]
@@ -3717,6 +4078,10 @@ class ReimbursementHelperApp:
             value = var.get()
             if key == "category":
                 value = self.category_key_from_display(value)
+            elif key == "document_type":
+                value = normalize_document_type(self.document_type_key_from_display(value), "unknown")
+                if value != "payment_proof":
+                    item.matched_receipt_id = ""
             elif key == "currency":
                 value = normalize_currency(value, "USD" if self.form_version.get() == "USA" else "KRW")
             setattr(item, key, value)
@@ -3738,6 +4103,8 @@ class ReimbursementHelperApp:
                 value = getattr(item, key)
                 if key == "category":
                     value = self.category_display_label(category_value_to_key(value, self.form_version.get()))
+                elif key == "document_type":
+                    value = self.document_type_display_label(normalize_document_type(value, "unknown"))
                 var.set(value)
         finally:
             self._loading_fields = False
@@ -3959,7 +4326,7 @@ class ReimbursementHelperApp:
         if kind == "proof":
             self.preview_canvas.create_line(x - 7, y, x - 7, y + height, fill="#D8D8D8")
         if not entries:
-            message = "Select Payment Proof, then Generate All." if kind == "proof" else "No receipt screenshot."
+            message = self.tr("proof_prompt") if kind == "proof" else self.tr("no_receipt_screenshot")
             self.preview_canvas.create_text(
                 x + width / 2,
                 y + height / 2,
@@ -4600,6 +4967,7 @@ class ReimbursementHelperApp:
             "category": "category",
             "payment_method": "payment_method",
             "receipt_label": "receipt_label",
+            "document_type": "document_type",
         }
         for src, dest in field_map.items():
             value = data.get(src)
@@ -4610,6 +4978,8 @@ class ReimbursementHelperApp:
                 continue
             if dest == "category":
                 text = normalized_category(text, self.form_version.get())
+            elif dest == "document_type":
+                text = normalize_document_type(text, item.document_type if self.form_version.get() == "USA" else "receipt")
             elif dest == "currency":
                 text = normalize_currency(text, "USD" if self.form_version.get() == "USA" else item.currency or "KRW")
             elif dest == "amount":
@@ -4619,8 +4989,11 @@ class ReimbursementHelperApp:
             setattr(item, dest, text)
         if self.form_version.get() == "USA":
             item.currency = "USD"
+            item.document_type = normalize_document_type(item.document_type, "unknown")
         else:
             item.currency = normalize_currency(item.currency, "KRW")
+            item.document_type = "receipt"
+            item.matched_receipt_id = ""
         self.update_item_amount_fields(item, "amount")
         item.status = "AI filled"
 
@@ -4641,34 +5014,13 @@ class ReimbursementHelperApp:
         item.status = "Needs match"
 
     def same_expense_date(self, left: str, right: str) -> bool:
-        left_value = parse_date_value(left)
-        right_value = parse_date_value(right)
-        if isinstance(left_value, date) and isinstance(right_value, date):
-            return left_value == right_value
-        return (left or "").strip() == (right or "").strip()
+        return same_expense_date_values(left, right)
 
     def match_bank_item(self, bank_item: BankStatementItem) -> None:
-        bank_amount = safe_float(bank_item.amount)
-        if bank_amount is None or not bank_item.date:
-            bank_item.matched_receipt_id = ""
-            bank_item.status = "Needs manual review"
-            return
-        matches: List[ReceiptItem] = []
-        for receipt in self.items:
-            receipt_amount = safe_float(receipt.amount)
-            if receipt_amount is None:
-                continue
-            if abs(receipt_amount - bank_amount) > 0.01:
-                continue
-            if not self.same_expense_date(receipt.date, bank_item.date):
-                continue
-            matches.append(receipt)
-        if len(matches) == 1:
-            bank_item.matched_receipt_id = matches[0].item_id
-            bank_item.status = "Matched"
-        else:
-            bank_item.matched_receipt_id = ""
-            bank_item.status = "Needs manual review"
+        match_bank_statement_to_receipt(
+            bank_item,
+            [item for item in self.items if is_usa_receipt_item(item)],
+        )
 
     def match_all_bank_items(self) -> None:
         for bank_item in self.bank_items:
@@ -4691,51 +5043,12 @@ class ReimbursementHelperApp:
                 proof_item.status = "Needs manual review"
 
     def receipt_merge_key(self, item: ReceiptItem) -> Optional[Tuple[str, float]]:
-        amount = safe_float(item.amount)
-        if amount is None:
-            return None
-        date_value = parse_date_value(item.date)
-        if isinstance(date_value, date):
-            date_key = date_value.isoformat()
-        else:
-            date_key = (item.date or "").strip()
-        if not date_key:
-            return None
-        return date_key, round(amount, 2)
+        return usa_receipt_merge_key(item)
 
     def merge_same_usa_receipts(self) -> int:
         if self.form_version.get() != "USA":
             return 0
-        merged_count = 0
-        merged_items: List[ReceiptItem] = []
-        seen: Dict[Tuple[str, float], ReceiptItem] = {}
-        removed_to_target: Dict[str, str] = {}
-        for item in self.items:
-            ensure_receipt_images(item)
-            key = self.receipt_merge_key(item)
-            if key is None or key not in seen:
-                if key is not None:
-                    seen[key] = item
-                merged_items.append(item)
-                continue
-            target = seen[key]
-            merge_attachment_lists(ensure_receipt_images(target), ensure_receipt_images(item))
-            for attr in (
-                "place",
-                "purpose",
-                "details",
-                "project_number",
-                "category",
-                "payment_method",
-                "receipt_label",
-                "rmb_amount",
-            ):
-                if not str(getattr(target, attr, "") or "").strip() and str(getattr(item, attr, "") or "").strip():
-                    setattr(target, attr, getattr(item, attr))
-            if target.status not in {"Failed", "Processing"}:
-                target.status = "Merged"
-            removed_to_target[item.item_id] = target.item_id
-            merged_count += 1
+        merged_items, removed_to_target, merged_count = merge_same_usa_receipt_items(self.items)
         if not merged_count:
             return 0
         self.items = merged_items
@@ -4746,13 +5059,16 @@ class ReimbursementHelperApp:
             self.selected_index = max(0, len(self.items) - 1) if self.items else None
         return merged_count
 
-    def generate_selected_details(self) -> None:
+    def generate_empty_details(self) -> None:
         self.save_current_fields()
-        items = self.selected_items()
+        items = [item for item in self.items if receipt_needs_ai(item, self.form_version.get())]
         if not items:
-            self.show_info("Upload and select a receipt first.")
+            self.status_text.set(self.tr("no_empty_rows"))
             return
-        self._run_ai_for_items(items, reload_selected=True)
+        self._run_ai_for_items(items, reload_selected=True, include_bank=True)
+
+    def generate_selected_details(self) -> None:
+        self.generate_empty_details()
 
     def generate_all_details(self) -> None:
         self.save_current_fields()
@@ -4815,6 +5131,7 @@ class ReimbursementHelperApp:
                     continue
             if include_bank and form_version == "USA":
                 merged_count = self.merge_same_usa_receipts()
+                match_usa_payment_proof_items(self.items)
                 if merged_count:
                     self.root.after(0, self.refresh_tree)
                     self.set_status(f"Merged {merged_count} duplicate receipt screenshot(s).")
@@ -4839,6 +5156,7 @@ class ReimbursementHelperApp:
                         place=bank_item.place,
                         amount=bank_item.amount,
                         currency="USD",
+                        document_type="payment_proof",
                         crop_box=bank_item.crop_box,
                         rotation_degrees=bank_item.rotation_degrees,
                     )
@@ -4901,7 +5219,7 @@ class ReimbursementHelperApp:
                 if len(failures) > 5:
                     shown += f"\n...and {len(failures) - 5} more."
                 messagebox.showwarning(
-                    "Generate Details",
+                    self.tr("generate_empty"),
                     f"Finished with failures.\n\n{shown}\n\nLogged to:\n{LOG_DIR / 'app.log'}",
                 )
         else:
@@ -4999,6 +5317,16 @@ class ReimbursementHelperApp:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             if self.form_version.get() == "USA":
+                unknown_count = sum(
+                    1
+                    for item in self.items
+                    if normalize_document_type(item.document_type, "unknown") == "unknown"
+                )
+                if unknown_count:
+                    self.status_text.set(self.tr("unknown_document_type", count=unknown_count))
+                    return
+                self.merge_same_usa_receipts()
+                match_usa_payment_proof_items(self.items)
                 exchange_rate = safe_float(self.exchange_rate.get()) or safe_float(DEFAULT_USD_TO_RMB_RATE) or 6.8
                 export_usa(self.items, output_path, exchange_rate, self.bank_items)
             else:
@@ -5124,6 +5452,8 @@ class ReimbursementHelperApp:
             if not isinstance(values.get("receipt_images"), list):
                 values["receipt_images"] = []
             values["rotation_degrees"] = normalize_rotation(values.get("rotation_degrees", 0))
+            values["document_type"] = normalize_document_type(values.get("document_type"), "receipt")
+            values["matched_receipt_id"] = str(values.get("matched_receipt_id") or "")
             item = ReceiptItem(**values)
             ensure_receipt_images(item)
             restored.append(item)

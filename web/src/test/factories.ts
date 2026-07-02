@@ -35,6 +35,8 @@ export function receipt(overrides: Partial<ReceiptItem> = {}): ReceiptItem {
     category: (overrides.category ?? "transportation") as Category,
     paymentMethod: overrides.paymentMethod ?? "Visa",
     receiptLabel: overrides.receiptLabel ?? "Receipt",
+    documentType: overrides.documentType ?? "receipt",
+    matchedReceiptId: overrides.matchedReceiptId ?? "",
     images: overrides.images ?? [image({ id: `${id}-image` })]
   };
 }

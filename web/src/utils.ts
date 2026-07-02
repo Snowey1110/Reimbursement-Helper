@@ -7,7 +7,7 @@ import {
   USA_CATEGORY_ROWS,
   USA_REPORT_CATEGORY_ORDER
 } from "./constants";
-import type { Category, Currency, ExchangeRates, ImageAttachment, PaymentProof, ReceiptItem } from "./types";
+import type { Category, Currency, DocumentType, ExchangeRates, ImageAttachment, PaymentProof, ReceiptItem } from "./types";
 
 export function uid(prefix = "id"): string {
   return `${prefix}_${crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2)}`;
@@ -40,6 +40,31 @@ export function normalizeCurrency(value: unknown, fallback: Currency): Currency 
   if (raw.includes("USD") || raw.includes("$")) return "USD";
   if (raw.includes("KRW") || raw.includes("WON") || raw.includes("\u20a9")) return "KRW";
   if (raw.includes("RMB") || raw.includes("CNY") || raw.includes("YUAN") || raw.includes("\u00a5")) return "RMB";
+  return fallback;
+}
+
+export function normalizeDocumentType(value: unknown, fallback: DocumentType = "unknown"): DocumentType {
+  const raw = String(value ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (!raw) return fallback;
+  if (["receipt", "invoice", "sales_receipt", "ticket_receipt"].includes(raw)) return "receipt";
+  if (
+    [
+      "payment_proof",
+      "proof",
+      "payment",
+      "payment_detail",
+      "payment_details",
+      "bank",
+      "bank_statement",
+      "card_statement",
+      "credit_card",
+      "transaction",
+      "chase"
+    ].includes(raw)
+  ) {
+    return "payment_proof";
+  }
+  if (["unknown", "unclear", "manual_review", "review"].includes(raw)) return "unknown";
   return fallback;
 }
 
@@ -160,6 +185,8 @@ export function blankReceipt(formVersion: "USA" | "Korea", image: ImageAttachmen
     category: "transportation",
     paymentMethod: "",
     receiptLabel: "",
+    documentType: formVersion === "USA" ? "unknown" : "receipt",
+    matchedReceiptId: "",
     images: [image]
   };
 }
@@ -210,10 +237,32 @@ export function receiptMergeKey(item: ReceiptItem): string | undefined {
   return `${date}|${amount.toFixed(2)}`;
 }
 
+export function isUsaReceiptItem(item: ReceiptItem): boolean {
+  return item.documentType === "receipt";
+}
+
+export function isUsaPaymentProofItem(item: ReceiptItem): boolean {
+  return item.documentType === "payment_proof";
+}
+
+export function receiptNeedsAi(item: ReceiptItem, formVersion: "USA" | "Korea"): boolean {
+  if (item.status === "Empty" || item.status === "Failed") return true;
+  if (!item.date.trim() || !item.amount.trim()) return true;
+  if (formVersion === "USA") {
+    if (item.documentType === "unknown") return true;
+    if (item.documentType === "receipt" && !item.purpose.trim() && !item.details.trim() && !item.receiptLabel.trim()) return true;
+  }
+  return false;
+}
+
 export function mergeSameUsaReceipts(items: ReceiptItem[]): ReceiptItem[] {
   const seen = new Map<string, ReceiptItem>();
   const merged: ReceiptItem[] = [];
   for (const item of items) {
+    if (!isUsaReceiptItem(item)) {
+      merged.push({ ...item, images: [...item.images] });
+      continue;
+    }
     const key = receiptMergeKey(item);
     if (!key || !seen.has(key)) {
       const copy = { ...item, images: [...item.images] };
@@ -238,6 +287,104 @@ export function mergeSameUsaReceipts(items: ReceiptItem[]): ReceiptItem[] {
     target.status = "Merged";
   }
   return merged;
+}
+
+export function matchUsaPaymentProofItems(items: ReceiptItem[]): ReceiptItem[] {
+  const receipts = items.filter(isUsaReceiptItem);
+  return items.map((item) => {
+    if (!isUsaPaymentProofItem(item)) return item;
+    const proofAmount = safeNumber(item.amount);
+    const proofDate = parseDateKey(item.date);
+    const matches = receipts.filter((receipt) => {
+      const itemAmount = safeNumber(receipt.amount);
+      const itemDate = parseDateKey(receipt.date);
+      return Boolean(
+        proofDate &&
+          itemDate &&
+          proofDate === itemDate &&
+          proofAmount !== undefined &&
+          itemAmount !== undefined &&
+          Math.abs(itemAmount - proofAmount) < 0.01
+      );
+    });
+    if (matches.length === 1) {
+      return { ...item, matchedReceiptId: matches[0].id, status: "Matched" };
+    }
+    return { ...item, matchedReceiptId: "", status: "Needs manual review" };
+  });
+}
+
+export interface UsaReportRow {
+  id: string;
+  item?: ReceiptItem;
+  date: string;
+  amount: string;
+  receiptImages: ImageAttachment[];
+  proofImages: ImageAttachment[];
+}
+
+export function buildUsaReportRows(items: ReceiptItem[], proofs: PaymentProof[] = []): UsaReportRow[] {
+  const mergedItems = matchUsaPaymentProofItems(mergeSameUsaReceipts(items));
+  const receiptItems = sortReceiptsForReport(mergedItems.filter(isUsaReceiptItem), "USA");
+  const rows: UsaReportRow[] = receiptItems.map((item) => ({
+    id: item.id,
+    item,
+    date: item.date,
+    amount: item.amount,
+    receiptImages: [...item.images],
+    proofImages: []
+  }));
+  const rowByReceiptId = new Map(rows.map((row) => [row.id, row]));
+  const proofCandidates = [
+    ...mergedItems.filter(isUsaPaymentProofItem).map((item) => ({
+      id: item.id,
+      date: item.date,
+      amount: item.amount,
+      matchedReceiptId: item.matchedReceiptId,
+      images: item.images
+    })),
+    ...proofs.map((proof) => ({
+      id: proof.id,
+      date: proof.date,
+      amount: proof.amount,
+      matchedReceiptId: proof.matchedReceiptId,
+      images: [proof.image]
+    }))
+  ];
+  const proofOnlyRows: UsaReportRow[] = [];
+  for (const proof of proofCandidates) {
+    let target = proof.matchedReceiptId ? rowByReceiptId.get(proof.matchedReceiptId) : undefined;
+    if (!target) {
+      const proofAmount = safeNumber(proof.amount);
+      const proofDate = parseDateKey(proof.date);
+      const matches = rows.filter((row) => {
+        const rowAmount = safeNumber(row.amount);
+        const rowDate = parseDateKey(row.date);
+        return Boolean(
+          proofDate &&
+            rowDate &&
+            proofDate === rowDate &&
+            proofAmount !== undefined &&
+            rowAmount !== undefined &&
+            Math.abs(rowAmount - proofAmount) < 0.01
+        );
+      });
+      if (matches.length === 1) target = matches[0];
+    }
+    if (target) {
+      target.proofImages.push(...proof.images);
+    } else {
+      proofOnlyRows.push({
+        id: proof.id,
+        date: proof.date,
+        amount: proof.amount,
+        receiptImages: [],
+        proofImages: [...proof.images]
+      });
+    }
+  }
+  proofOnlyRows.sort((left, right) => dateSortValue(left.date) - dateSortValue(right.date));
+  return [...rows, ...proofOnlyRows];
 }
 
 export function matchPaymentProofs(proofs: PaymentProof[], items: ReceiptItem[]): PaymentProof[] {

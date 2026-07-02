@@ -24,7 +24,8 @@ describe("OpenAI extraction", () => {
             project_number: "",
             category: "transportation",
             payment_method: "Visa",
-            receipt_label: "Parking Receipt"
+            receipt_label: "Parking Receipt",
+            document_type: "receipt"
           })
         }),
         { status: 200 }
