@@ -11,16 +11,20 @@ Open the web app here:
 
 https://snowey1110.github.io/Reimbursement-Helper/
 
+Custom domain:
+
+https://reimbursement.lixiaok.com/
+
 Direct web links for coworkers:
 
-| Use case | Current link | Future custom-domain link |
+| Use case | GitHub Pages link | Custom-domain link |
 | --- | --- | --- |
-| USA, English | https://snowey1110.github.io/Reimbursement-Helper/?form=USA&lang=en | https://lixiaok.com/Reimbursement-Helper/?form=USA&lang=en |
-| USA, Chinese | https://snowey1110.github.io/Reimbursement-Helper/?form=USA&lang=zh | https://lixiaok.com/Reimbursement-Helper/?form=USA&lang=zh |
-| USA, Korean | https://snowey1110.github.io/Reimbursement-Helper/?form=USA&lang=ko | https://lixiaok.com/Reimbursement-Helper/?form=USA&lang=ko |
-| Korea, English | https://snowey1110.github.io/Reimbursement-Helper/?form=Korea&lang=en | https://lixiaok.com/Reimbursement-Helper/?form=Korea&lang=en |
-| Korea, Chinese | https://snowey1110.github.io/Reimbursement-Helper/?form=Korea&lang=zh | https://lixiaok.com/Reimbursement-Helper/?form=Korea&lang=zh |
-| Korea, Korean | https://snowey1110.github.io/Reimbursement-Helper/?form=Korea&lang=ko | https://lixiaok.com/Reimbursement-Helper/?form=Korea&lang=ko |
+| USA, English | https://snowey1110.github.io/Reimbursement-Helper/?form=USA&lang=en | https://reimbursement.lixiaok.com/?form=USA&lang=en |
+| USA, Chinese | https://snowey1110.github.io/Reimbursement-Helper/?form=USA&lang=zh | https://reimbursement.lixiaok.com/?form=USA&lang=zh |
+| USA, Korean | https://snowey1110.github.io/Reimbursement-Helper/?form=USA&lang=ko | https://reimbursement.lixiaok.com/?form=USA&lang=ko |
+| Korea, English | https://snowey1110.github.io/Reimbursement-Helper/?form=Korea&lang=en | https://reimbursement.lixiaok.com/?form=Korea&lang=en |
+| Korea, Chinese | https://snowey1110.github.io/Reimbursement-Helper/?form=Korea&lang=zh | https://reimbursement.lixiaok.com/?form=Korea&lang=zh |
+| Korea, Korean | https://snowey1110.github.io/Reimbursement-Helper/?form=Korea&lang=ko | https://reimbursement.lixiaok.com/?form=Korea&lang=ko |
 
 ## Quick Start For Users
 
@@ -96,6 +100,10 @@ A static GitHub Pages version is in `web/`. It runs in the browser, uses blank t
 Live site:
 
 https://snowey1110.github.io/Reimbursement-Helper/
+
+Custom domain:
+
+https://reimbursement.lixiaok.com/
 
 ```bash
 cd web
