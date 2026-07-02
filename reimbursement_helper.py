@@ -34,16 +34,25 @@ try:
     from openpyxl import Workbook, load_workbook
     from openpyxl.cell.cell import MergedCell
     from openpyxl.drawing.image import Image as XLImage
+    from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
+    from openpyxl.drawing.xdr import XDRPositiveSize2D
     from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils.cell import column_index_from_string
+    from openpyxl.utils.units import pixels_to_EMU
     from openpyxl.worksheet.views import Selection
 except Exception:  # pragma: no cover
     Workbook = None  # type: ignore[assignment]
     load_workbook = None  # type: ignore[assignment]
     MergedCell = None  # type: ignore[assignment]
     XLImage = None  # type: ignore[assignment]
+    AnchorMarker = None  # type: ignore[assignment]
+    OneCellAnchor = None  # type: ignore[assignment]
+    XDRPositiveSize2D = None  # type: ignore[assignment]
     Alignment = None  # type: ignore[assignment]
     Font = None  # type: ignore[assignment]
     PatternFill = None  # type: ignore[assignment]
+    column_index_from_string = None  # type: ignore[assignment]
+    pixels_to_EMU = None  # type: ignore[assignment]
     Selection = None  # type: ignore[assignment]
 
 try:
@@ -224,7 +233,7 @@ def same_folder(path: Path, folder: Path) -> bool:
 
 def open_path(path: Path) -> None:
     if sys.platform == "win32":
-        os.startfile(str(path))  # type: ignore[attr-defined]
+        os.startfile(str(path.resolve()))  # type: ignore[attr-defined]
     else:
         raise RuntimeError(f"Opening files is only implemented for Windows. Path: {path}")
 
@@ -233,7 +242,7 @@ def reveal_in_file_explorer(path: Path) -> None:
     if sys.platform == "win32":
         resolved = path.resolve()
         if resolved.exists():
-            subprocess.Popen(["explorer.exe", f'/select,"{resolved}"'])
+            subprocess.Popen(["explorer.exe", "/select,", str(resolved)])
         else:
             open_path(resolved.parent)
     else:
@@ -382,6 +391,7 @@ USA_RECEIPT_IMAGE_MAX_WIDTH = 700
 USA_RECEIPT_IMAGE_MAX_HEIGHT = 720
 USA_PROOF_IMAGE_MAX_WIDTH = 590
 USA_PROOF_IMAGE_MAX_HEIGHT = 720
+USA_SUPPORT_IMAGE_PADDING_PX = 12
 
 KOREA_COVER_ROWS: Dict[str, Tuple[int, str]] = {
     "transportation": (4, "交通费"),
@@ -2214,6 +2224,41 @@ def resize_attachment_contact_sheet(
     return img
 
 
+def add_xl_image_with_padding(sheet: Any, image: Any, cell_ref: str, padding_px: int = 0) -> None:
+    if padding_px <= 0 or AnchorMarker is None or OneCellAnchor is None or XDRPositiveSize2D is None or pixels_to_EMU is None:
+        sheet.add_image(image, cell_ref)
+        return
+    match = re.fullmatch(r"([A-Z]+)(\d+)", cell_ref)
+    if not match:
+        sheet.add_image(image, cell_ref)
+        return
+    try:
+        col_letters, row_text = match.groups()
+        if column_index_from_string is not None:
+            col_index = column_index_from_string(col_letters) - 1
+        else:
+            col_index = 0
+            for char in col_letters:
+                col_index = col_index * 26 + (ord(char) - 64)
+            col_index -= 1
+        row_index = int(row_text) - 1
+        image.anchor = OneCellAnchor(
+            _from=AnchorMarker(
+                col=col_index,
+                row=row_index,
+                colOff=pixels_to_EMU(padding_px),
+                rowOff=pixels_to_EMU(padding_px),
+            ),
+            ext=XDRPositiveSize2D(
+                cx=pixels_to_EMU(max(1, int(getattr(image, "width", 1)))),
+                cy=pixels_to_EMU(max(1, int(getattr(image, "height", 1)))),
+            ),
+        )
+        sheet.add_image(image)
+    except Exception:
+        sheet.add_image(image, cell_ref)
+
+
 def korea_attachment_is_pdf_page(attachment: Dict[str, Any]) -> bool:
     source_path = str(attachment.get("source_path") or "")
     source_page = str(attachment.get("source_page") or "")
@@ -2556,6 +2601,11 @@ def export_usa(
     receipts_ws.column_dimensions["C"].width = 17
     receipts_ws.column_dimensions["D"].width = USA_RECEIPT_COLUMN_WIDTH
     receipts_ws.column_dimensions["E"].width = USA_PROOF_COLUMN_WIDTH
+    image_padding = USA_SUPPORT_IMAGE_PADDING_PX
+    receipt_image_width = max(1, USA_RECEIPT_IMAGE_MAX_WIDTH - image_padding * 2)
+    receipt_image_height = max(1, USA_RECEIPT_IMAGE_MAX_HEIGHT - image_padding * 2)
+    proof_image_width = max(1, USA_PROOF_IMAGE_MAX_WIDTH - image_padding * 2)
+    proof_image_height = max(1, USA_PROOF_IMAGE_MAX_HEIGHT - image_padding * 2)
     for index, row_data in enumerate(report_rows, start=1):
         row = index + 1
         receipts_ws[f"A{row}"] = index
@@ -2564,23 +2614,23 @@ def export_usa(
         receipts_ws.row_dimensions[row].height = USA_SUPPORT_ROW_HEIGHT
         receipt_image = resize_attachment_contact_sheet(
             list(row_data.get("receipt_images") or []),
-            USA_RECEIPT_IMAGE_MAX_WIDTH,
-            USA_RECEIPT_IMAGE_MAX_HEIGHT,
+            receipt_image_width,
+            receipt_image_height,
             allow_upscale=True,
         )
         if receipt_image is not None:
-            receipts_ws.add_image(receipt_image, f"D{row}")
+            add_xl_image_with_padding(receipts_ws, receipt_image, f"D{row}", image_padding)
         proof_image = resize_attachment_contact_sheet(
             list(row_data.get("proof_images") or []),
-            USA_PROOF_IMAGE_MAX_WIDTH,
-            USA_PROOF_IMAGE_MAX_HEIGHT,
+            proof_image_width,
+            proof_image_height,
             allow_upscale=True,
             trim_whitespace=True,
             compact_whitespace=True,
             max_columns=1,
         )
         if proof_image is not None:
-            receipts_ws.add_image(proof_image, f"E{row}")
+            add_xl_image_with_padding(receipts_ws, proof_image, f"E{row}", image_padding)
 
     wb.save(output_path)
 

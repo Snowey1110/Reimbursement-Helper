@@ -36,6 +36,7 @@ const USA_RECEIPT_IMAGE_MAX_WIDTH = 700;
 const USA_RECEIPT_IMAGE_MAX_HEIGHT = 720;
 const USA_PROOF_IMAGE_MAX_WIDTH = 590;
 const USA_PROOF_IMAGE_MAX_HEIGHT = 720;
+const USA_SUPPORT_IMAGE_PADDING = 12;
 
 function dataUrlBase64(dataUrl: string): string {
   return dataUrl.split(",", 2)[1] ?? dataUrl;
@@ -241,15 +242,18 @@ async function addImageToCell(
   stretchTiles = false,
   trimWhitespace = false,
   compactWhitespace = false,
-  maxColumns = 2
+  maxColumns = 2,
+  paddingPx = 0
 ): Promise<void> {
   if (!attachment) return;
+  const effectiveMaxWidth = Math.max(1, maxWidth - paddingPx * 2);
+  const effectiveMaxHeight = Math.max(1, maxHeight - paddingPx * 2);
   const prepared = Array.isArray(attachment)
-    ? await makeContactSheet(attachment, maxWidth, maxHeight, allowUpscale, stretchTiles, trimWhitespace, compactWhitespace, maxColumns)
+    ? await makeContactSheet(attachment, effectiveMaxWidth, effectiveMaxHeight, allowUpscale, stretchTiles, trimWhitespace, compactWhitespace, maxColumns)
     : await preparedImageDataUrl(
         attachment,
-        stretchToFit ? maxWidth * 2 : maxWidth,
-        stretchToFit ? maxHeight * 2 : maxHeight,
+        stretchToFit ? effectiveMaxWidth * 2 : effectiveMaxWidth,
+        stretchToFit ? effectiveMaxHeight * 2 : effectiveMaxHeight,
         allowUpscale,
         trimWhitespace,
         compactWhitespace
@@ -267,11 +271,12 @@ async function addImageToCell(
   for (const char of colLetters) {
     col = col * 26 + (char.charCodeAt(0) - 64);
   }
+  const offset = paddingPx > 0 ? 0.025 : 0;
   sheet.addImage(imageId, {
-    tl: { col: col - 1, row },
+    tl: { col: col - 1 + offset, row: row + offset },
     ext: {
-      width: stretchToFit ? maxWidth : prepared.displayWidth ?? prepared.width,
-      height: stretchToFit ? maxHeight : prepared.displayHeight ?? prepared.height
+      width: stretchToFit ? effectiveMaxWidth : Math.min(effectiveMaxWidth, prepared.displayWidth ?? prepared.width),
+      height: stretchToFit ? effectiveMaxHeight : Math.min(effectiveMaxHeight, prepared.displayHeight ?? prepared.height)
     }
   });
 }
@@ -502,9 +507,37 @@ export async function exportUsaWorkbook(items: ReceiptItem[], proofs: PaymentPro
     receipts.getCell(`B${row}`).value = rowData.date;
     receipts.getCell(`C${row}`).value = safeNumber(rowData.amount) ?? null;
     if (item) {
-      await addImageToCell(workbook, receipts, rowData.receiptImages, `D${row}`, USA_RECEIPT_IMAGE_MAX_WIDTH, USA_RECEIPT_IMAGE_MAX_HEIGHT, true);
+      await addImageToCell(
+        workbook,
+        receipts,
+        rowData.receiptImages,
+        `D${row}`,
+        USA_RECEIPT_IMAGE_MAX_WIDTH,
+        USA_RECEIPT_IMAGE_MAX_HEIGHT,
+        true,
+        false,
+        false,
+        false,
+        false,
+        2,
+        USA_SUPPORT_IMAGE_PADDING
+      );
     }
-    await addImageToCell(workbook, receipts, rowData.proofImages, `E${row}`, USA_PROOF_IMAGE_MAX_WIDTH, USA_PROOF_IMAGE_MAX_HEIGHT, true, false, false, true, true, 1);
+    await addImageToCell(
+      workbook,
+      receipts,
+      rowData.proofImages,
+      `E${row}`,
+      USA_PROOF_IMAGE_MAX_WIDTH,
+      USA_PROOF_IMAGE_MAX_HEIGHT,
+      true,
+      false,
+      false,
+      true,
+      true,
+      1,
+      USA_SUPPORT_IMAGE_PADDING
+    );
   }
   const buffer = await workbook.xlsx.writeBuffer();
   downloadBlob(new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `reimbursement_usa_${dateStamp()}.xlsx`);
