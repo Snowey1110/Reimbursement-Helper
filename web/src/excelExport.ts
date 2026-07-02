@@ -13,7 +13,6 @@ import {
   downloadBlob,
   formatAmount,
   isKoreaOtherText,
-  isUsaReceiptItem,
   itemSearchText,
   koreaInvoiceKindForItem,
   reportCategoryForItem,
@@ -30,6 +29,13 @@ const KOREA_RECEIPT_WIDE_WIDTH = 760;
 const KOREA_RECEIPT_HALF_HEIGHT = 520;
 const KOREA_RECEIPT_FULL_HEIGHT = 1040;
 const KOREA_FULL_PAGE_SPLIT_ASPECT = 1.75;
+const USA_SUPPORT_ROW_HEIGHT = 391.05;
+const USA_RECEIPT_COLUMN_WIDTH = 92.7;
+const USA_PROOF_COLUMN_WIDTH = 50.7;
+const USA_RECEIPT_IMAGE_MAX_WIDTH = 700;
+const USA_RECEIPT_IMAGE_MAX_HEIGHT = 510;
+const USA_PROOF_IMAGE_MAX_WIDTH = 390;
+const USA_PROOF_IMAGE_MAX_HEIGHT = 510;
 
 function dataUrlBase64(dataUrl: string): string {
   return dataUrl.split(",", 2)[1] ?? dataUrl;
@@ -110,7 +116,7 @@ export interface UsaExpenseRow {
 
 export function mapUsaExpenseRows(items: ReceiptItem[]): UsaExpenseRow[] {
   const cursors: Record<string, number> = {};
-  return sortReceiptsForReport(items.filter(isUsaReceiptItem), "USA").map((item) => {
+  return sortReceiptsForReport(items, "USA").map((item) => {
     const category = categoryForUsa(item);
     const rows = USA_CATEGORY_ROWS[category] ?? USA_CATEGORY_ROWS.other;
     const cursor = cursors[category] ?? 0;
@@ -446,7 +452,10 @@ export async function exportUsaWorkbook(items: ReceiptItem[], proofs: PaymentPro
   const receipts = workbook.getWorksheet("Receipt and Payment of expenses");
   if (!expense || !receipts) throw new Error("USA template is missing required sheets.");
   const reportRows = buildUsaReportRows(items, proofs);
-  const expenseItems = reportRows.flatMap((row) => (row.item ? [row.item] : []));
+  const expenseItems = reportRows.flatMap((row) => {
+    const item = row.expenseItem ?? row.item;
+    return item ? [item] : [];
+  });
   expense.getCell("A3").value = `Date / 填表日期： ${new Date().toLocaleDateString("en-US")}`;
   expense.getCell("A4").value = "Employee: / 申请人：";
   expense.getCell("J1").value = rates.usdToRmb;
@@ -468,10 +477,13 @@ export async function exportUsaWorkbook(items: ReceiptItem[], proofs: PaymentPro
     for (const col of ["A", "B", "C", "D", "E"]) {
       receipts.getCell(`${col}${row}`).value = null;
     }
-    receipts.getRow(row).height = 126;
+    receipts.getRow(row).height = USA_SUPPORT_ROW_HEIGHT;
   }
-  receipts.getColumn("D").width = 38;
-  receipts.getColumn("E").width = 26;
+  receipts.getColumn("A").width = 11;
+  receipts.getColumn("B").width = 25.9;
+  receipts.getColumn("C").width = 17;
+  receipts.getColumn("D").width = USA_RECEIPT_COLUMN_WIDTH;
+  receipts.getColumn("E").width = USA_PROOF_COLUMN_WIDTH;
   for (let index = 0; index < reportRows.length; index += 1) {
     const rowData = reportRows[index];
     const item = rowData.item;
@@ -480,9 +492,9 @@ export async function exportUsaWorkbook(items: ReceiptItem[], proofs: PaymentPro
     receipts.getCell(`B${row}`).value = rowData.date;
     receipts.getCell(`C${row}`).value = safeNumber(rowData.amount) ?? null;
     if (item) {
-      await addImageToCell(workbook, receipts, rowData.receiptImages, `D${row}`, 260, 150);
+      await addImageToCell(workbook, receipts, rowData.receiptImages, `D${row}`, USA_RECEIPT_IMAGE_MAX_WIDTH, USA_RECEIPT_IMAGE_MAX_HEIGHT, true);
     }
-    await addImageToCell(workbook, receipts, rowData.proofImages, `E${row}`, 180, 150);
+    await addImageToCell(workbook, receipts, rowData.proofImages, `E${row}`, USA_PROOF_IMAGE_MAX_WIDTH, USA_PROOF_IMAGE_MAX_HEIGHT, true);
   }
   const buffer = await workbook.xlsx.writeBuffer();
   downloadBlob(new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `reimbursement_usa_${dateStamp()}.xlsx`);

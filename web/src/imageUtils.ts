@@ -4,6 +4,7 @@ import type { CropPoint, ImageAttachment } from "./types";
 import { uid } from "./utils";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
+const PDF_RENDER_SCALE = 3;
 
 export function defaultCropPoints(width: number, height: number): CropPoint[] {
   return [
@@ -115,7 +116,7 @@ export async function renderPdfToPageAttachments(file: File): Promise<ImageAttac
   const attachments: ImageAttachment[] = [];
   for (let pageIndex = 1; pageIndex <= pdf.numPages; pageIndex += 1) {
     const page = await pdf.getPage(pageIndex);
-    const viewport = page.getViewport({ scale: 2 });
+    const viewport = page.getViewport({ scale: PDF_RENDER_SCALE });
     const canvas = document.createElement("canvas");
     canvas.width = Math.ceil(viewport.width);
     canvas.height = Math.ceil(viewport.height);
@@ -144,7 +145,7 @@ export async function renderPdfToMergedAttachment(file: File): Promise<ImageAtta
   const pageCanvases: HTMLCanvasElement[] = [];
   for (let pageIndex = 1; pageIndex <= pdf.numPages; pageIndex += 1) {
     const page = await pdf.getPage(pageIndex);
-    const viewport = page.getViewport({ scale: 2 });
+    const viewport = page.getViewport({ scale: PDF_RENDER_SCALE });
     const canvas = document.createElement("canvas");
     canvas.width = Math.ceil(viewport.width);
     canvas.height = Math.ceil(viewport.height);

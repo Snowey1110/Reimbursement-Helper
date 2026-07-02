@@ -317,18 +317,94 @@ export function matchUsaPaymentProofItems(items: ReceiptItem[]): ReceiptItem[] {
 export interface UsaReportRow {
   id: string;
   item?: ReceiptItem;
+  expenseItem?: ReceiptItem;
   date: string;
   amount: string;
   receiptImages: ImageAttachment[];
   proofImages: ImageAttachment[];
 }
 
+const USA_MATCH_STOP_WORDS = new Set([
+  "receipt",
+  "payment",
+  "proof",
+  "transaction",
+  "details",
+  "total",
+  "sale",
+  "card",
+  "credit",
+  "debit",
+  "visa",
+  "mastercard",
+  "jpg",
+  "jpeg",
+  "png",
+  "pdf"
+]);
+
+function usaMatchTokens(item: ReceiptItem): Set<string> {
+  const tokens = new Set<string>();
+  for (const token of itemSearchText(item).toLowerCase().match(/[a-z0-9]+/g) ?? []) {
+    if (token.length < 3 || USA_MATCH_STOP_WORDS.has(token)) continue;
+    tokens.add(token);
+  }
+  return tokens;
+}
+
+function sameDate(left: string, right: string): boolean {
+  const leftKey = parseDateKey(left);
+  const rightKey = parseDateKey(right);
+  return Boolean(leftKey && rightKey && leftKey === rightKey);
+}
+
+function amountlessReceiptMatch(item: ReceiptItem, candidates: ReceiptItem[]): ReceiptItem | undefined {
+  const sameDatePaid = candidates.filter((candidate) => safeNumber(candidate.amount) !== undefined && sameDate(item.date, candidate.date));
+  if (sameDatePaid.length === 1) return sameDatePaid[0];
+  if (!sameDatePaid.length) return undefined;
+  const itemTokens = usaMatchTokens(item);
+  if (!itemTokens.size) return undefined;
+  const scored = sameDatePaid
+    .map((candidate) => ({ candidate, score: [...usaMatchTokens(candidate)].filter((token) => itemTokens.has(token)).length }))
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => right.score - left.score);
+  if (!scored.length || scored[0].score < 2) return undefined;
+  if (scored.length > 1 && scored[0].score === scored[1].score) return undefined;
+  return scored[0].candidate;
+}
+
 export function buildUsaReportRows(items: ReceiptItem[], proofs: PaymentProof[] = []): UsaReportRow[] {
-  const mergedItems = matchUsaPaymentProofItems(mergeSameUsaReceipts(items));
+  let mergedItems = mergeSameUsaReceipts(items);
+  const paidReceipts = mergedItems.filter((item) => isUsaReceiptItem(item) && safeNumber(item.amount) !== undefined);
+  const amountlessTargetById = new Map<string, string>();
+  for (const item of mergedItems) {
+    if (!isUsaReceiptItem(item) || safeNumber(item.amount) !== undefined) continue;
+    const target = amountlessReceiptMatch(item, paidReceipts);
+    if (!target) continue;
+    const existing = new Set(target.images.map((image) => image.id));
+    for (const image of item.images) {
+      if (!existing.has(image.id)) {
+        target.images.push(image);
+        existing.add(image.id);
+      }
+    }
+    for (const keyName of ["place", "purpose", "details", "projectNumber", "paymentMethod", "receiptLabel"] as const) {
+      if (!target[keyName] && item[keyName]) target[keyName] = item[keyName];
+    }
+    target.status = "Merged";
+    amountlessTargetById.set(item.id, target.id);
+  }
+  if (amountlessTargetById.size) {
+    mergedItems = mergedItems
+      .filter((item) => !amountlessTargetById.has(item.id))
+      .map((item) => (item.matchedReceiptId && amountlessTargetById.has(item.matchedReceiptId) ? { ...item, matchedReceiptId: amountlessTargetById.get(item.matchedReceiptId)! } : item));
+  }
+  mergedItems = matchUsaPaymentProofItems(mergedItems);
   const receiptItems = sortReceiptsForReport(mergedItems.filter(isUsaReceiptItem), "USA");
   const rows: UsaReportRow[] = receiptItems.map((item) => ({
     id: item.id,
     item,
+    expenseItem: item,
     date: item.date,
     amount: item.amount,
     receiptImages: [...item.images],
@@ -341,6 +417,7 @@ export function buildUsaReportRows(items: ReceiptItem[], proofs: PaymentProof[] 
       date: item.date,
       amount: item.amount,
       matchedReceiptId: item.matchedReceiptId,
+      expenseItem: item,
       images: item.images
     })),
     ...proofs.map((proof) => ({
@@ -348,6 +425,17 @@ export function buildUsaReportRows(items: ReceiptItem[], proofs: PaymentProof[] 
       date: proof.date,
       amount: proof.amount,
       matchedReceiptId: proof.matchedReceiptId,
+      expenseItem: {
+        ...blankReceipt("USA", proof.image),
+        id: proof.id,
+        filename: proof.filename,
+        status: proof.status,
+        date: proof.date,
+        place: proof.place,
+        amount: proof.amount,
+        documentType: "payment_proof" as DocumentType,
+        receiptLabel: proof.filename
+      },
       images: [proof.image]
     }))
   ];
@@ -376,6 +464,7 @@ export function buildUsaReportRows(items: ReceiptItem[], proofs: PaymentProof[] 
     } else {
       proofOnlyRows.push({
         id: proof.id,
+        expenseItem: proof.expenseItem,
         date: proof.date,
         amount: proof.amount,
         receiptImages: [],

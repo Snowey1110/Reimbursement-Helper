@@ -59,6 +59,21 @@ describe("Reimbursement Helper web app", () => {
     expect(screen.queryByRole("button", { name: /Select Payment Proof/ })).not.toBeInTheDocument();
   });
 
+  it("recommends Generate All after USA receipt files are selected", async () => {
+    render(<App />);
+
+    const receiptInput = document.querySelector('input[type="file"][accept="image/*,.pdf"]') as HTMLInputElement;
+    fireEvent.change(receiptInput, {
+      target: {
+        files: [new File(["one"], "1.png", { type: "image/png" })]
+      }
+    });
+
+    await screen.findAllByText("1.png");
+
+    expect(screen.getByRole("button", { name: /Generate All/ })).toHaveClass("recommended");
+  });
+
   it("recommends the Korea exchange-rate image after receipts are selected", async () => {
     localStorage.setItem(FORM_VERSION_STORAGE_KEY, "Korea");
     render(<App />);

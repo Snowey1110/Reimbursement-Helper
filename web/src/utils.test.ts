@@ -80,6 +80,33 @@ describe("payment proof matching", () => {
     expect(rows[0].proofImages).toEqual([]);
     expect(rows[1].receiptImages).toEqual([]);
     expect(rows[1].proofImages.map((entry) => entry.id)).toEqual(["proof-img"]);
+    expect(rows[1].expenseItem?.amount).toBe("13.99");
+  });
+
+  it("groups amountless same-date receipt support with the paid receipt", () => {
+    const rows = buildUsaReportRows([
+      receipt({
+        id: "paid",
+        date: "2026-06-19",
+        place: "McCormick Place Lot A",
+        details: "Parking",
+        amount: "27",
+        documentType: "receipt",
+        images: [image({ id: "paid-img" })]
+      }),
+      receipt({
+        id: "ticket",
+        date: "2026-06-19",
+        place: "McCormick Place Lot A",
+        details: "QR parking ticket",
+        amount: "",
+        documentType: "receipt",
+        images: [image({ id: "ticket-img" })]
+      })
+    ]);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].receiptImages.map((entry) => entry.id)).toEqual(["paid-img", "ticket-img"]);
   });
 
   it("matches imported payment proof rows to grouped USA receipts", () => {

@@ -72,6 +72,7 @@ DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
 DEFAULT_USD_TO_RMB_RATE = "6.8175"
 DEFAULT_USD_TO_KRW_RATE = "1548.86"
 DEFAULT_KRW_TO_RMB_RATE = "0.004433"
+PDF_RENDER_SCALE = 3
 KRW_NUMBER_FORMAT = "\u20a9#,##0"
 LOGGER = logging.getLogger("reimbursement_helper")
 
@@ -145,7 +146,7 @@ def render_pdf_pages(pdf_path: Path) -> List[Path]:
     try:
         for page_index in range(document.page_count):
             page = document.load_page(page_index)
-            pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(PDF_RENDER_SCALE, PDF_RENDER_SCALE), alpha=False)
             output = target_dir / f"{pdf_path.stem}_page_{page_index + 1}.png"
             pixmap.save(str(output))
             rendered.append(output)
@@ -371,6 +372,13 @@ KOREA_RECEIPT_WIDE_WIDTH = 760
 KOREA_RECEIPT_HALF_HEIGHT = 520
 KOREA_RECEIPT_FULL_HEIGHT = 1040
 KOREA_FULL_PAGE_SPLIT_ASPECT = 1.75
+USA_SUPPORT_ROW_HEIGHT = 391.05
+USA_RECEIPT_COLUMN_WIDTH = 92.7
+USA_PROOF_COLUMN_WIDTH = 50.7
+USA_RECEIPT_IMAGE_MAX_WIDTH = 700
+USA_RECEIPT_IMAGE_MAX_HEIGHT = 510
+USA_PROOF_IMAGE_MAX_WIDTH = 390
+USA_PROOF_IMAGE_MAX_HEIGHT = 510
 
 KOREA_COVER_ROWS: Dict[str, Tuple[int, str]] = {
     "transportation": (4, "交通费"),
@@ -1434,6 +1442,66 @@ def same_expense_date_values(left: str, right: str) -> bool:
     return (left or "").strip() == (right or "").strip()
 
 
+USA_MATCH_STOP_WORDS = {
+    "receipt",
+    "payment",
+    "proof",
+    "transaction",
+    "details",
+    "total",
+    "sale",
+    "card",
+    "credit",
+    "debit",
+    "visa",
+    "mastercard",
+    "jpg",
+    "jpeg",
+    "png",
+    "pdf",
+}
+
+
+def usa_match_tokens(item: "ReceiptItem") -> set[str]:
+    text = item_search_text(item)
+    tokens = set()
+    for token in re.findall(r"[a-z0-9]+", text.lower()):
+        if len(token) < 3 or token in USA_MATCH_STOP_WORDS:
+            continue
+        tokens.add(token)
+    return tokens
+
+
+def usa_amountless_receipt_match(item: "ReceiptItem", candidates: List["ReceiptItem"]) -> Optional["ReceiptItem"]:
+    same_date = [
+        candidate
+        for candidate in candidates
+        if is_usa_receipt_item(candidate)
+        and safe_float(candidate.amount) is not None
+        and same_expense_date_values(item.date, candidate.date)
+    ]
+    if len(same_date) == 1:
+        return same_date[0]
+    if not same_date:
+        return None
+    item_tokens = usa_match_tokens(item)
+    if not item_tokens:
+        return None
+    scored: List[Tuple[int, ReceiptItem]] = []
+    for candidate in same_date:
+        overlap = len(item_tokens & usa_match_tokens(candidate))
+        if overlap:
+            scored.append((overlap, candidate))
+    if not scored:
+        return None
+    scored.sort(key=lambda entry: entry[0], reverse=True)
+    if scored[0][0] < 2:
+        return None
+    if len(scored) > 1 and scored[0][0] == scored[1][0]:
+        return None
+    return scored[0][1]
+
+
 def merge_same_usa_receipt_items(items: List["ReceiptItem"]) -> Tuple[List["ReceiptItem"], Dict[str, str], int]:
     merged_count = 0
     merged_items: List[ReceiptItem] = []
@@ -1468,6 +1536,30 @@ def merge_same_usa_receipt_items(items: List["ReceiptItem"]) -> Tuple[List["Rece
             target.status = "Merged"
         removed_to_target[item.item_id] = target.item_id
         merged_count += 1
+    if merged_items:
+        retained: List[ReceiptItem] = []
+        paid_receipts = [
+            item
+            for item in merged_items
+            if is_usa_receipt_item(item) and safe_float(item.amount) is not None
+        ]
+        for item in merged_items:
+            if not is_usa_receipt_item(item) or safe_float(item.amount) is not None:
+                retained.append(item)
+                continue
+            target = usa_amountless_receipt_match(item, paid_receipts)
+            if target is None:
+                retained.append(item)
+                continue
+            merge_attachment_lists(ensure_receipt_images(target), ensure_receipt_images(item))
+            for attr in ("place", "purpose", "details", "project_number", "category", "payment_method", "receipt_label"):
+                if not str(getattr(target, attr, "") or "").strip() and str(getattr(item, attr, "") or "").strip():
+                    setattr(target, attr, getattr(item, attr))
+            if target.status not in {"Failed", "Processing"}:
+                target.status = "Merged"
+            removed_to_target[item.item_id] = target.item_id
+            merged_count += 1
+        merged_items = retained
     if removed_to_target:
         for item in merged_items:
             if getattr(item, "matched_receipt_id", "") in removed_to_target:
@@ -1546,6 +1638,7 @@ def build_usa_report_rows(
             {
                 "id": item.item_id,
                 "item": item,
+                "expense_item": item,
                 "date": item.date,
                 "amount": item.amount,
                 "receipt_images": ensure_receipt_images(item),
@@ -1562,6 +1655,7 @@ def build_usa_report_rows(
                     "date": item.date,
                     "amount": item.amount,
                     "matched_receipt_id": item.matched_receipt_id,
+                    "expense_item": item,
                     "images": ensure_receipt_images(item),
                 }
             )
@@ -1574,6 +1668,24 @@ def build_usa_report_rows(
                 "date": bank_item.date,
                 "amount": bank_item.amount,
                 "matched_receipt_id": bank_item.matched_receipt_id,
+                "expense_item": ReceiptItem(
+                    item_id=bank_item.item_id,
+                    path=bank_item.path,
+                    filename=bank_item.filename,
+                    source_path=bank_item.source_path,
+                    source_page=bank_item.source_page,
+                    date=bank_item.date,
+                    place=bank_item.place,
+                    amount=bank_item.amount,
+                    currency="USD",
+                    purpose="",
+                    details=bank_item.place,
+                    category="transportation",
+                    payment_method="",
+                    receipt_label=bank_item.filename,
+                    document_type="payment_proof",
+                    status=bank_item.status,
+                ),
                 "images": [attachment_from_item(bank_item)],
             }
         )
@@ -1589,6 +1701,7 @@ def build_usa_report_rows(
             {
                 "id": str(proof.get("id") or uuid.uuid4().hex),
                 "item": None,
+                "expense_item": proof.get("expense_item"),
                 "date": str(proof.get("date") or ""),
                 "amount": str(proof.get("amount") or ""),
                 "receipt_images": [],
@@ -2232,7 +2345,11 @@ def export_usa(
     ws = wb["Expense report"]
     receipts_ws = wb["Receipt and Payment of expenses"]
     report_rows = build_usa_report_rows(items, bank_items)
-    sorted_items = [row["item"] for row in report_rows if row.get("item") is not None]
+    sorted_items = [
+        row.get("expense_item") or row.get("item")
+        for row in report_rows
+        if row.get("expense_item") is not None or row.get("item") is not None
+    ]
 
     ws["A3"] = f"Date / 填表日期： {date.today().strftime('%m/%d/%Y')}"
     ws["A4"] = "Employee: / 申请人："
@@ -2266,18 +2383,31 @@ def export_usa(
     for row in range(2, max(56, len(report_rows) + 3)):
         for col in "ABCDE":
             receipts_ws[f"{col}{row}"] = None
-    receipts_ws.column_dimensions["D"].width = 38
-    receipts_ws.column_dimensions["E"].width = 26
+    receipts_ws.column_dimensions["A"].width = 11
+    receipts_ws.column_dimensions["B"].width = 25.9
+    receipts_ws.column_dimensions["C"].width = 17
+    receipts_ws.column_dimensions["D"].width = USA_RECEIPT_COLUMN_WIDTH
+    receipts_ws.column_dimensions["E"].width = USA_PROOF_COLUMN_WIDTH
     for index, row_data in enumerate(report_rows, start=1):
         row = index + 1
         receipts_ws[f"A{row}"] = index
         receipts_ws[f"B{row}"] = excel_date_formula_or_value(str(row_data.get("date") or ""))
         receipts_ws[f"C{row}"] = safe_float(row_data.get("amount"))
-        receipts_ws.row_dimensions[row].height = 126
-        receipt_image = resize_attachment_contact_sheet(list(row_data.get("receipt_images") or []), 260, 150)
+        receipts_ws.row_dimensions[row].height = USA_SUPPORT_ROW_HEIGHT
+        receipt_image = resize_attachment_contact_sheet(
+            list(row_data.get("receipt_images") or []),
+            USA_RECEIPT_IMAGE_MAX_WIDTH,
+            USA_RECEIPT_IMAGE_MAX_HEIGHT,
+            allow_upscale=True,
+        )
         if receipt_image is not None:
             receipts_ws.add_image(receipt_image, f"D{row}")
-        proof_image = resize_attachment_contact_sheet(list(row_data.get("proof_images") or []), 180, 150)
+        proof_image = resize_attachment_contact_sheet(
+            list(row_data.get("proof_images") or []),
+            USA_PROOF_IMAGE_MAX_WIDTH,
+            USA_PROOF_IMAGE_MAX_HEIGHT,
+            allow_upscale=True,
+        )
         if proof_image is not None:
             receipts_ws.add_image(proof_image, f"E{row}")
 
@@ -3431,6 +3561,10 @@ class ReimbursementHelperApp:
             return "select_files"
         if self.form_version.get() == "Korea" and not self.exchange_rate_items:
             return "select_payment_proof"
+        if self.form_version.get() == "USA":
+            needs_ai = any(receipt_needs_ai(item, "USA") for item in self.items)
+            has_finished_rows = any(not receipt_needs_ai(item, "USA") for item in self.items)
+            return "generate_empty" if needs_ai and has_finished_rows else "generate_all"
         if any(receipt_needs_ai(item, self.form_version.get()) for item in self.items):
             return "generate_empty"
         return "generate_all"

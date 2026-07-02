@@ -96,6 +96,10 @@ export default function App() {
     if (items.length && readyForExport) return "generateExcel";
     if (!items.length) return "selectFiles";
     if (formVersion === "Korea" && !exchangeRateImages.length) return "selectExchangeRate";
+    if (formVersion === "USA") {
+      const hasFinishedRows = items.some((item) => !receiptNeedsAi(item, "USA"));
+      return hasFinishedRows && items.some((item) => receiptNeedsAi(item, "USA")) ? "generateEmpty" : "generateAll";
+    }
     if (items.some((item) => receiptNeedsAi(item, formVersion))) return "generateEmpty";
     return "generateAll";
   }, [busy, exchangeRateImages.length, formVersion, items, readyForExport]);
