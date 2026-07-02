@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import traceback
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -392,6 +393,8 @@ USA_RECEIPT_IMAGE_MAX_HEIGHT = 720
 USA_PROOF_IMAGE_MAX_WIDTH = 590
 USA_PROOF_IMAGE_MAX_HEIGHT = 720
 USA_SUPPORT_IMAGE_PADDING_PX = 12
+EXCEL_IMAGE_RENDER_SCALE = 2
+EXCEL_IMAGE_JPEG_QUALITY = 92
 
 KOREA_COVER_ROWS: Dict[str, Tuple[int, str]] = {
     "transportation": (4, "交通费"),
@@ -2014,6 +2017,69 @@ def prepare_attachment_image_file(attachment: Dict[str, Any]) -> Path:
     )
 
 
+def excel_ready_rgb(image: Any) -> Any:
+    if Image is None:
+        return image
+    if image.mode == "RGB":
+        return image
+    if image.mode == "RGBA":
+        background = Image.new("RGB", image.size, "white")
+        background.paste(image, mask=image.getchannel("A"))
+        return background
+    return image.convert("RGB")
+
+
+def save_excel_ready_image(image: Any, target_dir: Path, suffix: str = "contact") -> Path:
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / f"{uuid.uuid4().hex}_{suffix}.jpg"
+    output = excel_ready_rgb(image)
+    output.save(target, "JPEG", quality=EXCEL_IMAGE_JPEG_QUALITY, subsampling=0)
+    return target
+
+
+def attachment_image_for_export(attachment: Dict[str, Any]) -> Optional[Any]:
+    if Image is None:
+        return None
+    path = Path(str(attachment.get("path") or ""))
+    if not path.exists():
+        return None
+    try:
+        image = oriented_image_from_path(path, attachment.get("rotation_degrees", 0))
+        image = perspective_crop_image(image, attachment.get("crop_box"))
+        return excel_ready_rgb(image)
+    except Exception:
+        log_exception(f"Could not prepare image for Excel export: {path}")
+        return None
+
+
+def downscale_for_excel_processing(
+    image: Any,
+    max_width: int,
+    max_height: int,
+    allow_upscale: bool,
+    compact_whitespace: bool,
+    max_columns: int,
+) -> Any:
+    if Image is None:
+        return image
+    render_scale = EXCEL_IMAGE_RENDER_SCALE if allow_upscale else 1
+    resampling = getattr(Image, "Resampling", None)
+    resample = getattr(resampling, "LANCZOS", getattr(Image, "LANCZOS", Image.BICUBIC))
+    if compact_whitespace and max_columns == 1:
+        target_width = max(1, int(max_width * render_scale))
+        if image.width > target_width:
+            scale = target_width / max(1, image.width)
+            return image.resize((target_width, max(1, int(image.height * scale))), resample)
+        return image
+    target_width = max(1, int(max_width * render_scale))
+    target_height = max(1, int(max_height * render_scale))
+    if image.width <= target_width and image.height <= target_height:
+        return image
+    copy_image = image.copy()
+    copy_image.thumbnail((target_width, target_height), resample)
+    return copy_image
+
+
 def trim_white_image(image: Any, padding: int = 18, threshold: int = 245) -> Any:
     if Image is None:
         return image
@@ -2109,32 +2175,38 @@ def prepare_attachment_contact_sheet(
     target_dir.mkdir(parents=True, exist_ok=True)
     prepared_images = []
     for attachment in normalized:
-        path = Path(str(attachment.get("path") or ""))
-        if not path.exists():
+        output = attachment_image_for_export(attachment)
+        if output is None:
             continue
-        prepared = prepare_attachment_image_file(attachment)
-        with Image.open(prepared) as img:
-            output = img.convert("RGB").copy()
-            if trim_whitespace:
-                output = trim_white_image(output)
-            if compact_whitespace:
-                output = compact_vertical_whitespace(output)
-            prepared_images.append(output)
+        output = downscale_for_excel_processing(
+            output,
+            max_width,
+            max_height,
+            allow_upscale,
+            compact_whitespace,
+            max_columns,
+        )
+        if trim_whitespace:
+            output = trim_white_image(output)
+        if compact_whitespace:
+            output = compact_vertical_whitespace(output)
+        prepared_images.append(output)
     if not prepared_images:
         return None
     target_dir = WORK_DIR / "prepared_images"
     target_dir.mkdir(parents=True, exist_ok=True)
     if len(prepared_images) == 1 and not stretch_tiles:
         source = prepared_images[0]
-        scale = min(max_width / max(1, source.width), max_height / max(1, source.height))
+        render_scale = EXCEL_IMAGE_RENDER_SCALE if allow_upscale else 1
+        render_width = max(1, int(max_width * render_scale))
+        render_height = max(1, int(max_height * render_scale))
+        scale = min(render_width / max(1, source.width), render_height / max(1, source.height))
         if not allow_upscale:
             scale = min(scale, 1.0)
         resampling = getattr(Image, "Resampling", None)
         resample = getattr(resampling, "LANCZOS", getattr(Image, "LANCZOS", Image.BICUBIC))
         resized = source.resize((max(1, int(source.width * scale)), max(1, int(source.height * scale))), resample)
-        target = target_dir / f"{uuid.uuid4().hex}_contact.png"
-        resized.save(target, "PNG")
-        return target
+        return save_excel_ready_image(resized, target_dir)
     if max_columns == 1 and compact_whitespace and not stretch_tiles:
         render_scale = 2 if allow_upscale else 1
         render_width = max(1, int(max_width * render_scale))
@@ -2156,9 +2228,7 @@ def prepare_attachment_contact_sheet(
             y += tile.height
             if index < len(resized_tiles) - 1:
                 y += gutter
-        target = target_dir / f"{uuid.uuid4().hex}_contact.png"
-        sheet.save(target, "PNG")
-        return target
+        return save_excel_ready_image(sheet, target_dir)
     cols = max(1, min(max_columns, len(prepared_images)))
     rows = (len(prepared_images) + cols - 1) // cols
     render_scale = 2 if allow_upscale else 1
@@ -2186,9 +2256,7 @@ def prepare_attachment_contact_sheet(
         x = col * (cell_width + gutter) + max(0, (cell_width - tile.width) // 2)
         y = row * (cell_height + gutter) + max(0, (cell_height - tile.height) // 2)
         sheet.paste(tile, (x, y))
-    target = target_dir / f"{uuid.uuid4().hex}_contact.png"
-    sheet.save(target, "PNG")
-    return target
+    return save_excel_ready_image(sheet, target_dir)
 
 
 def resize_attachment_contact_sheet(
@@ -2551,6 +2619,8 @@ def export_usa(
     exchange_rate: float,
     bank_items: Optional[List[BankStatementItem]] = None,
 ) -> None:
+    setup_logging()
+    export_started = time.perf_counter()
     template = TEMPLATE_DIR / USA_TEMPLATE_NAME
     if not template.exists():
         raise FileNotFoundError(f"Missing USA template: {template}")
@@ -2606,6 +2676,8 @@ def export_usa(
     receipt_image_height = max(1, USA_RECEIPT_IMAGE_MAX_HEIGHT - image_padding * 2)
     proof_image_width = max(1, USA_PROOF_IMAGE_MAX_WIDTH - image_padding * 2)
     proof_image_height = max(1, USA_PROOF_IMAGE_MAX_HEIGHT - image_padding * 2)
+    images_started = time.perf_counter()
+    embedded_images = 0
     for index, row_data in enumerate(report_rows, start=1):
         row = index + 1
         receipts_ws[f"A{row}"] = index
@@ -2620,6 +2692,7 @@ def export_usa(
         )
         if receipt_image is not None:
             add_xl_image_with_padding(receipts_ws, receipt_image, f"D{row}", image_padding)
+            embedded_images += 1
         proof_image = resize_attachment_contact_sheet(
             list(row_data.get("proof_images") or []),
             proof_image_width,
@@ -2631,8 +2704,20 @@ def export_usa(
         )
         if proof_image is not None:
             add_xl_image_with_padding(receipts_ws, proof_image, f"E{row}", image_padding)
+            embedded_images += 1
 
+    save_started = time.perf_counter()
     wb.save(output_path)
+    export_finished = time.perf_counter()
+    LOGGER.info(
+        "USA export completed: rows=%s images=%s image_time=%.2fs save_time=%.2fs total=%.2fs output=%s",
+        len(report_rows),
+        embedded_images,
+        save_started - images_started,
+        export_finished - save_started,
+        export_finished - export_started,
+        output_path,
+    )
 
 
 def clone_sheet(
@@ -2755,6 +2840,8 @@ def export_korea(
     usd_to_krw_rate: float,
     exchange_rate_items: Optional[List[BankStatementItem]] = None,
 ) -> None:
+    setup_logging()
+    export_started = time.perf_counter()
     cover_template = TEMPLATE_DIR / KOREA_COVER_TEMPLATE_NAME
     details_template = TEMPLATE_DIR / KOREA_DETAILS_TEMPLATE_NAME
     if not cover_template.exists():
@@ -2866,6 +2953,8 @@ def export_korea(
         for col in "ABCDEFGH":
             receipts_ws[f"{col}{row}"] = None
     block_index = 0
+    images_started = time.perf_counter()
+    embedded_blocks = 0
     for block in receipt_blocks:
         mode = str(block.get("mode") or "half")
         if mode == "full":
@@ -2883,9 +2972,21 @@ def export_korea(
             full_page=mode == "full",
             stretch_tiles=bool(block.get("stretch_tiles", False)),
         )
+        embedded_blocks += 1
         block_index += KOREA_RECEIPT_SLOTS_PER_PAGE if mode == "full" else (2 if mode == "wide" else 1)
 
+    save_started = time.perf_counter()
     wb.save(output_path)
+    export_finished = time.perf_counter()
+    LOGGER.info(
+        "Korea export completed: rows=%s receipt_blocks=%s image_time=%.2fs save_time=%.2fs total=%.2fs output=%s",
+        len(sorted_items),
+        embedded_blocks,
+        save_started - images_started,
+        export_finished - save_started,
+        export_finished - export_started,
+        output_path,
+    )
 
 
 class ReimbursementHelperApp:
