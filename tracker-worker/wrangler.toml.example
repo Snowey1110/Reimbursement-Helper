@@ -1,0 +1,11 @@
+name = "reimbursement-helper-tracker"
+main = "src/index.ts"
+compatibility_date = "2026-07-02"
+
+[vars]
+ALLOWED_ORIGINS = "https://reimbursement.lixiaok.com,https://snowey1110.github.io"
+
+[[d1_databases]]
+binding = "REPORT_DB"
+database_name = "reimbursement_report_tracker"
+database_id = "replace-with-cloudflare-d1-database-id"

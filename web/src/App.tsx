@@ -27,6 +27,7 @@ import {
 import { exportKoreaWorkbook, exportUsaWorkbook } from "./excelExport";
 import { defaultCropPoints, fileToAttachments, orientedImageDataUrl, orientedImageSize, rotateCropPoints } from "./imageUtils";
 import { CATEGORY_LABELS, LANGUAGE_OPTIONS, normalizeLanguage, text, type AppLanguage } from "./i18n";
+import { loadTrackerConfig, loadTrackerStats, trackReportGenerated, type ReportTrackerConfig, type ReportTrackerStats } from "./tracker";
 import type { Category, CropPoint, Currency, DocumentType, ExchangeRates, ImageAttachment, PaymentProof, ReceiptItem, SelectedTile } from "./types";
 import {
   blankReceipt,
@@ -101,6 +102,8 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
   const [readyForExport, setReadyForExport] = useState(false);
+  const [trackerConfig, setTrackerConfig] = useState<ReportTrackerConfig | null>(null);
+  const [reportStats, setReportStats] = useState<ReportTrackerStats | null>(null);
   const receiptInputRef = useRef<HTMLInputElement>(null);
   const proofInputRef = useRef<HTMLInputElement>(null);
   const exchangeRateInputRef = useRef<HTMLInputElement>(null);
@@ -153,6 +156,20 @@ export default function App() {
     const readyMessages = LANGUAGE_OPTIONS.map((option) => text(option.value, "ready"));
     setStatus((current) => (readyMessages.includes(current) ? t("ready") : current));
   }, [language]);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadTrackerConfig().then(async (config) => {
+      if (cancelled) return;
+      setTrackerConfig(config);
+      if (!config) return;
+      const stats = await loadTrackerStats(config);
+      if (!cancelled) setReportStats(stats);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     setItems((current) =>
@@ -467,6 +484,11 @@ export default function App() {
       } else {
         await exportKoreaWorkbook(items, rates, exchangeRateImages);
       }
+      if (trackerConfig) {
+        void trackReportGenerated(trackerConfig, formVersion, language).then((stats) => {
+          if (stats) setReportStats(stats);
+        });
+      }
       setStatus(t("workbookGenerated"));
     } catch (error) {
       setStatus(error instanceof Error ? error.message : t("workbookFailed"));
@@ -725,6 +747,7 @@ export default function App() {
         <span>{status}</span>
         <progress value={progress} max={100} />
         {progress === 100 && <CheckCircle2 size={16} />}
+        {reportStats && <span className="report-stats">{t("reportsGenerated", { count: reportStats.total })}</span>}
         <div className="template-links" aria-label={t("templates")}>
           <Download size={16} />
           <span>{t("templates")}</span>

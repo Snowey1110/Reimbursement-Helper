@@ -137,6 +137,7 @@ export const UI_TEXT = {
     removedReceipts: "Removed {count} receipt row(s).",
     workbookGenerated: "Workbook generated.",
     workbookFailed: "Workbook generation failed.",
+    reportsGenerated: "Reports generated: {count}",
     ready: "Ready"
   },
   zh: {
@@ -215,6 +216,7 @@ export const UI_TEXT = {
     removedReceipts: "已删除 {count} 条发票记录。",
     workbookGenerated: "工作簿已生成。",
     workbookFailed: "工作簿生成失败。",
+    reportsGenerated: "已生成报表：{count}",
     ready: "就绪"
   },
   ko: {
@@ -293,6 +295,7 @@ export const UI_TEXT = {
     removedReceipts: "영수증 행 {count}개를 삭제했습니다.",
     workbookGenerated: "통합 문서를 생성했습니다.",
     workbookFailed: "통합 문서 생성에 실패했습니다.",
+    reportsGenerated: "생성된 보고서: {count}",
     ready: "준비됨"
   }
 } as const;

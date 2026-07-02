@@ -410,6 +410,11 @@ label {
   accent-color: #2563eb;
 }
 
+.report-stats {
+  color: #17202a;
+  font-weight: 600;
+}
+
 .template-links {
   margin-left: auto;
   color: #17202a;

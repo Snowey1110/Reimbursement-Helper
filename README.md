@@ -61,6 +61,7 @@ The app supports:
 - saved working session with restore prompt on reopen
 - language selector for English, Chinese, and Korean app labels
 - report ordering by expense category first, then date, with the same order on the details sheet and receipt-photo sheet
+- optional web report counter using a free Cloudflare Worker + D1 backend
 
 ## Privacy Defaults
 
@@ -120,6 +121,14 @@ pnpm build
 ```
 
 GitHub Pages deployment is handled by `.github/workflows/deploy-web.yml`. On `main` or `master`, changes under `web/` are tested, built, and published from `web/dist`.
+
+## Web Report Counter
+
+The web app can optionally count successful Excel exports. The tracker is off by default in `web/public/tracker-config.json`, so the app works normally without a backend.
+
+The optional backend lives in `tracker-worker/` and is designed for Cloudflare's free tier. It records only form version, UI language, date, and count. It never receives receipt images, workbook files, amounts, vendors, API keys, applicant names, or project numbers.
+
+To activate it, deploy the Cloudflare Worker in `tracker-worker/`, then update `web/public/tracker-config.json` with the deployed Worker URL and push the change.
 
 ## GitHub Pages Setup
 

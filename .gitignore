@@ -11,6 +11,8 @@ web/dist/
 web/.vite/
 web/.env
 web/.env.*
+tracker-worker/node_modules/
+tracker-worker/wrangler.toml
 
 # Local/private data. These files are intentionally not shared on GitHub.
 .env
