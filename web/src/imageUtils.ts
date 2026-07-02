@@ -322,6 +322,66 @@ function trimWhiteCanvas(source: HTMLCanvasElement, padding = 16): HTMLCanvasEle
   return output;
 }
 
+function compactVerticalWhitespaceCanvas(source: HTMLCanvasElement, padding = 10, gap = 12): HTMLCanvasElement {
+  const context = source.getContext("2d");
+  if (!context) return source;
+  const imageData = context.getImageData(0, 0, source.width, source.height);
+  const minDarkPixels = Math.max(4, Math.floor(source.width * 0.0025));
+  const activeRows: number[] = [];
+  for (let y = 0; y < source.height; y += 1) {
+    let darkCount = 0;
+    for (let x = 0; x < source.width; x += 1) {
+      const offset = (y * source.width + x) * 4;
+      if (imageData.data[offset + 3] > 8 && Math.min(imageData.data[offset], imageData.data[offset + 1], imageData.data[offset + 2]) < 245) {
+        darkCount += 1;
+        if (darkCount >= minDarkPixels) {
+          activeRows.push(y);
+          break;
+        }
+      }
+    }
+  }
+  if (!activeRows.length) return source;
+  const bands: Array<[number, number]> = [];
+  const mergeGap = Math.max(12, Math.floor(source.height * 0.012));
+  let start = activeRows[0];
+  let previous = activeRows[0];
+  for (const y of activeRows.slice(1)) {
+    if (y - previous > mergeGap) {
+      bands.push([Math.max(0, start - padding), Math.min(source.height, previous + padding + 1)]);
+      start = y;
+    }
+    previous = y;
+  }
+  bands.push([Math.max(0, start - padding), Math.min(source.height, previous + padding + 1)]);
+  const merged: Array<[number, number]> = [];
+  for (const [top, bottom] of bands) {
+    if (merged.length && top - merged[merged.length - 1][1] <= gap) {
+      merged[merged.length - 1][1] = bottom;
+    } else {
+      merged.push([top, bottom]);
+    }
+  }
+  const compactHeight = merged.reduce((total, [top, bottom]) => total + bottom - top, 0) + gap * Math.max(0, merged.length - 1);
+  if (compactHeight >= source.height * 0.92) return source;
+  const output = document.createElement("canvas");
+  output.width = source.width;
+  output.height = Math.max(1, compactHeight);
+  const outputContext = output.getContext("2d");
+  if (!outputContext) return source;
+  outputContext.fillStyle = "#ffffff";
+  outputContext.fillRect(0, 0, output.width, output.height);
+  let yOut = 0;
+  for (let index = 0; index < merged.length; index += 1) {
+    const [top, bottom] = merged[index];
+    const height = bottom - top;
+    outputContext.drawImage(source, 0, top, source.width, height, 0, yOut, source.width, height);
+    yOut += height;
+    if (index < merged.length - 1) yOut += gap;
+  }
+  return output;
+}
+
 function perspectiveCropCanvas(source: HTMLCanvasElement, points: CropPoint[], maxWidth: number, maxHeight: number, allowUpscale = false): HTMLCanvasElement {
   const naturalSize = cropOutputSize(points);
   const scale = Math.min(maxWidth / naturalSize.width, maxHeight / naturalSize.height, allowUpscale ? Number.POSITIVE_INFINITY : 1);
@@ -413,7 +473,8 @@ export async function preparedImageDataUrl(
   maxWidth = 900,
   maxHeight = 900,
   allowUpscale = false,
-  trimWhitespace = false
+  trimWhitespace = false,
+  compactWhitespace = false
 ): Promise<PreparedImageData> {
   const image = await loadImage(attachment.dataUrl);
   const rotation = normalizedRotation(attachment.rotationDegrees);
@@ -443,7 +504,8 @@ export async function preparedImageDataUrl(
   const points = normalizedCropPoints(attachment.cropPoints, working.width, working.height);
   const prepared = points ? perspectiveCropCanvas(working, points, maxWidth, maxHeight, allowUpscale) : working;
   const trimmed = trimWhitespace ? trimWhiteCanvas(prepared) : prepared;
-  const output = points ? trimmed : fitCanvasToMax(trimmed, maxWidth, maxHeight, allowUpscale);
+  const compacted = compactWhitespace ? compactVerticalWhitespaceCanvas(trimmed) : trimmed;
+  const output = points ? compacted : fitCanvasToMax(compacted, maxWidth, maxHeight, allowUpscale);
   return { dataUrl: canvasToDataUrl(output), width: output.width, height: output.height };
 }
 
@@ -492,13 +554,15 @@ export async function makeContactSheet(
   maxHeight: number,
   allowUpscale = false,
   stretchTiles = false,
-  trimWhitespace = false
+  trimWhitespace = false,
+  compactWhitespace = false,
+  maxColumns = 2
 ): Promise<PreparedImageData | undefined> {
   if (!attachments.length) return undefined;
-  if (attachments.length === 1 && !stretchTiles && !allowUpscale) {
-    return preparedImageDataUrl(attachments[0], maxWidth, maxHeight, allowUpscale, trimWhitespace);
+  if (attachments.length === 1 && !stretchTiles) {
+    return preparedImageDataUrl(attachments[0], maxWidth, maxHeight, allowUpscale, trimWhitespace, compactWhitespace);
   }
-  const cols = Math.min(2, attachments.length);
+  const cols = Math.max(1, Math.min(maxColumns, attachments.length));
   const rows = Math.ceil(attachments.length / cols);
   const renderScale = 2;
   const renderWidth = Math.round(maxWidth * renderScale);
@@ -507,8 +571,39 @@ export async function makeContactSheet(
   const cellWidth = Math.floor((renderWidth - gutter * (cols - 1)) / cols);
   const cellHeight = Math.floor((renderHeight - gutter * (rows - 1)) / rows);
   const prepared = await Promise.all(
-    attachments.map((attachment) => preparedImageDataUrl(attachment, cellWidth, cellHeight, allowUpscale, trimWhitespace))
+    attachments.map((attachment) => preparedImageDataUrl(attachment, cellWidth, cellHeight, allowUpscale, trimWhitespace, compactWhitespace))
   );
+  if (maxColumns === 1 && compactWhitespace && !stretchTiles) {
+    const scaledCanvases: HTMLCanvasElement[] = [];
+    for (const image of prepared) {
+      const source = await loadImage(image.dataUrl);
+      const scale = allowUpscale ? renderWidth / source.naturalWidth : Math.min(renderWidth / source.naturalWidth, 1);
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(source.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(source.naturalHeight * scale));
+      const canvasContext = canvas.getContext("2d");
+      if (!canvasContext) throw new Error("Could not create contact sheet tile.");
+      canvasContext.fillStyle = "#ffffff";
+      canvasContext.fillRect(0, 0, canvas.width, canvas.height);
+      canvasContext.drawImage(source, 0, 0, canvas.width, canvas.height);
+      scaledCanvases.push(canvas);
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = renderWidth;
+    canvas.height = Math.max(1, scaledCanvases.reduce((total, tile) => total + tile.height, 0) + gutter * Math.max(0, scaledCanvases.length - 1));
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Could not create contact sheet.");
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    let y = 0;
+    for (let index = 0; index < scaledCanvases.length; index += 1) {
+      const tile = scaledCanvases[index];
+      context.drawImage(tile, (renderWidth - tile.width) / 2, y);
+      y += tile.height;
+      if (index < scaledCanvases.length - 1) y += gutter;
+    }
+    return { dataUrl: canvasToDataUrl(canvas), width: canvas.width, height: canvas.height, displayWidth: maxWidth, displayHeight: maxHeight };
+  }
   const canvas = document.createElement("canvas");
   canvas.width = renderWidth;
   canvas.height = renderHeight;

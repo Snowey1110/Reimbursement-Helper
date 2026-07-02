@@ -239,12 +239,21 @@ async function addImageToCell(
   allowUpscale = false,
   stretchToFit = false,
   stretchTiles = false,
-  trimWhitespace = false
+  trimWhitespace = false,
+  compactWhitespace = false,
+  maxColumns = 2
 ): Promise<void> {
   if (!attachment) return;
   const prepared = Array.isArray(attachment)
-    ? await makeContactSheet(attachment, maxWidth, maxHeight, allowUpscale, stretchTiles, trimWhitespace)
-    : await preparedImageDataUrl(attachment, stretchToFit ? maxWidth * 2 : maxWidth, stretchToFit ? maxHeight * 2 : maxHeight, allowUpscale, trimWhitespace);
+    ? await makeContactSheet(attachment, maxWidth, maxHeight, allowUpscale, stretchTiles, trimWhitespace, compactWhitespace, maxColumns)
+    : await preparedImageDataUrl(
+        attachment,
+        stretchToFit ? maxWidth * 2 : maxWidth,
+        stretchToFit ? maxHeight * 2 : maxHeight,
+        allowUpscale,
+        trimWhitespace,
+        compactWhitespace
+      );
   if (!prepared) return;
   const imageId = workbook.addImage({
     base64: dataUrlBase64(prepared.dataUrl),
@@ -495,7 +504,7 @@ export async function exportUsaWorkbook(items: ReceiptItem[], proofs: PaymentPro
     if (item) {
       await addImageToCell(workbook, receipts, rowData.receiptImages, `D${row}`, USA_RECEIPT_IMAGE_MAX_WIDTH, USA_RECEIPT_IMAGE_MAX_HEIGHT, true);
     }
-    await addImageToCell(workbook, receipts, rowData.proofImages, `E${row}`, USA_PROOF_IMAGE_MAX_WIDTH, USA_PROOF_IMAGE_MAX_HEIGHT, true, false, false, true);
+    await addImageToCell(workbook, receipts, rowData.proofImages, `E${row}`, USA_PROOF_IMAGE_MAX_WIDTH, USA_PROOF_IMAGE_MAX_HEIGHT, true, false, false, true, true, 1);
   }
   const buffer = await workbook.xlsx.writeBuffer();
   downloadBlob(new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `reimbursement_usa_${dateStamp()}.xlsx`);

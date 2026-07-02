@@ -2030,6 +2030,54 @@ def trim_white_image(image: Any, padding: int = 18, threshold: int = 245) -> Any
     return image.crop((left, top, right + 1, bottom + 1))
 
 
+def compact_vertical_whitespace(image: Any, padding: int = 10, gap: int = 12) -> Any:
+    if Image is None:
+        return image
+    rgb = image.convert("RGB")
+    pixels = rgb.load()
+    min_dark_pixels = max(4, int(rgb.width * 0.0025))
+    active_rows: List[int] = []
+    for y in range(rgb.height):
+        dark_count = 0
+        for x in range(rgb.width):
+            r, g, b = pixels[x, y]
+            if min(r, g, b) < 245:
+                dark_count += 1
+                if dark_count >= min_dark_pixels:
+                    active_rows.append(y)
+                    break
+    if not active_rows:
+        return image
+    bands: List[Tuple[int, int]] = []
+    start = active_rows[0]
+    previous = active_rows[0]
+    merge_gap = max(12, int(rgb.height * 0.012))
+    for y in active_rows[1:]:
+        if y - previous > merge_gap:
+            bands.append((max(0, start - padding), min(rgb.height, previous + padding + 1)))
+            start = y
+        previous = y
+    bands.append((max(0, start - padding), min(rgb.height, previous + padding + 1)))
+    merged: List[Tuple[int, int]] = []
+    for top, bottom in bands:
+        if merged and top - merged[-1][1] <= gap:
+            merged[-1] = (merged[-1][0], bottom)
+        else:
+            merged.append((top, bottom))
+    new_height = sum(bottom - top for top, bottom in merged) + gap * max(0, len(merged) - 1)
+    if new_height >= int(rgb.height * 0.92):
+        return image
+    compacted = Image.new("RGB", (rgb.width, max(1, new_height)), "white")
+    y_out = 0
+    for index, (top, bottom) in enumerate(merged):
+        segment = rgb.crop((0, top, rgb.width, bottom))
+        compacted.paste(segment, (0, y_out))
+        y_out += segment.height
+        if index < len(merged) - 1:
+            y_out += gap
+    return compacted
+
+
 def prepare_attachment_contact_sheet(
     attachments: List[Dict[str, Any]],
     max_width: int,
@@ -2037,6 +2085,8 @@ def prepare_attachment_contact_sheet(
     allow_upscale: bool = False,
     stretch_tiles: bool = False,
     trim_whitespace: bool = False,
+    compact_whitespace: bool = False,
+    max_columns: int = 2,
 ) -> Optional[Path]:
     if Image is None:
         return None
@@ -2057,10 +2107,49 @@ def prepare_attachment_contact_sheet(
             output = img.convert("RGB").copy()
             if trim_whitespace:
                 output = trim_white_image(output)
+            if compact_whitespace:
+                output = compact_vertical_whitespace(output)
             prepared_images.append(output)
     if not prepared_images:
         return None
-    cols = min(2, len(prepared_images))
+    target_dir = WORK_DIR / "prepared_images"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    if len(prepared_images) == 1 and not stretch_tiles:
+        source = prepared_images[0]
+        scale = min(max_width / max(1, source.width), max_height / max(1, source.height))
+        if not allow_upscale:
+            scale = min(scale, 1.0)
+        resampling = getattr(Image, "Resampling", None)
+        resample = getattr(resampling, "LANCZOS", getattr(Image, "LANCZOS", Image.BICUBIC))
+        resized = source.resize((max(1, int(source.width * scale)), max(1, int(source.height * scale))), resample)
+        target = target_dir / f"{uuid.uuid4().hex}_contact.png"
+        resized.save(target, "PNG")
+        return target
+    if max_columns == 1 and compact_whitespace and not stretch_tiles:
+        render_scale = 2 if allow_upscale else 1
+        render_width = max(1, int(max_width * render_scale))
+        gutter = 8 * render_scale
+        resampling = getattr(Image, "Resampling", None)
+        resample = getattr(resampling, "LANCZOS", getattr(Image, "LANCZOS", Image.BICUBIC))
+        resized_tiles = []
+        for source in prepared_images:
+            scale = render_width / max(1, source.width)
+            if not allow_upscale:
+                scale = min(scale, 1.0)
+            resized_tiles.append(source.resize((max(1, int(source.width * scale)), max(1, int(source.height * scale))), resample))
+        render_height = sum(tile.height for tile in resized_tiles) + gutter * max(0, len(resized_tiles) - 1)
+        sheet = Image.new("RGB", (render_width, max(1, render_height)), "white")
+        y = 0
+        for index, tile in enumerate(resized_tiles):
+            x = max(0, (render_width - tile.width) // 2)
+            sheet.paste(tile, (x, y))
+            y += tile.height
+            if index < len(resized_tiles) - 1:
+                y += gutter
+        target = target_dir / f"{uuid.uuid4().hex}_contact.png"
+        sheet.save(target, "PNG")
+        return target
+    cols = max(1, min(max_columns, len(prepared_images)))
     rows = (len(prepared_images) + cols - 1) // cols
     render_scale = 2 if allow_upscale else 1
     render_width = max(1, int(max_width * render_scale))
@@ -2099,8 +2188,19 @@ def resize_attachment_contact_sheet(
     allow_upscale: bool = False,
     stretch_tiles: bool = False,
     trim_whitespace: bool = False,
+    compact_whitespace: bool = False,
+    max_columns: int = 2,
 ) -> Optional[Any]:
-    contact_path = prepare_attachment_contact_sheet(attachments, max_width, max_height, allow_upscale, stretch_tiles, trim_whitespace)
+    contact_path = prepare_attachment_contact_sheet(
+        attachments,
+        max_width,
+        max_height,
+        allow_upscale,
+        stretch_tiles,
+        trim_whitespace,
+        compact_whitespace,
+        max_columns,
+    )
     if contact_path is None:
         return None
     img = XLImage(str(contact_path))
@@ -2476,6 +2576,8 @@ def export_usa(
             USA_PROOF_IMAGE_MAX_HEIGHT,
             allow_upscale=True,
             trim_whitespace=True,
+            compact_whitespace=True,
+            max_columns=1,
         )
         if proof_image is not None:
             receipts_ws.add_image(proof_image, f"E{row}")
@@ -5595,57 +5697,82 @@ class ReimbursementHelperApp:
             return
         output_path = Path(output)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            if self.form_version.get() == "USA":
-                unknown_items = [
-                    item
-                    for item in self.items
-                    if normalize_document_type(item.document_type, "unknown") == "unknown"
-                ]
-                if unknown_items:
-                    files = ", ".join(item.filename for item in unknown_items[:5])
-                    if len(unknown_items) > 5:
-                        files += f", +{len(unknown_items) - 5}"
-                    self.status_text.set(self.tr("unknown_document_type", count=len(unknown_items), files=files))
-                    self.refresh_tree()
-                    return
-                self.merge_same_usa_receipts()
-                match_usa_payment_proof_items(self.items)
-                exchange_rate = safe_float(self.exchange_rate.get()) or safe_float(DEFAULT_USD_TO_RMB_RATE) or 6.8
-                export_usa(self.items, output_path, exchange_rate, self.bank_items)
-            else:
-                krw_rate = safe_float(self.krw_to_rmb_rate.get()) or safe_float(DEFAULT_KRW_TO_RMB_RATE) or 0.0046
-                usd_rate = safe_float(self.exchange_rate.get()) or safe_float(DEFAULT_USD_TO_RMB_RATE) or 6.8
-                usd_krw_rate = safe_float(self.usd_to_krw_rate.get()) or safe_float(DEFAULT_USD_TO_KRW_RATE) or 1548.86
-                export_korea(self.items, output_path, krw_rate, usd_rate, usd_krw_rate, self.exchange_rate_items)
-        except Exception as exc:
-            log_path = log_exception("Excel export failed")
-            if messagebox:
-                messagebox.showerror(
-                    "Generate Excel",
-                    f"Could not generate workbook:\n{exc}\n\nLogged to:\n{log_path}",
-                )
-            self.status_text.set("Export failed.")
-            return
-        self.last_generated_output_path = output_path
-        self.move_all_loaded_to_processed()
-        self.save_session()
-        self.status_text.set(f"Saved: {output_path}")
-        if messagebox:
-            choice = messagebox.askyesnocancel(
-                "Generate Excel",
-                "Workbook saved.\n\n"
-                "Yes: open the Excel file\n"
-                "No: show it in the folder\n"
-                "Cancel: stay here",
-            )
+        form_version = self.form_version.get()
+        if form_version == "USA":
+            unknown_items = [
+                item
+                for item in self.items
+                if normalize_document_type(item.document_type, "unknown") == "unknown"
+            ]
+            if unknown_items:
+                files = ", ".join(item.filename for item in unknown_items[:5])
+                if len(unknown_items) > 5:
+                    files += f", +{len(unknown_items) - 5}"
+                self.status_text.set(self.tr("unknown_document_type", count=len(unknown_items), files=files))
+                self.refresh_tree()
+                return
+            self.merge_same_usa_receipts()
+            match_usa_payment_proof_items(self.items)
+            self.refresh_tree()
+        items_snapshot = copy.deepcopy(self.items)
+        bank_snapshot = copy.deepcopy(self.bank_items)
+        exchange_snapshot = copy.deepcopy(self.exchange_rate_items)
+        exchange_rate = safe_float(self.exchange_rate.get()) or safe_float(DEFAULT_USD_TO_RMB_RATE) or 6.8
+        krw_rate = safe_float(self.krw_to_rmb_rate.get()) or safe_float(DEFAULT_KRW_TO_RMB_RATE) or 0.0046
+        usd_krw_rate = safe_float(self.usd_to_krw_rate.get()) or safe_float(DEFAULT_USD_TO_KRW_RATE) or 1548.86
+        self.set_busy(True)
+        self.set_progress(0, 1, "Generating Excel")
+        self.status_text.set("Generating Excel workbook...")
+
+        def worker() -> None:
             try:
-                if choice is True:
-                    open_path(output_path)
-                elif choice is False:
-                    reveal_in_file_explorer(output_path)
-            except Exception:
-                log_exception("Could not open generated workbook or folder")
+                if form_version == "USA":
+                    export_usa(items_snapshot, output_path, exchange_rate, bank_snapshot)
+                else:
+                    export_korea(items_snapshot, output_path, krw_rate, exchange_rate, usd_krw_rate, exchange_snapshot)
+            except Exception as exc:
+                log_path = log_exception("Excel export failed")
+                error_message = str(exc)
+
+                def fail() -> None:
+                    self.set_busy(False)
+                    self.set_progress(0, 1, "")
+                    if messagebox:
+                        messagebox.showerror(
+                            "Generate Excel",
+                            f"Could not generate workbook:\n{error_message}\n\nLogged to:\n{log_path}",
+                        )
+                    self.status_text.set("Export failed.")
+
+                self.root.after(0, fail)
+                return
+
+            def done() -> None:
+                self.set_busy(False)
+                self.set_progress(1, 1, "1/1")
+                self.last_generated_output_path = output_path
+                self.move_all_loaded_to_processed()
+                self.save_session()
+                self.status_text.set(f"Saved: {output_path}")
+                if messagebox:
+                    choice = messagebox.askyesnocancel(
+                        "Generate Excel",
+                        "Workbook saved.\n\n"
+                        "Yes: open the Excel file\n"
+                        "No: show it in the folder\n"
+                        "Cancel: stay here",
+                    )
+                    try:
+                        if choice is True:
+                            open_path(output_path)
+                        elif choice is False:
+                            reveal_in_file_explorer(output_path)
+                    except Exception:
+                        log_exception("Could not open generated workbook or folder")
+
+            self.root.after(0, done)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def open_output_folder(self) -> None:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
