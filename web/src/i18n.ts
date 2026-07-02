@@ -153,7 +153,7 @@ export const UI_TEXT = {
     selectPaymentProof: "选择付款凭证",
     selectExchangeRate: "选择汇率图片",
     generateDetails: "生成明细",
-    generateEmpty: "生成空白项",
+    generateEmpty: "空白填空",
     generateAll: "全部生成",
     generateExcel: "生成 Excel",
     insertedReceipts: "已插入发票和明细",

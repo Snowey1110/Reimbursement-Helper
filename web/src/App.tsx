@@ -15,7 +15,6 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import { applyExtraction, extractKoreaExchangeRatesWithOpenAI, extractReceiptWithOpenAI } from "./ai";
 import {
-  ADVANCED_MODEL,
   DEFAULT_KRW_TO_RMB,
   DEFAULT_MODEL,
   DEFAULT_USD_TO_KRW,
@@ -47,6 +46,26 @@ const STORAGE_KEY = "reimbursement-helper-web-api-key";
 type SuggestedAction = "selectFiles" | "selectExchangeRate" | "generateEmpty" | "generateAll" | "generateExcel";
 type FormVersion = "USA" | "Korea";
 
+function normalizeFormVersion(value: unknown): FormVersion | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "korea" || normalized === "kr") return "Korea";
+  if (normalized === "usa" || normalized === "us") return "USA";
+  return undefined;
+}
+
+function readUrlSettings(): { formVersion?: FormVersion; language?: AppLanguage } {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    return {
+      formVersion: normalizeFormVersion(params.get("form") ?? params.get("version")),
+      language: params.has("lang") || params.has("language") ? normalizeLanguage(params.get("lang") ?? params.get("language")) : undefined
+    };
+  } catch {
+    return {};
+  }
+}
+
 function readStoredFormVersion(): FormVersion {
   try {
     const stored = localStorage.getItem(FORM_VERSION_STORAGE_KEY);
@@ -65,9 +84,10 @@ function readStoredLanguage(): AppLanguage {
 }
 
 export default function App() {
-  const initialLanguage = readStoredLanguage();
+  const initialUrlSettings = readUrlSettings();
+  const initialLanguage = initialUrlSettings.language ?? readStoredLanguage();
   const [language, setLanguage] = useState<AppLanguage>(initialLanguage);
-  const [formVersion, setFormVersion] = useState<FormVersion>(() => readStoredFormVersion());
+  const [formVersion, setFormVersion] = useState<FormVersion>(() => initialUrlSettings.formVersion ?? readStoredFormVersion());
   const [items, setItems] = useState<ReceiptItem[]>([]);
   const [proofs, setProofs] = useState<PaymentProof[]>([]);
   const [exchangeRateImages, setExchangeRateImages] = useState<ImageAttachment[]>([]);
@@ -76,7 +96,6 @@ export default function App() {
   const [apiKey, setApiKey] = useState(() => sessionStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(STORAGE_KEY) ?? "");
   const [rememberKey, setRememberKey] = useState(() => Boolean(localStorage.getItem(STORAGE_KEY)));
   const [showApiKey, setShowApiKey] = useState(false);
-  const [model, setModel] = useState(DEFAULT_MODEL);
   const [rates, setRates] = useState<ExchangeRates>({ usdToRmb: DEFAULT_USD_TO_RMB, usdToKrw: DEFAULT_USD_TO_KRW, krwToRmb: DEFAULT_KRW_TO_RMB });
   const [status, setStatus] = useState(() => text(initialLanguage, "ready"));
   const [busy, setBusy] = useState(false);
@@ -225,7 +244,7 @@ export default function App() {
         setStatus(t("selectedExchangeNoKey", { count: attachments.length }));
       } else {
         setStatus(t("readingExchange"));
-        const extractedRates = await extractKoreaExchangeRatesWithOpenAI(apiKey.trim(), model.trim() || DEFAULT_MODEL, attachments, rates.usdToRmb);
+        const extractedRates = await extractKoreaExchangeRatesWithOpenAI(apiKey.trim(), DEFAULT_MODEL, attachments, rates.usdToRmb);
         const updated: string[] = [];
         const patch: Partial<ExchangeRates> = {};
         if (extractedRates.usdToKrw !== undefined) {
@@ -282,7 +301,7 @@ export default function App() {
       for (const item of targets) {
         setStatus(t("readingReceipt", { filename: item.filename }));
         const currentItem = workingItems.find((candidate) => candidate.id === item.id) ?? item;
-        const extraction = await extractReceiptWithOpenAI(apiKey.trim(), model.trim() || DEFAULT_MODEL, formVersion, currentItem);
+        const extraction = await extractReceiptWithOpenAI(apiKey.trim(), DEFAULT_MODEL, formVersion, currentItem);
         workingItems = workingItems.map((candidate) =>
           candidate.id === currentItem.id ? updateAmounts(applyExtraction(candidate, extraction, formVersion), rates, "amount") : candidate
         );
@@ -297,7 +316,7 @@ export default function App() {
         for (const proof of workingProofs) {
           setStatus(t("readingProof", { filename: proof.filename }));
           const tempReceipt = blankReceipt("USA", proof.image);
-          const extraction = await extractReceiptWithOpenAI(apiKey.trim(), model.trim() || DEFAULT_MODEL, "USA", tempReceipt);
+          const extraction = await extractReceiptWithOpenAI(apiKey.trim(), DEFAULT_MODEL, "USA", tempReceipt);
           workingProofs = workingProofs.map((candidate) =>
             candidate.id === proof.id
               ? {
@@ -513,14 +532,6 @@ export default function App() {
           <label className="check-row">
             <input type="checkbox" checked={rememberKey} onChange={(event) => setRememberKey(event.target.checked)} />
             {t("rememberKey")}
-          </label>
-          <label>
-            {t("model")}
-            <input value={model} onChange={(event) => setModel(event.target.value)} list="model-options" />
-            <datalist id="model-options">
-              <option value={DEFAULT_MODEL} />
-              <option value={ADVANCED_MODEL} />
-            </datalist>
           </label>
           <label>
             {t("language")}

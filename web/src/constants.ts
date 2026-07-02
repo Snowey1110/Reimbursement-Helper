@@ -3,8 +3,7 @@ import type { Category } from "./types";
 export const DEFAULT_USD_TO_RMB = 6.8175;
 export const DEFAULT_USD_TO_KRW = 1548.86;
 export const DEFAULT_KRW_TO_RMB = 0.004433;
-export const DEFAULT_MODEL = "gpt-5.4-mini";
-export const ADVANCED_MODEL = "gpt-5.5";
+export const DEFAULT_MODEL = "gpt-4o-mini";
 
 export const USA_TEMPLATE_URL = "./templates/usa_expense_report_template.xlsx";
 export const KOREA_TEMPLATE_URL = "./templates/korea_reimbursement_template.xlsx";

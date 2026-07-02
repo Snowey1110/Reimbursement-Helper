@@ -41,6 +41,7 @@ describe("Reimbursement Helper web app", () => {
     cleanup();
     localStorage.clear();
     sessionStorage.clear();
+    window.history.pushState({}, "", "/");
   });
 
   it("starts with the last selected form version", () => {
@@ -49,6 +50,24 @@ describe("Reimbursement Helper web app", () => {
     render(<App />);
 
     expect(screen.getByLabelText("Form")).toHaveValue("Korea");
+  });
+
+  it("uses URL form and language settings for shareable links", async () => {
+    localStorage.setItem(FORM_VERSION_STORAGE_KEY, "USA");
+    localStorage.setItem(LANGUAGE_STORAGE_KEY, "en");
+    window.history.pushState({}, "", "/?form=Korea&lang=zh");
+
+    render(<App />);
+
+    expect((document.querySelector(".toolbar-control select") as HTMLSelectElement).value).toBe("Korea");
+    await waitFor(() => expect(localStorage.getItem(LANGUAGE_STORAGE_KEY)).toBe("zh"));
+  });
+
+  it("does not expose the model selector in the web UI", () => {
+    render(<App />);
+
+    expect(screen.queryByLabelText("Model")).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue("gpt-5.4-mini")).not.toBeInTheDocument();
   });
 
   it("uses one USA receipt upload button and Generate Empty", () => {

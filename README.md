@@ -11,6 +11,17 @@ Open the web app here:
 
 https://snowey1110.github.io/Reimbursement-Helper/
 
+Direct web links for coworkers:
+
+| Use case | Current link | Future custom-domain link |
+| --- | --- | --- |
+| USA, English | https://snowey1110.github.io/Reimbursement-Helper/?form=USA&lang=en | https://lixiaok.com/Reimbursement-Helper/?form=USA&lang=en |
+| USA, Chinese | https://snowey1110.github.io/Reimbursement-Helper/?form=USA&lang=zh | https://lixiaok.com/Reimbursement-Helper/?form=USA&lang=zh |
+| USA, Korean | https://snowey1110.github.io/Reimbursement-Helper/?form=USA&lang=ko | https://lixiaok.com/Reimbursement-Helper/?form=USA&lang=ko |
+| Korea, English | https://snowey1110.github.io/Reimbursement-Helper/?form=Korea&lang=en | https://lixiaok.com/Reimbursement-Helper/?form=Korea&lang=en |
+| Korea, Chinese | https://snowey1110.github.io/Reimbursement-Helper/?form=Korea&lang=zh | https://lixiaok.com/Reimbursement-Helper/?form=Korea&lang=zh |
+| Korea, Korean | https://snowey1110.github.io/Reimbursement-Helper/?form=Korea&lang=ko | https://lixiaok.com/Reimbursement-Helper/?form=Korea&lang=ko |
+
 ## Quick Start For Users
 
 1. Download the latest release zip from the GitHub **Releases** page.

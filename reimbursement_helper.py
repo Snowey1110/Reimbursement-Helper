@@ -554,7 +554,7 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "select_payment_proof": "\u9009\u62e9\u4ed8\u6b3e\u51ed\u8bc1",
         "select_exchange_rate": "\u9009\u62e9\u6c47\u7387\u56fe\u7247",
         "generate_details": "\u751f\u6210\u660e\u7ec6",
-        "generate_empty": "\u751f\u6210\u7a7a\u767d\u9879",
+        "generate_empty": "\u7a7a\u767d\u586b\u7a7a",
         "generate_all": "\u5168\u90e8\u751f\u6210",
         "generate_excel": "\u751f\u6210 Excel",
         "inserted_receipts": "\u5df2\u63d2\u5165\u53d1\u7968\u548c\u660e\u7ec6",
