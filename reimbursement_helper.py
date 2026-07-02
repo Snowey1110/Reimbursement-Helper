@@ -88,6 +88,7 @@ KRW_NUMBER_FORMAT = "\u20a9#,##0"
 DEFAULT_AI_REQUEST_CONCURRENCY = 4
 MAX_AI_REQUEST_CONCURRENCY = 8
 LOGGER = logging.getLogger("reimbursement_helper")
+ExportProgressCallback = Callable[[int, int, str], None]
 
 
 USA_TEMPLATE_NAME = "usa_expense_report_template.xlsx"
@@ -118,6 +119,20 @@ def log_exception(message: str) -> Path:
     setup_logging()
     LOGGER.exception(message)
     return LOG_DIR / "app.log"
+
+
+def emit_export_progress(
+    progress: Optional[ExportProgressCallback],
+    done: int,
+    total: int,
+    message: str,
+) -> None:
+    if progress is None:
+        return
+    try:
+        progress(done, max(1, total), message)
+    except Exception:
+        pass
 
 
 def ensure_runtime_folders() -> None:
@@ -2618,9 +2633,11 @@ def export_usa(
     output_path: Path,
     exchange_rate: float,
     bank_items: Optional[List[BankStatementItem]] = None,
+    progress: Optional[ExportProgressCallback] = None,
 ) -> None:
     setup_logging()
     export_started = time.perf_counter()
+    emit_export_progress(progress, 0, 1, "Loading USA template...")
     template = TEMPLATE_DIR / USA_TEMPLATE_NAME
     if not template.exists():
         raise FileNotFoundError(f"Missing USA template: {template}")
@@ -2628,6 +2645,8 @@ def export_usa(
     ws = wb["Expense report"]
     receipts_ws = wb["Receipt and Payment of expenses"]
     report_rows = build_usa_report_rows(items, bank_items)
+    total_steps = max(4, len(report_rows) + 4)
+    emit_export_progress(progress, 1, total_steps, "Filling USA expense report...")
     sorted_items = [
         row.get("expense_item") or row.get("item")
         for row in report_rows
@@ -2678,6 +2697,7 @@ def export_usa(
     proof_image_height = max(1, USA_PROOF_IMAGE_MAX_HEIGHT - image_padding * 2)
     images_started = time.perf_counter()
     embedded_images = 0
+    emit_export_progress(progress, 2, total_steps, "Preparing receipt and payment proof images...")
     for index, row_data in enumerate(report_rows, start=1):
         row = index + 1
         receipts_ws[f"A{row}"] = index
@@ -2705,10 +2725,18 @@ def export_usa(
         if proof_image is not None:
             add_xl_image_with_padding(receipts_ws, proof_image, f"E{row}", image_padding)
             embedded_images += 1
+        emit_export_progress(
+            progress,
+            min(total_steps - 2, index + 2),
+            total_steps,
+            f"Processing Excel images {index}/{len(report_rows)}...",
+        )
 
     save_started = time.perf_counter()
+    emit_export_progress(progress, total_steps - 1, total_steps, "Saving Excel workbook...")
     wb.save(output_path)
     export_finished = time.perf_counter()
+    emit_export_progress(progress, total_steps, total_steps, "Excel workbook saved.")
     LOGGER.info(
         "USA export completed: rows=%s images=%s image_time=%.2fs save_time=%.2fs total=%.2fs output=%s",
         len(report_rows),
@@ -2839,9 +2867,11 @@ def export_korea(
     usd_to_rmb_rate: float,
     usd_to_krw_rate: float,
     exchange_rate_items: Optional[List[BankStatementItem]] = None,
+    progress: Optional[ExportProgressCallback] = None,
 ) -> None:
     setup_logging()
     export_started = time.perf_counter()
+    emit_export_progress(progress, 0, 1, "Loading Korea templates...")
     cover_template = TEMPLATE_DIR / KOREA_COVER_TEMPLATE_NAME
     details_template = TEMPLATE_DIR / KOREA_DETAILS_TEMPLATE_NAME
     if not cover_template.exists():
@@ -2855,6 +2885,7 @@ def export_korea(
     receipts_ws = wb.worksheets[1]
     detail_ws = clone_sheet(detail_template_wb.worksheets[0], wb, "报销明细", index=0, min_rows=35, min_cols=20)
     sorted_items = sort_receipts_for_report(items, "Korea")
+    emit_export_progress(progress, 1, max(4, len(sorted_items) + 4), "Filling Korea reimbursement details...")
     try:
         wb._sheets = [detail_ws, cover_ws, receipts_ws]
     except Exception:
@@ -2943,6 +2974,8 @@ def export_korea(
     fit_columns_for_receipts(receipts_ws)
     exchange_rate_attachments = [attachment_from_item(item) for item in exchange_rate_items or []]
     receipt_blocks = build_korea_receipt_blocks(sorted_items, exchange_rate_attachments)
+    total_steps = max(4, len(receipt_blocks) + 4)
+    emit_export_progress(progress, 2, total_steps, "Preparing Korea invoice pages...")
     slot_count = korea_receipt_slot_count_for_blocks(receipt_blocks)
     configure_korea_receipt_page(receipts_ws, slot_count)
     page_height = KOREA_RECEIPT_PAGE_HEIGHT
@@ -2973,11 +3006,19 @@ def export_korea(
             stretch_tiles=bool(block.get("stretch_tiles", False)),
         )
         embedded_blocks += 1
+        emit_export_progress(
+            progress,
+            min(total_steps - 2, embedded_blocks + 2),
+            total_steps,
+            f"Processing invoice images {embedded_blocks}/{len(receipt_blocks)}...",
+        )
         block_index += KOREA_RECEIPT_SLOTS_PER_PAGE if mode == "full" else (2 if mode == "wide" else 1)
 
     save_started = time.perf_counter()
+    emit_export_progress(progress, total_steps - 1, total_steps, "Saving Excel workbook...")
     wb.save(output_path)
     export_finished = time.perf_counter()
+    emit_export_progress(progress, total_steps, total_steps, "Excel workbook saved.")
     LOGGER.info(
         "Korea export completed: rows=%s receipt_blocks=%s image_time=%.2fs save_time=%.2fs total=%.2fs output=%s",
         len(sorted_items),
@@ -5872,15 +5913,32 @@ class ReimbursementHelperApp:
         krw_rate = safe_float(self.krw_to_rmb_rate.get()) or safe_float(DEFAULT_KRW_TO_RMB_RATE) or 0.0046
         usd_krw_rate = safe_float(self.usd_to_krw_rate.get()) or safe_float(DEFAULT_USD_TO_KRW_RATE) or 1548.86
         self.set_busy(True)
-        self.set_progress(0, 1, "Generating Excel")
+        self.set_progress(0, 1, "0/1")
         self.status_text.set("Generating Excel workbook...")
+
+        def export_progress(done: int, total: int, message: str) -> None:
+            label = f"{done}/{max(1, total)}"
+
+            def apply() -> None:
+                self.set_progress(done, total, label)
+                self.status_text.set(message)
+
+            self.root.after(0, apply)
 
         def worker() -> None:
             try:
                 if form_version == "USA":
-                    export_usa(items_snapshot, output_path, exchange_rate, bank_snapshot)
+                    export_usa(items_snapshot, output_path, exchange_rate, bank_snapshot, progress=export_progress)
                 else:
-                    export_korea(items_snapshot, output_path, krw_rate, exchange_rate, usd_krw_rate, exchange_snapshot)
+                    export_korea(
+                        items_snapshot,
+                        output_path,
+                        krw_rate,
+                        exchange_rate,
+                        usd_krw_rate,
+                        exchange_snapshot,
+                        progress=export_progress,
+                    )
             except Exception as exc:
                 log_path = log_exception("Excel export failed")
                 error_message = str(exc)
