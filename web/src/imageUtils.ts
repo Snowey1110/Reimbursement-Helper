@@ -282,6 +282,46 @@ function fitCanvasToMax(source: HTMLCanvasElement, maxWidth: number, maxHeight: 
   return output;
 }
 
+function trimWhiteCanvas(source: HTMLCanvasElement, padding = 16): HTMLCanvasElement {
+  const context = source.getContext("2d");
+  if (!context) return source;
+  const imageData = context.getImageData(0, 0, source.width, source.height);
+  let left = source.width;
+  let top = source.height;
+  let right = -1;
+  let bottom = -1;
+  for (let y = 0; y < source.height; y += 1) {
+    for (let x = 0; x < source.width; x += 1) {
+      const offset = (y * source.width + x) * 4;
+      const r = imageData.data[offset];
+      const g = imageData.data[offset + 1];
+      const b = imageData.data[offset + 2];
+      const a = imageData.data[offset + 3];
+      if (a > 8 && Math.min(r, g, b) < 245) {
+        left = Math.min(left, x);
+        top = Math.min(top, y);
+        right = Math.max(right, x);
+        bottom = Math.max(bottom, y);
+      }
+    }
+  }
+  if (right < left || bottom < top) return source;
+  left = Math.max(0, left - padding);
+  top = Math.max(0, top - padding);
+  right = Math.min(source.width - 1, right + padding);
+  bottom = Math.min(source.height - 1, bottom + padding);
+  if (left === 0 && top === 0 && right === source.width - 1 && bottom === source.height - 1) return source;
+  const output = document.createElement("canvas");
+  output.width = Math.max(1, right - left + 1);
+  output.height = Math.max(1, bottom - top + 1);
+  const outputContext = output.getContext("2d");
+  if (!outputContext) return source;
+  outputContext.fillStyle = "#ffffff";
+  outputContext.fillRect(0, 0, output.width, output.height);
+  outputContext.drawImage(source, left, top, output.width, output.height, 0, 0, output.width, output.height);
+  return output;
+}
+
 function perspectiveCropCanvas(source: HTMLCanvasElement, points: CropPoint[], maxWidth: number, maxHeight: number, allowUpscale = false): HTMLCanvasElement {
   const naturalSize = cropOutputSize(points);
   const scale = Math.min(maxWidth / naturalSize.width, maxHeight / naturalSize.height, allowUpscale ? Number.POSITIVE_INFINITY : 1);
@@ -372,7 +412,8 @@ export async function preparedImageDataUrl(
   attachment: ImageAttachment,
   maxWidth = 900,
   maxHeight = 900,
-  allowUpscale = false
+  allowUpscale = false,
+  trimWhitespace = false
 ): Promise<PreparedImageData> {
   const image = await loadImage(attachment.dataUrl);
   const rotation = normalizedRotation(attachment.rotationDegrees);
@@ -400,7 +441,9 @@ export async function preparedImageDataUrl(
   context.restore();
 
   const points = normalizedCropPoints(attachment.cropPoints, working.width, working.height);
-  const output = points ? perspectiveCropCanvas(working, points, maxWidth, maxHeight, allowUpscale) : fitCanvasToMax(working, maxWidth, maxHeight, allowUpscale);
+  const prepared = points ? perspectiveCropCanvas(working, points, maxWidth, maxHeight, allowUpscale) : working;
+  const trimmed = trimWhitespace ? trimWhiteCanvas(prepared) : prepared;
+  const output = points ? trimmed : fitCanvasToMax(trimmed, maxWidth, maxHeight, allowUpscale);
   return { dataUrl: canvasToDataUrl(output), width: output.width, height: output.height };
 }
 
@@ -448,11 +491,12 @@ export async function makeContactSheet(
   maxWidth: number,
   maxHeight: number,
   allowUpscale = false,
-  stretchTiles = false
+  stretchTiles = false,
+  trimWhitespace = false
 ): Promise<PreparedImageData | undefined> {
   if (!attachments.length) return undefined;
   if (attachments.length === 1 && !stretchTiles && !allowUpscale) {
-    return preparedImageDataUrl(attachments[0], maxWidth, maxHeight, allowUpscale);
+    return preparedImageDataUrl(attachments[0], maxWidth, maxHeight, allowUpscale, trimWhitespace);
   }
   const cols = Math.min(2, attachments.length);
   const rows = Math.ceil(attachments.length / cols);
@@ -463,7 +507,7 @@ export async function makeContactSheet(
   const cellWidth = Math.floor((renderWidth - gutter * (cols - 1)) / cols);
   const cellHeight = Math.floor((renderHeight - gutter * (rows - 1)) / rows);
   const prepared = await Promise.all(
-    attachments.map((attachment) => preparedImageDataUrl(attachment, cellWidth, cellHeight, allowUpscale))
+    attachments.map((attachment) => preparedImageDataUrl(attachment, cellWidth, cellHeight, allowUpscale, trimWhitespace))
   );
   const canvas = document.createElement("canvas");
   canvas.width = renderWidth;

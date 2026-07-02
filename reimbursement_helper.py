@@ -75,7 +75,8 @@ DEFAULT_USD_TO_KRW_RATE = "1548.86"
 DEFAULT_KRW_TO_RMB_RATE = "0.004433"
 PDF_RENDER_SCALE = 3
 KRW_NUMBER_FORMAT = "\u20a9#,##0"
-AI_REQUEST_CONCURRENCY = 4
+DEFAULT_AI_REQUEST_CONCURRENCY = 4
+MAX_AI_REQUEST_CONCURRENCY = 8
 LOGGER = logging.getLogger("reimbursement_helper")
 
 
@@ -374,13 +375,13 @@ KOREA_RECEIPT_WIDE_WIDTH = 760
 KOREA_RECEIPT_HALF_HEIGHT = 520
 KOREA_RECEIPT_FULL_HEIGHT = 1040
 KOREA_FULL_PAGE_SPLIT_ASPECT = 1.75
-USA_SUPPORT_ROW_HEIGHT = 391.05
+USA_SUPPORT_ROW_HEIGHT = 540
 USA_RECEIPT_COLUMN_WIDTH = 92.7
-USA_PROOF_COLUMN_WIDTH = 50.7
+USA_PROOF_COLUMN_WIDTH = 78
 USA_RECEIPT_IMAGE_MAX_WIDTH = 700
-USA_RECEIPT_IMAGE_MAX_HEIGHT = 510
-USA_PROOF_IMAGE_MAX_WIDTH = 390
-USA_PROOF_IMAGE_MAX_HEIGHT = 510
+USA_RECEIPT_IMAGE_MAX_HEIGHT = 720
+USA_PROOF_IMAGE_MAX_WIDTH = 590
+USA_PROOF_IMAGE_MAX_HEIGHT = 720
 
 KOREA_COVER_ROWS: Dict[str, Tuple[int, str]] = {
     "transportation": (4, "交通费"),
@@ -495,6 +496,7 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "header_title": "REIMBURSEMENT HELPER",
         "form": "Form",
         "language": "Language",
+        "ai_batch": "AI batch",
         "select_files": "Select Files",
         "select_receipts": "Select Receipts",
         "select_payment_proof": "Select Payment Proof",
@@ -544,13 +546,14 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "selected_exchange_failed": "Selected exchange-rate image(s), but could not auto-read rate: {message}",
         "updated_exchange_rate": "Updated rate from exchange-rate image: {updates}",
         "no_empty_rows": "No empty or unprocessed rows need AI.",
-        "unknown_document_type": "{count} row(s) still have unknown document type. Choose Receipt or Payment proof before exporting.",
+        "unknown_document_type": "{count} row(s) still have unknown document type: {files}. Choose Receipt or Payment proof before exporting.",
     },
     "zh": {
         "app_title": "\u62a5\u9500\u52a9\u624b",
         "header_title": "\u62a5\u9500\u52a9\u624b",
         "form": "\u8868\u683c",
         "language": "\u8bed\u8a00",
+        "ai_batch": "\u540c\u65f6\u5904\u7406",
         "select_files": "\u9009\u62e9\u6587\u4ef6",
         "select_receipts": "\u9009\u62e9\u53d1\u7968",
         "select_payment_proof": "\u9009\u62e9\u4ed8\u6b3e\u51ed\u8bc1",
@@ -600,13 +603,14 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "selected_exchange_failed": "\u5df2\u9009\u62e9\u6c47\u7387\u56fe\u7247\uff0c\u4f46\u65e0\u6cd5\u81ea\u52a8\u8bfb\u53d6\u6c47\u7387\uff1a{message}",
         "updated_exchange_rate": "\u5df2\u6839\u636e\u6c47\u7387\u56fe\u7247\u66f4\u65b0\uff1a{updates}",
         "no_empty_rows": "\u6ca1\u6709\u9700\u8981 AI \u5904\u7406\u7684\u7a7a\u767d\u6216\u672a\u5904\u7406\u8bb0\u5f55\u3002",
-        "unknown_document_type": "\u8fd8\u6709 {count} \u6761\u8bb0\u5f55\u7684\u6587\u4ef6\u7c7b\u578b\u662f\u672a\u77e5\u3002\u5bfc\u51fa\u524d\u8bf7\u9009\u62e9\u53d1\u7968\u6216\u4ed8\u6b3e\u51ed\u8bc1\u3002",
+        "unknown_document_type": "\u8fd8\u6709 {count} \u6761\u8bb0\u5f55\u7684\u6587\u4ef6\u7c7b\u578b\u662f\u672a\u77e5\uff1a{files}\u3002\u5bfc\u51fa\u524d\u8bf7\u9009\u62e9\u53d1\u7968\u6216\u4ed8\u6b3e\u51ed\u8bc1\u3002",
     },
     "ko": {
         "app_title": "\ud658\uae09 \ub3c4\uc6b0\ubbf8",
         "header_title": "\ud658\uae09 \ub3c4\uc6b0\ubbf8",
         "form": "\uc591\uc2dd",
         "language": "\uc5b8\uc5b4",
+        "ai_batch": "\ub3d9\uc2dc \ucc98\ub9ac",
         "select_files": "\ud30c\uc77c \uc120\ud0dd",
         "select_receipts": "\uc601\uc218\uc99d \uc120\ud0dd",
         "select_payment_proof": "\uacb0\uc81c \uc99d\ube59 \uc120\ud0dd",
@@ -656,7 +660,7 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "selected_exchange_failed": "\ud658\uc728 \uc774\ubbf8\uc9c0\ub97c \uc120\ud0dd\ud588\uc9c0\ub9cc \uc790\ub3d9\uc73c\ub85c \uc77d\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4: {message}",
         "updated_exchange_rate": "\ud658\uc728 \uc774\ubbf8\uc9c0\uc5d0\uc11c \ud658\uc728\uc744 \uc5c5\ub370\uc774\ud2b8\ud588\uc2b5\ub2c8\ub2e4: {updates}",
         "no_empty_rows": "AI\uac00 \ucc98\ub9ac\ud560 \ube48 \ud56d\ubaa9\uc774\ub098 \ubbf8\ucc98\ub9ac \ud589\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
-        "unknown_document_type": "{count}\uac1c \ud589\uc758 \ubb38\uc11c \uc720\ud615\uc774 \uc54c \uc218 \uc5c6\uc74c\uc785\ub2c8\ub2e4. \ub0b4\ubcf4\ub0b4\uae30 \uc804\uc5d0 \uc601\uc218\uc99d \ub610\ub294 \uacb0\uc81c \uc99d\ube59\uc744 \uc120\ud0dd\ud558\uc138\uc694.",
+        "unknown_document_type": "{count}\uac1c \ud589\uc758 \ubb38\uc11c \uc720\ud615\uc774 \uc54c \uc218 \uc5c6\uc74c\uc785\ub2c8\ub2e4: {files}. \ub0b4\ubcf4\ub0b4\uae30 \uc804\uc5d0 \uc601\uc218\uc99d \ub610\ub294 \uacb0\uc81c \uc99d\ube59\uc744 \uc120\ud0dd\ud558\uc138\uc694.",
     },
 }
 
@@ -1178,6 +1182,14 @@ def truncate_amount(value: Optional[float]) -> Optional[int]:
     return math.trunc(value)
 
 
+def clamp_ai_concurrency(value: Any) -> int:
+    try:
+        parsed = int(round(float(value)))
+    except (TypeError, ValueError):
+        parsed = DEFAULT_AI_REQUEST_CONCURRENCY
+    return max(1, min(MAX_AI_REQUEST_CONCURRENCY, parsed))
+
+
 def parse_date_value(value: str) -> Any:
     text = (value or "").strip()
     if not text:
@@ -1405,6 +1417,29 @@ def is_usa_payment_proof_item(item: "ReceiptItem") -> bool:
     return normalize_document_type(getattr(item, "document_type", "unknown"), "unknown") == "payment_proof"
 
 
+def looks_like_usa_payment_proof_text(*values: Any) -> bool:
+    text = " ".join(str(value or "") for value in values).lower()
+    return bool(
+        re.search(
+            r"\b(chase|bank|statement|transaction details|posted date|card number|account|sapphire|proof of payment|payment proof|merchant type)\b",
+            text,
+        )
+    )
+
+
+def receipt_attention_reason(item: "ReceiptItem", form_version: str) -> Optional[str]:
+    version = normalized_form_version(form_version)
+    if item.status == "Failed":
+        return "AI failed"
+    if version == "USA" and normalize_document_type(item.document_type, "unknown") == "unknown":
+        return "Unknown document type"
+    if not item.date.strip():
+        return "Missing date"
+    if not (item.amount.strip() or item.krw_amount.strip() or item.rmb_amount.strip()):
+        return "Missing amount"
+    return None
+
+
 def receipt_needs_ai(item: "ReceiptItem", form_version: str) -> bool:
     version = normalized_form_version(form_version)
     if item.status in {"Empty", "Failed", "Needs regen"}:
@@ -1577,7 +1612,7 @@ def match_usa_payment_proof_items(items: List["ReceiptItem"]) -> None:
         proof_amount = safe_float(proof_item.amount)
         if proof_amount is None or not proof_item.date.strip():
             proof_item.matched_receipt_id = ""
-            proof_item.status = "Needs manual review"
+            proof_item.status = "Missing date/amount"
             continue
         matches: List[ReceiptItem] = []
         for receipt in receipts:
@@ -1594,14 +1629,14 @@ def match_usa_payment_proof_items(items: List["ReceiptItem"]) -> None:
             proof_item.status = "Matched"
         else:
             proof_item.matched_receipt_id = ""
-            proof_item.status = "Needs manual review"
+            proof_item.status = "Multiple possible matches" if len(matches) > 1 else "Payment proof"
 
 
 def match_bank_statement_to_receipt(bank_item: "BankStatementItem", receipts: List["ReceiptItem"]) -> None:
     bank_amount = safe_float(bank_item.amount)
     if bank_amount is None or not bank_item.date:
         bank_item.matched_receipt_id = ""
-        bank_item.status = "Needs manual review"
+        bank_item.status = "Missing date/amount"
         return
     matches: List[ReceiptItem] = []
     for receipt in receipts:
@@ -1618,7 +1653,7 @@ def match_bank_statement_to_receipt(bank_item: "BankStatementItem", receipts: Li
         bank_item.status = "Matched"
     else:
         bank_item.matched_receipt_id = ""
-        bank_item.status = "Needs manual review"
+        bank_item.status = "Multiple possible matches" if len(matches) > 1 else "Payment proof"
 
 
 def build_usa_report_rows(
@@ -1969,12 +2004,39 @@ def prepare_attachment_image_file(attachment: Dict[str, Any]) -> Path:
     )
 
 
+def trim_white_image(image: Any, padding: int = 18, threshold: int = 245) -> Any:
+    if Image is None:
+        return image
+    rgb = image.convert("RGB")
+    pixels = rgb.load()
+    left, top = rgb.width, rgb.height
+    right, bottom = -1, -1
+    for y in range(rgb.height):
+        for x in range(rgb.width):
+            r, g, b = pixels[x, y]
+            if min(r, g, b) < threshold:
+                left = min(left, x)
+                top = min(top, y)
+                right = max(right, x)
+                bottom = max(bottom, y)
+    if right < left or bottom < top:
+        return image
+    left = max(0, left - padding)
+    top = max(0, top - padding)
+    right = min(rgb.width - 1, right + padding)
+    bottom = min(rgb.height - 1, bottom + padding)
+    if left == 0 and top == 0 and right == rgb.width - 1 and bottom == rgb.height - 1:
+        return image
+    return image.crop((left, top, right + 1, bottom + 1))
+
+
 def prepare_attachment_contact_sheet(
     attachments: List[Dict[str, Any]],
     max_width: int,
     max_height: int,
     allow_upscale: bool = False,
     stretch_tiles: bool = False,
+    trim_whitespace: bool = False,
 ) -> Optional[Path]:
     if Image is None:
         return None
@@ -1992,7 +2054,10 @@ def prepare_attachment_contact_sheet(
             continue
         prepared = prepare_attachment_image_file(attachment)
         with Image.open(prepared) as img:
-            prepared_images.append(img.convert("RGB").copy())
+            output = img.convert("RGB").copy()
+            if trim_whitespace:
+                output = trim_white_image(output)
+            prepared_images.append(output)
     if not prepared_images:
         return None
     cols = min(2, len(prepared_images))
@@ -2033,8 +2098,9 @@ def resize_attachment_contact_sheet(
     max_height: int,
     allow_upscale: bool = False,
     stretch_tiles: bool = False,
+    trim_whitespace: bool = False,
 ) -> Optional[Any]:
-    contact_path = prepare_attachment_contact_sheet(attachments, max_width, max_height, allow_upscale, stretch_tiles)
+    contact_path = prepare_attachment_contact_sheet(attachments, max_width, max_height, allow_upscale, stretch_tiles, trim_whitespace)
     if contact_path is None:
         return None
     img = XLImage(str(contact_path))
@@ -2409,6 +2475,7 @@ def export_usa(
             USA_PROOF_IMAGE_MAX_WIDTH,
             USA_PROOF_IMAGE_MAX_HEIGHT,
             allow_upscale=True,
+            trim_whitespace=True,
         )
         if proof_image is not None:
             receipts_ws.add_image(proof_image, f"E{row}")
@@ -2713,6 +2780,7 @@ class ReimbursementHelperApp:
         self.exchange_rate = tk.StringVar(value=str(self.settings.get("usa_exchange_rate", DEFAULT_USD_TO_RMB_RATE)))
         self.usd_to_krw_rate = tk.StringVar(value=str(self.settings.get("usd_to_krw_rate", DEFAULT_USD_TO_KRW_RATE)))
         self.krw_to_rmb_rate = tk.StringVar(value=str(self.settings.get("krw_to_rmb_rate", DEFAULT_KRW_TO_RMB_RATE)))
+        self.ai_concurrency = tk.StringVar(value=str(clamp_ai_concurrency(self.settings.get("ai_concurrency", DEFAULT_AI_REQUEST_CONCURRENCY))))
         self.status_text = tk.StringVar(value=self.tr("ready"))
         self.progress_text = tk.StringVar(value="")
         self.progress_value = tk.DoubleVar(value=0)
@@ -2726,6 +2794,8 @@ class ReimbursementHelperApp:
         self.header_label: Optional[Any] = None
         self.form_label: Optional[Any] = None
         self.language_label: Optional[Any] = None
+        self.ai_concurrency_label: Optional[Any] = None
+        self.ai_concurrency_entry: Optional[Any] = None
         self.manager_label: Optional[Any] = None
         self.details_label: Optional[Any] = None
         self.preview_label: Optional[Any] = None
@@ -2947,6 +3017,12 @@ class ReimbursementHelperApp:
         )
         language_combo.pack(side="left", padx=(0, 12))
         language_combo.bind("<<ComboboxSelected>>", lambda _event: self._on_language_changed())
+        self.ai_concurrency_label = ttk.Label(controls, text=self.tr("ai_batch"))
+        self.ai_concurrency_label.pack(side="left", padx=(0, 6))
+        self.ai_concurrency_entry = ttk.Entry(controls, textvariable=self.ai_concurrency, width=4)
+        self.ai_concurrency_entry.pack(side="left", padx=(0, 12))
+        self.ai_concurrency_entry.bind("<FocusOut>", lambda _event: self.ai_concurrency.set(str(self.ai_concurrency_value())))
+        self.ai_concurrency_entry.bind("<Return>", lambda _event: self.ai_concurrency.set(str(self.ai_concurrency_value())))
         self.upload_folder_btn = ttk.Button(controls, text=self.tr("select_files"), command=self.select_files)
         self.upload_folder_btn.pack(side="left", padx=4)
         self.select_payment_proof_btn = ttk.Button(
@@ -3002,6 +3078,7 @@ class ReimbursementHelperApp:
         self.tree.bind("<BackSpace>", self.remove_selected)
         self.tree.bind("<Control-a>", self.select_all_receipts)
         self.tree.bind("<Control-A>", self.select_all_receipts)
+        self.tree.tag_configure("attention", background="#FFF1F2", foreground="#881337")
         left_buttons = ttk.Frame(left, style="Panel.TFrame")
         left_buttons.pack(fill="x", pady=(10, 0))
         self.remove_btn = ttk.Button(left_buttons, text=self.tr("remove"), command=self.remove_selected)
@@ -3226,6 +3303,7 @@ class ReimbursementHelperApp:
             (self.header_label, "header_title"),
             (self.form_label, "form"),
             (self.language_label, "language"),
+            (self.ai_concurrency_label, "ai_batch"),
             (self.upload_folder_btn, "select_files"),
             (self.generate_details_btn, "generate_empty"),
             (self.generate_all_btn, "generate_all"),
@@ -3270,6 +3348,12 @@ class ReimbursementHelperApp:
         if self.status_text.get() in {ui_text(code, "ready") for code in UI_TEXT}:
             self.status_text.set(self.tr("ready"))
         self.update_preview()
+
+    def ai_concurrency_value(self) -> int:
+        value = clamp_ai_concurrency(self.ai_concurrency.get())
+        if self.ai_concurrency.get() != str(value):
+            self.ai_concurrency.set(str(value))
+        return value
 
     def _on_field_changed(self, key: str) -> None:
         if self._loading_fields or self._syncing_amounts:
@@ -3436,6 +3520,12 @@ class ReimbursementHelperApp:
         if rmb is not None:
             item.rmb_amount = format_amount(rmb)
 
+    def clear_attention_status_if_ready(self, item: ReceiptItem) -> None:
+        if receipt_attention_reason(item, self.form_version.get()) is not None:
+            return
+        if item.status in {"Empty", "Failed", "Missing date/amount"}:
+            item.status = "Payment proof" if is_usa_payment_proof_item(item) else "Manual filled"
+
     def _save_field_to_selected(self, key: str, refresh: bool = False) -> None:
         var = self.field_vars.get(key)
         if var is None:
@@ -3452,6 +3542,8 @@ class ReimbursementHelperApp:
                     item.matched_receipt_id = ""
             else:
                 setattr(item, key, value)
+            self.update_item_amount_fields(item, self._last_amount_source)
+            self.clear_attention_status_if_ready(item)
         if refresh:
             self.refresh_tree()
 
@@ -3481,6 +3573,7 @@ class ReimbursementHelperApp:
             elif source == "rmb_amount":
                 item.rmb_amount = rmb_value
                 self.update_item_amount_fields(item, "rmb_amount")
+            self.clear_attention_status_if_ready(item)
         if refresh:
             self.refresh_tree()
 
@@ -3956,7 +4049,8 @@ class ReimbursementHelperApp:
         self.tree.delete(*self.tree.get_children())
         for index, item in enumerate(self.items):
             values = (item.status, item.date, item.amount or item.krw_amount or item.rmb_amount)
-            self.tree.insert("", "end", iid=str(index), text=item.filename, values=values)
+            tags = ("attention",) if receipt_attention_reason(item, self.form_version.get()) else ()
+            self.tree.insert("", "end", iid=str(index), text=item.filename, values=values, tags=tags)
         valid_selection = [iid for iid in current_selection if iid.isdigit() and int(iid) < len(self.items)]
         if valid_selection:
             self.tree.selection_set(*valid_selection)
@@ -4222,6 +4316,7 @@ class ReimbursementHelperApp:
                 value = normalize_currency(value, "USD" if self.form_version.get() == "USA" else "KRW")
             setattr(item, key, value)
         self.update_item_amount_fields(item, self._last_amount_source)
+        self.clear_attention_status_if_ready(item)
 
     def load_selected_into_fields(self) -> None:
         item = self.selected_item()
@@ -4871,7 +4966,7 @@ class ReimbursementHelperApp:
             amount=receipt.amount,
             place=receipt.place,
             matched_receipt_id="" if removing_row else receipt.item_id,
-            status="Needs manual review" if removing_row else "Matched manually",
+            status="Payment proof" if removing_row else "Matched manually",
             crop_box=copy.deepcopy(attachment.get("crop_box")),
             rotation_degrees=normalize_rotation(attachment.get("rotation_degrees", 0)),
         )
@@ -4905,7 +5000,7 @@ class ReimbursementHelperApp:
             self.load_selected_into_fields()
             self.update_preview()
         self.save_session()
-        self.status_text.set("Moved screenshot to Payment proof. It needs manual review.")
+        self.status_text.set("Moved screenshot to Payment proof.")
         self._details_ready_for_export = False
         self.update_toolbar_recommendation()
 
@@ -4963,7 +5058,7 @@ class ReimbursementHelperApp:
         for proof_item in self.bank_items:
             if proof_item.matched_receipt_id == removed_id:
                 proof_item.matched_receipt_id = ""
-                proof_item.status = "Needs manual review"
+                proof_item.status = "Payment proof"
         self.selected_index = None
         self.refresh_tree()
         if self.items:
@@ -5000,7 +5095,7 @@ class ReimbursementHelperApp:
             return
         for index in current_indexes:
             self.bank_items[index].matched_receipt_id = ""
-            self.bank_items[index].status = "Needs manual review"
+            self.bank_items[index].status = "Payment proof"
         chosen = self.bank_items[chosen_index]
         chosen.matched_receipt_id = receipt.item_id
         chosen.status = "Matched manually"
@@ -5021,7 +5116,7 @@ class ReimbursementHelperApp:
         for proof_item in self.bank_items:
             if proof_item.matched_receipt_id == receipt.item_id:
                 proof_item.matched_receipt_id = ""
-                proof_item.status = "Needs manual review"
+                proof_item.status = "Payment proof"
                 changed += 1
         if changed:
             self.selected_attachment_kind = "receipt"
@@ -5048,7 +5143,7 @@ class ReimbursementHelperApp:
         for bank_item in self.bank_items:
             if bank_item.matched_receipt_id in removed_ids:
                 bank_item.matched_receipt_id = ""
-                bank_item.status = "Needs manual review"
+                bank_item.status = "Payment proof"
         self.selected_index = None
         self.refresh_tree()
         self.refresh_bank_tree()
@@ -5126,6 +5221,16 @@ class ReimbursementHelperApp:
         if self.form_version.get() == "USA":
             item.currency = "USD"
             item.document_type = normalize_document_type(item.document_type, "unknown")
+            if item.document_type == "unknown" and looks_like_usa_payment_proof_text(
+                item.filename,
+                item.place,
+                item.details,
+                item.payment_method,
+                item.receipt_label,
+                data.get("vendor"),
+                data.get("confidence_notes"),
+            ):
+                item.document_type = "payment_proof"
         else:
             item.currency = normalize_currency(item.currency, "KRW")
             item.document_type = "receipt"
@@ -5147,7 +5252,7 @@ class ReimbursementHelperApp:
             text = str(value).strip()
             if text:
                 setattr(item, dest_key, text)
-        item.status = "Needs match"
+        item.status = "Needs match" if item.date.strip() and item.amount.strip() else "Missing date/amount"
 
     def same_expense_date(self, left: str, right: str) -> bool:
         return same_expense_date_values(left, right)
@@ -5176,7 +5281,7 @@ class ReimbursementHelperApp:
             keeper.status = "Matched"
             for proof_item in proofs[1:]:
                 proof_item.matched_receipt_id = ""
-                proof_item.status = "Needs manual review"
+                proof_item.status = "Multiple possible matches"
 
     def receipt_merge_key(self, item: ReceiptItem) -> Optional[Tuple[str, float]]:
         return usa_receipt_merge_key(item)
@@ -5227,6 +5332,7 @@ class ReimbursementHelperApp:
         if total <= 0:
             return
         form_version = self.form_version.get()
+        ai_concurrency = self.ai_concurrency_value()
         if include_bank:
             self._details_ready_for_export = False
         self.set_busy(True)
@@ -5281,7 +5387,7 @@ class ReimbursementHelperApp:
                     )
                     return f"{item.filename}: {exc}"
 
-            receipt_workers = min(AI_REQUEST_CONCURRENCY, max(1, len(items)))
+            receipt_workers = min(ai_concurrency, max(1, len(items)))
             with ThreadPoolExecutor(max_workers=receipt_workers) as executor:
                 futures = [executor.submit(process_receipt, idx, item) for idx, item in enumerate(items)]
                 for future in as_completed(futures):
@@ -5336,17 +5442,17 @@ class ReimbursementHelperApp:
                 except Exception as exc:
                     setup_logging()
                     LOGGER.exception("Bank statement extraction failed for %s", bank_item.filename)
-                    bank_item.status = "Needs manual review"
+                    bank_item.status = "Missing date/amount"
                     done = next_done()
                     self.root.after(
                         0,
                         lambda i=bank_item, d=done: self.mark_bank_item_status(
-                            i, "Needs manual review", d, total
+                            i, "Missing date/amount", d, total
                         ),
                     )
                     return f"{bank_item.filename}: {exc}"
             if bank_items:
-                bank_workers = min(AI_REQUEST_CONCURRENCY, max(1, len(bank_items)))
+                bank_workers = min(ai_concurrency, max(1, len(bank_items)))
                 with ThreadPoolExecutor(max_workers=bank_workers) as executor:
                     futures = [executor.submit(process_bank_proof, idx, bank_item) for idx, bank_item in enumerate(bank_items)]
                     for future in as_completed(futures):
@@ -5357,7 +5463,7 @@ class ReimbursementHelperApp:
                             successes += 1
             if bank_items:
                 for bank_item in bank_items:
-                    if bank_item.status != "Needs manual review":
+                    if bank_item.status != "Missing date/amount":
                         self.match_bank_item(bank_item)
                 self.resolve_payment_proof_conflicts()
                 self.root.after(0, self.refresh_bank_tree)
@@ -5491,13 +5597,17 @@ class ReimbursementHelperApp:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             if self.form_version.get() == "USA":
-                unknown_count = sum(
-                    1
+                unknown_items = [
+                    item
                     for item in self.items
                     if normalize_document_type(item.document_type, "unknown") == "unknown"
-                )
-                if unknown_count:
-                    self.status_text.set(self.tr("unknown_document_type", count=unknown_count))
+                ]
+                if unknown_items:
+                    files = ", ".join(item.filename for item in unknown_items[:5])
+                    if len(unknown_items) > 5:
+                        files += f", +{len(unknown_items) - 5}"
+                    self.status_text.set(self.tr("unknown_document_type", count=len(unknown_items), files=files))
+                    self.refresh_tree()
                     return
                 self.merge_same_usa_receipts()
                 match_usa_payment_proof_items(self.items)
@@ -5680,6 +5790,7 @@ class ReimbursementHelperApp:
         self.settings["usa_exchange_rate"] = self.exchange_rate.get()
         self.settings["usd_to_krw_rate"] = self.usd_to_krw_rate.get()
         self.settings["krw_to_rmb_rate"] = self.krw_to_rmb_rate.get()
+        self.settings["ai_concurrency"] = self.ai_concurrency_value()
         self.settings["last_form_version"] = normalized_form_version(self.form_version.get())
         self.settings["language"] = normalize_language(self.language.get())
         save_user_settings(self.settings)

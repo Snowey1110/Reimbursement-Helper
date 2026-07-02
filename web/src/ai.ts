@@ -51,6 +51,11 @@ const EXCHANGE_RATE_SCHEMA = {
   required: ["krw_to_rmb_rate", "usd_to_krw_rate", "krw_to_usd_rate", "confidence_notes"]
 };
 
+function looksLikeUsaPaymentProof(values: unknown[]): boolean {
+  const text = values.join(" ").toLowerCase();
+  return /\b(chase|bank|statement|transaction details|posted date|card number|account|sapphire|proof of payment|payment proof|merchant type)\b/.test(text);
+}
+
 function parseRate(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   const text = String(value ?? "").replace(/,/g, "");
@@ -186,6 +191,14 @@ export async function extractKoreaExchangeRatesWithOpenAI(
 
 export function applyExtraction(item: ReceiptItem, extraction: ReceiptExtraction, formVersion: FormVersion): ReceiptItem {
   const currency = normalizeCurrency(extraction.currency, formVersion === "USA" ? "USD" : item.currency);
+  let documentType = formVersion === "USA" ? normalizeDocumentType(extraction.document_type, item.documentType) : item.documentType;
+  if (
+    formVersion === "USA" &&
+    documentType === "unknown" &&
+    looksLikeUsaPaymentProof([item.filename, extraction.place, extraction.vendor, extraction.details, extraction.payment_method, extraction.receipt_label])
+  ) {
+    documentType = "payment_proof";
+  }
   const next: ReceiptItem = {
     ...item,
     date: String(extraction.date ?? item.date ?? ""),
@@ -200,7 +213,7 @@ export function applyExtraction(item: ReceiptItem, extraction: ReceiptExtraction
     category: normalizeCategory(extraction.category ?? item.category),
     paymentMethod: String(extraction.payment_method ?? item.paymentMethod ?? ""),
     receiptLabel: String(extraction.receipt_label ?? item.receiptLabel ?? item.filename),
-    documentType: formVersion === "USA" ? normalizeDocumentType(extraction.document_type, item.documentType) : item.documentType,
+    documentType,
     status: "AI filled"
   };
   return updateAmounts(next, { usdToRmb: DEFAULT_USD_TO_RMB, usdToKrw: DEFAULT_USD_TO_KRW, krwToRmb: DEFAULT_KRW_TO_RMB }, "amount");

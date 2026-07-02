@@ -147,6 +147,11 @@ label {
   width: 94px;
 }
 
+.toolbar-control.compact-control input {
+  min-height: 42px;
+  width: 64px;
+}
+
 .workspace {
   display: grid;
   grid-template-columns: minmax(360px, 1.15fr) minmax(300px, 0.8fr) minmax(360px, 1fr);
@@ -194,6 +199,17 @@ label {
 
 .receipt-row.selected {
   background: #2f6f9f;
+  color: white;
+}
+
+.receipt-row.needs-attention {
+  background: #fff1f2;
+  color: #881337;
+  border-left: 4px solid #dc2626;
+}
+
+.receipt-row.needs-attention.selected {
+  background: #9f1239;
   color: white;
 }
 

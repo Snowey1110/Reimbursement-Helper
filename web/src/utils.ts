@@ -245,6 +245,14 @@ export function isUsaPaymentProofItem(item: ReceiptItem): boolean {
   return item.documentType === "payment_proof";
 }
 
+export function receiptAttentionReason(item: ReceiptItem, formVersion: "USA" | "Korea"): string | undefined {
+  if (item.status === "Failed") return "AI failed";
+  if (formVersion === "USA" && item.documentType === "unknown") return "Unknown document type";
+  if (!item.date.trim()) return "Missing date";
+  if (!item.amount.trim() && !item.krwAmount.trim() && !item.rmbAmount.trim()) return "Missing amount";
+  return undefined;
+}
+
 export function receiptNeedsAi(item: ReceiptItem, formVersion: "USA" | "Korea"): boolean {
   if (item.status === "Empty" || item.status === "Failed") return true;
   if (!item.date.trim() || !item.amount.trim()) return true;
@@ -295,6 +303,9 @@ export function matchUsaPaymentProofItems(items: ReceiptItem[]): ReceiptItem[] {
     if (!isUsaPaymentProofItem(item)) return item;
     const proofAmount = safeNumber(item.amount);
     const proofDate = parseDateKey(item.date);
+    if (proofAmount === undefined || !proofDate) {
+      return { ...item, matchedReceiptId: "", status: "Missing date/amount" };
+    }
     const matches = receipts.filter((receipt) => {
       const itemAmount = safeNumber(receipt.amount);
       const itemDate = parseDateKey(receipt.date);
@@ -310,7 +321,7 @@ export function matchUsaPaymentProofItems(items: ReceiptItem[]): ReceiptItem[] {
     if (matches.length === 1) {
       return { ...item, matchedReceiptId: matches[0].id, status: "Matched" };
     }
-    return { ...item, matchedReceiptId: "", status: "Needs manual review" };
+    return { ...item, matchedReceiptId: "", status: matches.length > 1 ? "Multiple possible matches" : "Payment proof" };
   });
 }
 
@@ -480,6 +491,9 @@ export function matchPaymentProofs(proofs: PaymentProof[], items: ReceiptItem[])
   return proofs.map((proof) => {
     const proofAmount = safeNumber(proof.amount);
     const proofDate = parseDateKey(proof.date);
+    if (proofAmount === undefined || !proofDate) {
+      return { ...proof, matchedReceiptId: "", status: "Missing date/amount" };
+    }
     const matches = items.filter((item) => {
       const itemAmount = safeNumber(item.amount);
       const itemDate = parseDateKey(item.date);
@@ -495,7 +509,7 @@ export function matchPaymentProofs(proofs: PaymentProof[], items: ReceiptItem[])
     if (matches.length === 1) {
       return { ...proof, matchedReceiptId: matches[0].id, status: "Matched" };
     }
-    return { ...proof, matchedReceiptId: "", status: "Needs manual review" };
+    return { ...proof, matchedReceiptId: "", status: matches.length > 1 ? "Multiple possible matches" : "Payment proof" };
   });
 }
 
@@ -511,7 +525,7 @@ export function swapProofForReceipt(
   return {
     selectedProofId: nextProof.id,
     proofs: proofs.map((proof) => {
-      if (currentProofIds.includes(proof.id)) return { ...proof, matchedReceiptId: "", status: "Needs manual review" };
+      if (currentProofIds.includes(proof.id)) return { ...proof, matchedReceiptId: "", status: "Payment proof" };
       if (proof.id === nextProof.id) return { ...proof, matchedReceiptId: receiptId, status: "Matched manually" };
       return proof;
     })

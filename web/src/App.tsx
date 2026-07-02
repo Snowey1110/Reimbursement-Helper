@@ -36,6 +36,7 @@ import {
   mergeSameUsaReceipts,
   matchUsaPaymentProofItems,
   normalizeCurrency,
+  receiptAttentionReason,
   receiptNeedsAi,
   sortReceiptsForReport,
   swapProofForReceipt,
@@ -44,9 +45,17 @@ import {
 } from "./utils";
 
 const STORAGE_KEY = "reimbursement-helper-web-api-key";
-const AI_REQUEST_CONCURRENCY = 4;
+const AI_CONCURRENCY_STORAGE_KEY = "reimbursement-helper-web-ai-concurrency";
+const DEFAULT_AI_REQUEST_CONCURRENCY = 4;
+const MAX_AI_REQUEST_CONCURRENCY = 8;
 type SuggestedAction = "selectFiles" | "selectExchangeRate" | "generateEmpty" | "generateAll" | "generateExcel";
 type FormVersion = "USA" | "Korea";
+
+function clampAiConcurrency(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return DEFAULT_AI_REQUEST_CONCURRENCY;
+  return Math.max(1, Math.min(MAX_AI_REQUEST_CONCURRENCY, Math.round(parsed)));
+}
 
 async function runWithConcurrency<T>(
   values: T[],
@@ -121,6 +130,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
   const [readyForExport, setReadyForExport] = useState(false);
+  const [aiConcurrency, setAiConcurrency] = useState(() => clampAiConcurrency(localStorage.getItem(AI_CONCURRENCY_STORAGE_KEY)));
   const [trackerConfig, setTrackerConfig] = useState<ReportTrackerConfig | null>(null);
   const [reportStats, setReportStats] = useState<ReportTrackerStats | null>(null);
   const receiptInputRef = useRef<HTMLInputElement>(null);
@@ -172,6 +182,14 @@ export default function App() {
   }, [language]);
 
   useEffect(() => {
+    try {
+      localStorage.setItem(AI_CONCURRENCY_STORAGE_KEY, String(aiConcurrency));
+    } catch {
+      // Ignore private browsing or storage-disabled environments.
+    }
+  }, [aiConcurrency]);
+
+  useEffect(() => {
     const readyMessages = LANGUAGE_OPTIONS.map((option) => text(option.value, "ready"));
     setStatus((current) => (readyMessages.includes(current) ? t("ready") : current));
   }, [language]);
@@ -209,7 +227,11 @@ export default function App() {
     setItems((current) =>
       current.map((item) => {
         if (!selectedIds.includes(item.id) && item.id !== id) return item;
-        return updateAmounts({ ...item, ...patch }, rates, amountSource);
+        const updated = updateAmounts({ ...item, ...patch }, rates, amountSource);
+        if (!receiptAttentionReason(updated, formVersion) && ["Empty", "Failed", "Missing date/amount"].includes(updated.status)) {
+          return { ...updated, status: updated.documentType === "payment_proof" ? "Payment proof" : "Manual filled" };
+        }
+        return updated;
       })
     );
   }
@@ -343,7 +365,7 @@ export default function App() {
         done += 1;
         setProgress(Math.round((done / total) * 100));
       };
-      await runWithConcurrency(targets, AI_REQUEST_CONCURRENCY, async (item) => {
+      await runWithConcurrency(targets, aiConcurrency, async (item) => {
         setStatus(t("readingReceipt", { filename: item.filename }));
         try {
           const extraction = await extractReceiptWithOpenAI(apiKeyValue, DEFAULT_MODEL, formVersion, item);
@@ -375,7 +397,7 @@ export default function App() {
         setItems(workingItems);
         const proofResults = new Map<string, ReceiptExtraction>();
         const failedProofIds = new Set<string>();
-        await runWithConcurrency(workingProofs, AI_REQUEST_CONCURRENCY, async (proof) => {
+        await runWithConcurrency(workingProofs, aiConcurrency, async (proof) => {
           setStatus(t("readingProof", { filename: proof.filename }));
           try {
             const tempReceipt = blankReceipt("USA", proof.image);
@@ -398,7 +420,7 @@ export default function App() {
           } catch (error) {
             failedProofIds.add(proof.id);
             failures.push(`${proof.filename}: ${error instanceof Error ? error.message : t("aiFailed")}`);
-            setProofs((current) => current.map((candidate) => (candidate.id === proof.id ? { ...candidate, status: "Needs manual review" } : candidate)));
+            setProofs((current) => current.map((candidate) => (candidate.id === proof.id ? { ...candidate, status: "Missing date/amount" } : candidate)));
           } finally {
             completeOne();
           }
@@ -414,7 +436,7 @@ export default function App() {
               status: "Needs match"
             };
           }
-          if (failedProofIds.has(candidate.id)) return { ...candidate, status: "Needs manual review" };
+          if (failedProofIds.has(candidate.id)) return { ...candidate, status: "Missing date/amount" };
           return candidate;
         });
         workingProofs = matchPaymentProofs(workingProofs, workingItems);
@@ -454,7 +476,7 @@ export default function App() {
     if (!selectedIds.length) return;
     if (!confirm(t("removeConfirm", { count: selectedIds.length }))) return;
     setItems((current) => current.filter((item) => !selectedIds.includes(item.id)));
-    setProofs((current) => current.map((proof) => (selectedIds.includes(proof.matchedReceiptId) ? { ...proof, matchedReceiptId: "", status: "Needs manual review" } : proof)));
+    setProofs((current) => current.map((proof) => (selectedIds.includes(proof.matchedReceiptId) ? { ...proof, matchedReceiptId: "", status: "Payment proof" } : proof)));
     setSelectedIds([]);
     selectionAnchorIdRef.current = null;
     setSelectedTile(null);
@@ -517,7 +539,7 @@ export default function App() {
     const newProof: PaymentProof = {
       id: uid("proof"),
       filename: image.filename,
-      status: receipt.images.length > 1 ? "Matched manually" : "Needs manual review",
+      status: receipt.images.length > 1 ? "Matched manually" : "Payment proof",
       date: receipt.date,
       amount: receipt.amount,
       place: receipt.place,
@@ -545,7 +567,7 @@ export default function App() {
       if (formVersion === "USA") {
         const unknownItems = items.filter((item) => item.documentType === "unknown");
         if (unknownItems.length) {
-          setStatus(t("unknownDocumentType", { count: unknownItems.length }));
+          setStatus(t("unknownDocumentType", { count: unknownItems.length, files: unknownItems.slice(0, 5).map((item) => item.filename).join(", ") }));
           return;
         }
         await exportUsaWorkbook(items, proofs, rates);
@@ -651,6 +673,16 @@ export default function App() {
             <option>Korea</option>
           </select>
         </label>
+        <label className="toolbar-control compact-control">
+          {t("aiBatch")}
+          <input
+            type="number"
+            min={1}
+            max={MAX_AI_REQUEST_CONCURRENCY}
+            value={aiConcurrency}
+            onChange={(event) => setAiConcurrency(clampAiConcurrency(event.target.value))}
+          />
+        </label>
         <button type="button" className={suggestedAction === "selectFiles" ? "recommended" : ""} onClick={() => receiptInputRef.current?.click()} disabled={busy}>
           <Upload size={17} /> {formVersion === "USA" ? t("selectReceipts") : t("selectFiles")}
         </button>
@@ -692,8 +724,9 @@ export default function App() {
               <button
                 type="button"
                 key={item.id}
-                className={`receipt-row ${selectedIds.includes(item.id) ? "selected" : ""}`}
+                className={`receipt-row ${selectedIds.includes(item.id) ? "selected" : ""} ${receiptAttentionReason(item, formVersion) ? "needs-attention" : ""}`}
                 onClick={(event) => selectReceiptRow(item, index, event)}
+                title={receiptAttentionReason(item, formVersion) ?? item.filename}
               >
                 <span>{item.filename}</span>
                 <span>{item.status}</span>

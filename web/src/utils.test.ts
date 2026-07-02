@@ -50,11 +50,11 @@ describe("payment proof matching", () => {
     expect(matched[0].status).toBe("Matched");
   });
 
-  it("flags ambiguous proof matches for manual review", () => {
+  it("keeps ambiguous proof matches visible without blocking export", () => {
     const matched = matchPaymentProofs([proof({ id: "p1" })], [receipt({ id: "r1" }), receipt({ id: "r2" })]);
 
     expect(matched[0].matchedReceiptId).toBe("");
-    expect(matched[0].status).toBe("Needs manual review");
+    expect(matched[0].status).toBe("Multiple possible matches");
   });
 
   it("swaps the selected payment proof manually", () => {
