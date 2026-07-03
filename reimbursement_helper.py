@@ -1579,6 +1579,25 @@ def same_expense_date_values(left: str, right: str) -> bool:
 
 
 USA_MATCH_STOP_WORDS = {
+    "all",
+    "category",
+    "central",
+    "class",
+    "date",
+    "deck",
+    "drive",
+    "entry",
+    "exit",
+    "from",
+    "information",
+    "initial",
+    "indiana",
+    "lane",
+    "lower",
+    "method",
+    "number",
+    "page",
+    "paid",
     "receipt",
     "payment",
     "proof",
@@ -1591,6 +1610,17 @@ USA_MATCH_STOP_WORDS = {
     "debit",
     "visa",
     "mastercard",
+    "road",
+    "safely",
+    "save",
+    "terminal",
+    "ticket",
+    "toll",
+    "to",
+    "transportation",
+    "using",
+    "vehicle",
+    "website",
     "jpg",
     "jpeg",
     "png",
@@ -1604,8 +1634,36 @@ def usa_match_tokens(item: "ReceiptItem") -> set[str]:
     for token in re.findall(r"[a-z0-9]+", text.lower()):
         if len(token) < 3 or token in USA_MATCH_STOP_WORDS:
             continue
+        if token.isdigit():
+            continue
+        digits = re.sub(r"\D", "", token)
+        if digits:
+            continue
         tokens.add(token)
     return tokens
+
+
+def usa_identifier_is_date_or_time(digits: str) -> bool:
+    if len(digits) == 8:
+        if digits[:4] in {"2025", "2026", "2027"} or digits[-4:] in {"2025", "2026", "2027"}:
+            return True
+    if len(digits) == 6:
+        first = int(digits[:2])
+        second = int(digits[2:4])
+        third = int(digits[4:6])
+        if first <= 23 and second <= 59 and third <= 59:
+            return True
+    return False
+
+
+def usa_identifier_tokens(item: "ReceiptItem") -> set[str]:
+    text = item_search_text(item).lower()
+    identifiers = set()
+    for token in re.findall(r"[a-z0-9]*\d[a-z0-9]*", text):
+        digits = re.sub(r"\D", "", token)
+        if len(digits) >= 5 and not usa_identifier_is_date_or_time(digits):
+            identifiers.add(token)
+    return identifiers
 
 
 def usa_amountless_receipt_match(item: "ReceiptItem", candidates: List["ReceiptItem"]) -> Optional["ReceiptItem"]:
@@ -1616,10 +1674,17 @@ def usa_amountless_receipt_match(item: "ReceiptItem", candidates: List["ReceiptI
         and safe_float(candidate.amount) is not None
         and same_expense_date_values(item.date, candidate.date)
     ]
-    if len(same_date) == 1:
-        return same_date[0]
     if not same_date:
         return None
+    item_identifiers = usa_identifier_tokens(item)
+    if item_identifiers:
+        identifier_matches = [
+            candidate
+            for candidate in same_date
+            if item_identifiers & usa_identifier_tokens(candidate)
+        ]
+        if len(identifier_matches) == 1:
+            return identifier_matches[0]
     item_tokens = usa_match_tokens(item)
     if not item_tokens:
         return None
@@ -1631,7 +1696,7 @@ def usa_amountless_receipt_match(item: "ReceiptItem", candidates: List["ReceiptI
     if not scored:
         return None
     scored.sort(key=lambda entry: entry[0], reverse=True)
-    if scored[0][0] < 2:
+    if scored[0][0] < 2 and not (scored[0][0] == 1 and len(scored) == 1):
         return None
     if len(scored) > 1 and scored[0][0] == scored[1][0]:
         return None
@@ -4313,6 +4378,38 @@ class ReimbursementHelperApp:
                     continue
                 if not page_paths:
                     failed.append(f"{path.name}: PDF has no pages")
+                    continue
+                if self.form_version.get() == "USA":
+                    for page_index, page_path in enumerate(page_paths, start=1):
+                        key = selected_file_key(page_path, str(path), str(page_index))
+                        if key in existing:
+                            continue
+                        filename = f"{path.name} page {page_index}"
+                        self.items.append(
+                            ReceiptItem(
+                                item_id=uuid.uuid4().hex,
+                                path=str(page_path),
+                                filename=filename,
+                                source_path=str(path),
+                                source_page=str(page_index),
+                                currency="USD",
+                                category="transportation",
+                                document_type="unknown",
+                                receipt_images=[
+                                    {
+                                        "id": uuid.uuid4().hex,
+                                        "path": str(page_path),
+                                        "filename": filename,
+                                        "source_path": str(path),
+                                        "source_page": str(page_index),
+                                        "crop_box": None,
+                                        "rotation_degrees": 0,
+                                    }
+                                ],
+                            )
+                        )
+                        existing.add(key)
+                        added += 1
                     continue
                 key = selected_file_key(page_paths[0], str(path), "1")
                 if key in existing:
