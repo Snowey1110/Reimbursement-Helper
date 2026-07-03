@@ -85,6 +85,8 @@ DEFAULT_USD_TO_KRW_RATE = "1548.86"
 DEFAULT_KRW_TO_RMB_RATE = "0.004433"
 PDF_RENDER_SCALE = 3
 KRW_NUMBER_FORMAT = "\u20a9#,##0"
+USA_SUPPORT_DATE_NUMBER_FORMAT = "m/d/yyyy"
+MAX_AI_RECEIPT_IMAGES = 8
 DEFAULT_AI_REQUEST_CONCURRENCY = 4
 MAX_AI_REQUEST_CONCURRENCY = 8
 LOGGER = logging.getLogger("reimbursement_helper")
@@ -955,6 +957,37 @@ def image_data_url(path: Path) -> str:
     return f"data:{image_mime_for_path(path)};base64,{base64.b64encode(raw).decode('ascii')}"
 
 
+def receipt_ai_image_parts(image_path: Path, existing: ReceiptItem) -> List[Dict[str, Any]]:
+    attachments = [attachment for attachment in (normalize_attachment(raw) for raw in existing.receipt_images) if attachment]
+    if not attachments:
+        attachments = [
+            {
+                "id": existing.item_id,
+                "path": str(image_path),
+                "filename": existing.filename or image_path.name,
+                "source_path": existing.source_path,
+                "source_page": existing.source_page,
+                "crop_box": existing.crop_box,
+                "rotation_degrees": normalize_rotation(existing.rotation_degrees),
+            }
+        ]
+    parts: List[Dict[str, Any]] = []
+    for index, attachment in enumerate(attachments[:MAX_AI_RECEIPT_IMAGES], start=1):
+        path = Path(str(attachment.get("path") or ""))
+        if not path.exists():
+            continue
+        prepared = prepare_attachment_image_file(attachment)
+        label = str(attachment.get("filename") or path.name)
+        source_page = str(attachment.get("source_page") or "").strip()
+        if source_page and f"page {source_page}" not in label.lower():
+            label = f"{label} (page {source_page})"
+        parts.append({"label": label, "path": prepared, "index": index})
+    if parts:
+        return parts
+    prepared_image = prepare_receipt_image_file(image_path, existing.crop_box, existing.rotation_degrees)
+    return [{"label": existing.filename or image_path.name, "path": prepared_image, "index": 1}]
+
+
 def extract_json_object(text: str) -> Dict[str, Any]:
     cleaned = text.strip()
     cleaned = re.sub(r"^```(?:json)?", "", cleaned, flags=re.IGNORECASE).strip()
@@ -995,15 +1028,11 @@ def call_openai_receipt_extraction(
                 pass
 
     notify("Reading receipt image")
-    prepared_image = prepare_receipt_image_file(
-        image_path,
-        existing.crop_box,
-        existing.rotation_degrees,
-    )
-    data_url = image_data_url(prepared_image)
+    image_parts = receipt_ai_image_parts(image_path, existing)
     form_hint = "USA VisionNav reimbursement form" if form_version == "USA" else "Korea VisionNav reimbursement form"
+    page_count_hint = len(image_parts)
     prompt = f"""
-Extract reimbursement fields from this receipt image for a {form_hint}.
+Extract reimbursement fields from the attached receipt image(s) for a {form_hint}.
 Return only compact JSON with these keys:
 date, place, amount, currency, krw_amount, rmb_amount, purpose, details,
 project_number, category, payment_method, receipt_label, document_type, confidence_notes.
@@ -1011,6 +1040,10 @@ project_number, category, payment_method, receipt_label, document_type, confiden
 Rules:
 - date must be yyyy-mm-dd when visible, otherwise empty string.
 - amount should be the paid total. Preserve cents when visible.
+- Some uploads are multi-page PDFs. Review all {page_count_hint} attached image(s);
+  the paid total may be on a later page, payment info panel, or receipt summary page.
+  Use the page that contains the final Total/Payment info/Paid amount. Ignore page
+  numbers, rewards points, ticket numbers, order IDs, and QR-code values.
 - For USA bank/card payment proof screenshots, date should be the Transaction date
   line and amount should be the Sale/charge amount. Ignore print/export time and
   use Posted date only when Transaction date is not present.
@@ -1033,6 +1066,10 @@ Rules:
 Current editable row values, to keep if they look more specific than the image:
 {json.dumps(asdict(existing), ensure_ascii=False)}
 """.strip()
+    user_content: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
+    for part in image_parts:
+        user_content.append({"type": "text", "text": f"Image {part['index']}: {part['label']}"})
+        user_content.append({"type": "image_url", "image_url": {"url": image_data_url(Path(part["path"]))}})
     payload = json.dumps(
         {
             "model": os.getenv("OPENAI_MODEL", DEFAULT_OPENAI_MODEL),
@@ -1046,10 +1083,7 @@ Current editable row values, to keep if they look more specific than the image:
                 },
                 {
                     "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": data_url}},
-                    ],
+                    "content": user_content,
                 },
             ],
             "temperature": 0,
@@ -3269,6 +3303,10 @@ def export_usa(
         receipts_ws[f"A{row}"] = index
         receipts_ws[f"B{row}"] = excel_date_formula_or_value(str(row_data.get("date") or ""))
         receipts_ws[f"C{row}"] = safe_float(row_data.get("amount"))
+        receipts_ws[f"B{row}"].number_format = USA_SUPPORT_DATE_NUMBER_FORMAT
+        receipts_ws[f"C{row}"].number_format = '$#,##0.00'
+        for col in ("A", "B", "C"):
+            set_cell_alignment(receipts_ws[f"{col}{row}"], horizontal="center", vertical="center")
         receipts_ws.row_dimensions[row].height = USA_SUPPORT_ROW_HEIGHT
         receipt_image = resize_attachment_contact_sheet(
             list(row_data.get("receipt_images") or []),
