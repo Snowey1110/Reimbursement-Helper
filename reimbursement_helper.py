@@ -1515,6 +1515,67 @@ def looks_like_usa_payment_proof_text(*values: Any) -> bool:
     )
 
 
+def looks_like_usa_receipt_support_text(*values: Any) -> bool:
+    text = " ".join(str(value or "") for value in values).lower()
+    if looks_like_usa_payment_proof_text(text):
+        return False
+    return bool(
+        re.search(
+            r"\b(receipt|ticket|invoice|merchant|parking|park|toll|gas|fuel|hotel|restaurant|meal|entry|exit|qr|barcode)\b",
+            text,
+        )
+    )
+
+
+def looks_like_usa_amountless_support_text(*values: Any) -> bool:
+    text = " ".join(str(value or "") for value in values).lower()
+    if looks_like_usa_payment_proof_text(text):
+        return False
+    return bool(
+        re.search(
+            r"\b(ticket|entry|exit|qr|barcode|validation|information|scan|lost ticket|parking time)\b",
+            text,
+        )
+    )
+
+
+def usa_receipt_support_without_amount(item: "ReceiptItem") -> bool:
+    if not is_usa_receipt_item(item):
+        return False
+    if safe_float(item.amount) is not None or safe_float(item.krw_amount) is not None or safe_float(item.rmb_amount) is not None:
+        return False
+    return looks_like_usa_amountless_support_text(
+        item.filename,
+        item.place,
+        item.purpose,
+        item.details,
+        item.payment_method,
+        item.receipt_label,
+    )
+
+
+def auto_classify_usa_document_type(item: "ReceiptItem", *extra_values: Any) -> None:
+    current = normalize_document_type(item.document_type, "unknown")
+    if current != "unknown":
+        item.document_type = current
+        return
+    values = (
+        item.filename,
+        item.place,
+        item.purpose,
+        item.details,
+        item.payment_method,
+        item.receipt_label,
+        *extra_values,
+    )
+    if looks_like_usa_payment_proof_text(*values):
+        item.document_type = "payment_proof"
+    elif looks_like_usa_receipt_support_text(*values):
+        item.document_type = "receipt"
+    else:
+        item.document_type = "unknown"
+
+
 def receipt_attention_reasons(item: "ReceiptItem", form_version: str) -> List[str]:
     version = normalized_form_version(form_version)
     reasons: List[str] = []
@@ -1524,7 +1585,9 @@ def receipt_attention_reasons(item: "ReceiptItem", form_version: str) -> List[st
         reasons.append("Unknown document type")
     if not item.date.strip():
         reasons.append("Missing date")
-    if not (item.amount.strip() or item.krw_amount.strip() or item.rmb_amount.strip()):
+    if not (item.amount.strip() or item.krw_amount.strip() or item.rmb_amount.strip()) and not (
+        version == "USA" and usa_receipt_support_without_amount(item)
+    ):
         reasons.append("Missing amount")
     if is_usa_receipt_item(item) or version == "Korea":
         if not (item.details.strip() or item.purpose.strip() or item.receipt_label.strip()):
@@ -1555,7 +1618,9 @@ def receipt_needs_ai(item: "ReceiptItem", form_version: str) -> bool:
     version = normalized_form_version(form_version)
     if item.status in {"Empty", "Failed", "Needs regen"}:
         return True
-    if not item.date.strip() or not item.amount.strip():
+    if not item.date.strip():
+        return True
+    if not item.amount.strip() and not (version == "USA" and usa_receipt_support_without_amount(item)):
         return True
     if version == "USA":
         document_type = normalize_document_type(item.document_type, "unknown")
@@ -1721,6 +1786,7 @@ def merge_same_usa_receipt_items(items: List["ReceiptItem"]) -> Tuple[List["Rece
     seen: Dict[Tuple[str, float], ReceiptItem] = {}
     removed_to_target: Dict[str, str] = {}
     for item in items:
+        auto_classify_usa_document_type(item)
         if not is_usa_receipt_item(item):
             merged_items.append(item)
             continue
@@ -4072,6 +4138,34 @@ class ReimbursementHelperApp:
             self.ai_concurrency.set(str(value))
         return value
 
+    def remembered_file_dialog_dir(self) -> str:
+        candidates = [
+            self.settings.get("last_file_dialog_dir"),
+            self.settings.get("last_open_dir"),
+            str(APP_DIR),
+        ]
+        for candidate in candidates:
+            if not candidate:
+                continue
+            try:
+                path = Path(str(candidate)).expanduser()
+                if path.exists() and path.is_dir():
+                    return str(path)
+            except Exception:
+                continue
+        return str(APP_DIR)
+
+    def remember_file_dialog_dir(self, paths: Sequence[Path]) -> None:
+        for path in paths:
+            try:
+                folder = path.parent if path.is_file() or path.suffix else path
+                if folder.exists() and folder.is_dir():
+                    self.settings["last_file_dialog_dir"] = str(folder)
+                    save_user_settings(self.settings)
+                    return
+            except Exception:
+                continue
+
     def _on_field_changed(self, key: str) -> None:
         if self._loading_fields or self._syncing_amounts:
             return
@@ -4492,6 +4586,7 @@ class ReimbursementHelperApp:
             return
         selected = filedialog.askopenfilenames(
             title="Select receipt files",
+            initialdir=self.remembered_file_dialog_dir(),
             filetypes=[
                 ("Receipt files", "*.png *.jpg *.jpeg *.webp *.bmp *.gif *.pdf"),
                 ("Image files", "*.png *.jpg *.jpeg *.webp *.bmp *.gif"),
@@ -4502,6 +4597,7 @@ class ReimbursementHelperApp:
         paths = [Path(path) for path in selected]
         if not paths:
             return
+        self.remember_file_dialog_dir(paths)
         self.save_current_fields()
         self._details_ready_for_export = False
         existing = {
@@ -4618,6 +4714,7 @@ class ReimbursementHelperApp:
             return
         selected = filedialog.askopenfilenames(
             title="Select payment proof files",
+            initialdir=self.remembered_file_dialog_dir(),
             filetypes=[
                 ("Payment proof files", "*.png *.jpg *.jpeg *.webp *.bmp *.gif *.pdf"),
                 ("Image files", "*.png *.jpg *.jpeg *.webp *.bmp *.gif"),
@@ -4628,6 +4725,7 @@ class ReimbursementHelperApp:
         paths = [Path(path) for path in selected]
         if not paths:
             return
+        self.remember_file_dialog_dir(paths)
         self._details_ready_for_export = False
         existing = {
             selected_file_key(Path(item.path), item.source_path, item.source_page)
@@ -4697,6 +4795,7 @@ class ReimbursementHelperApp:
             return
         selected = filedialog.askopenfilenames(
             title=self.tr("select_exchange_rate"),
+            initialdir=self.remembered_file_dialog_dir(),
             filetypes=[
                 ("Exchange rate image files", "*.png *.jpg *.jpeg *.webp *.bmp *.gif *.pdf"),
                 ("Image files", "*.png *.jpg *.jpeg *.webp *.bmp *.gif"),
@@ -4707,6 +4806,7 @@ class ReimbursementHelperApp:
         paths = [Path(path) for path in selected]
         if not paths:
             return
+        self.remember_file_dialog_dir(paths)
         self._details_ready_for_export = False
         self.exchange_rate_items.clear()
         added = 0
@@ -4808,6 +4908,14 @@ class ReimbursementHelperApp:
         self.tree.delete(*self.tree.get_children())
         for index, item in enumerate(self.items):
             attention_reason = receipt_attention_reason(item, self.form_version.get())
+            if attention_reason is None and item.status in {
+                "Missing date/amount",
+                "Missing date",
+                "Missing amount",
+                "Missing details",
+                "Missing vendor",
+            }:
+                item.status = "Payment proof" if is_usa_payment_proof_item(item) else "Manual filled"
             status_text = self.attention_reason_label(attention_reason) if attention_reason else item.status
             values = (status_text, item.date, item.amount or item.krw_amount or item.rmb_amount)
             if attention_reason == "AI failed":
@@ -6022,6 +6130,12 @@ class ReimbursementHelperApp:
         if self.form_version.get() == "USA":
             item.currency = "USD"
             item.document_type = normalize_document_type(item.document_type, "unknown")
+            auto_classify_usa_document_type(
+                item,
+                data.get("vendor"),
+                data.get("confidence_notes"),
+                data.get("document_type"),
+            )
             if item.document_type == "unknown" and looks_like_usa_payment_proof_text(
                 item.filename,
                 item.place,
@@ -6482,6 +6596,8 @@ class ReimbursementHelperApp:
             return
         form_version = self.form_version.get()
         if form_version == "USA":
+            for item in self.items:
+                auto_classify_usa_document_type(item)
             unknown_items = [
                 item
                 for item in self.items
