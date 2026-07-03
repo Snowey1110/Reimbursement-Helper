@@ -554,6 +554,10 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "clear": "Clear",
         "details": "Details",
         "receipt_preview": "Receipt preview",
+        "receipt_screenshots": "Receipt screenshots",
+        "payment_proof_section": "Payment proof",
+        "zoom_in": "Zoom in",
+        "zoom_out": "Zoom out",
         "rotate_left": "Rotate left",
         "rotate_right": "Rotate right",
         "revert": "Revert",
@@ -623,6 +627,10 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "clear": "\u6e05\u7a7a",
         "details": "\u660e\u7ec6",
         "receipt_preview": "\u53d1\u7968\u9884\u89c8",
+        "receipt_screenshots": "\u53d1\u7968\u622a\u56fe",
+        "payment_proof_section": "\u4ed8\u6b3e\u51ed\u8bc1",
+        "zoom_in": "\u653e\u5927",
+        "zoom_out": "\u7f29\u5c0f",
         "rotate_left": "\u5411\u5de6\u65cb\u8f6c",
         "rotate_right": "\u5411\u53f3\u65cb\u8f6c",
         "revert": "\u8fd8\u539f",
@@ -692,6 +700,10 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "clear": "\ucd08\uae30\ud654",
         "details": "\uc138\ubd80 \uc815\ubcf4",
         "receipt_preview": "\uc601\uc218\uc99d \ubbf8\ub9ac\ubcf4\uae30",
+        "receipt_screenshots": "\uc601\uc218\uc99d \uc2a4\ud06c\ub9b0\uc0f7",
+        "payment_proof_section": "\uacb0\uc81c \uc99d\ube59",
+        "zoom_in": "\ud655\ub300",
+        "zoom_out": "\ucd95\uc18c",
         "rotate_left": "\uc67c\ucabd \ud68c\uc804",
         "rotate_right": "\uc624\ub978\ucabd \ud68c\uc804",
         "revert": "\ub418\ub3cc\ub9ac\uae30",
@@ -2151,6 +2163,26 @@ def resize_excel_image(
     return img
 
 
+def attachment_group_filename(item: ReceiptItem, attachments: List[Dict[str, Any]]) -> str:
+    if not attachments:
+        return item.filename
+    source_paths = {
+        str(attachment.get("source_path") or "").strip()
+        for attachment in attachments
+        if str(attachment.get("source_path") or "").strip()
+    }
+    if len(source_paths) == 1:
+        source_path = next(iter(source_paths))
+        if source_path.lower().endswith(".pdf"):
+            page_count = len(attachments)
+            source_name = Path(source_path).name
+            if page_count > 1:
+                return f"{source_name} ({page_count} pages)"
+            source_page = str(attachments[0].get("source_page") or "").strip()
+            return f"{source_name} page {source_page or '1'}"
+    return str(attachments[0].get("filename") or item.filename or Path(str(attachments[0].get("path") or "")).name)
+
+
 def ensure_receipt_images(item: ReceiptItem) -> List[Dict[str, Any]]:
     normalized = [attachment for attachment in (normalize_attachment(raw) for raw in item.receipt_images) if attachment]
     if not normalized and item.path:
@@ -2159,7 +2191,7 @@ def ensure_receipt_images(item: ReceiptItem) -> List[Dict[str, Any]]:
     if normalized:
         primary = normalized[0]
         item.path = primary["path"]
-        item.filename = primary["filename"]
+        item.filename = attachment_group_filename(item, normalized)
         item.source_path = primary.get("source_path", "")
         item.source_page = primary.get("source_page", "")
         item.crop_box = primary.get("crop_box")
@@ -3328,6 +3360,9 @@ class ReimbursementHelperApp:
         self.photo: Optional[Any] = None
         self.preview_canvas: Optional[Any] = None
         self.revert_crop_btn: Optional[Any] = None
+        self.zoom_out_btn: Optional[Any] = None
+        self.zoom_in_btn: Optional[Any] = None
+        self.zoom_label: Optional[Any] = None
         self.rotate_left_btn: Optional[Any] = None
         self.rotate_right_btn: Optional[Any] = None
         self.delete_screenshot_btn: Optional[Any] = None
@@ -3361,6 +3396,7 @@ class ReimbursementHelperApp:
         self.usd_to_krw_rate = tk.StringVar(value=str(self.settings.get("usd_to_krw_rate", DEFAULT_USD_TO_KRW_RATE)))
         self.krw_to_rmb_rate = tk.StringVar(value=str(self.settings.get("krw_to_rmb_rate", DEFAULT_KRW_TO_RMB_RATE)))
         self.ai_concurrency = tk.StringVar(value=str(clamp_ai_concurrency(self.settings.get("ai_concurrency", DEFAULT_AI_REQUEST_CONCURRENCY))))
+        self.preview_zoom = tk.DoubleVar(value=1.0)
         self.status_text = tk.StringVar(value=self.tr("ready"))
         self.progress_text = tk.StringVar(value="")
         self.progress_value = tk.DoubleVar(value=0)
@@ -3733,6 +3769,26 @@ class ReimbursementHelperApp:
         preview_header.grid_columnconfigure(0, weight=1)
         self.preview_label = ttk.Label(preview_header, text=self.tr("receipt_preview"), style="PanelHeader.TLabel")
         self.preview_label.grid(row=0, column=0, sticky="w")
+        self.zoom_out_btn = ttk.Button(
+            preview_header,
+            text="-",
+            command=lambda: self.zoom_preview(-1),
+            state="disabled",
+            style="Icon.TButton",
+        )
+        self.zoom_out_btn.grid(row=0, column=1, sticky="e", padx=(0, 6))
+        ToolTip(self.zoom_out_btn, self.tr("zoom_out"))
+        self.zoom_label = ttk.Label(preview_header, text="100%", style="Muted.TLabel", width=5, anchor="center")
+        self.zoom_label.grid(row=0, column=2, sticky="e", padx=(0, 6))
+        self.zoom_in_btn = ttk.Button(
+            preview_header,
+            text="+",
+            command=lambda: self.zoom_preview(1),
+            state="disabled",
+            style="Icon.TButton",
+        )
+        self.zoom_in_btn.grid(row=0, column=3, sticky="e", padx=(0, 6))
+        ToolTip(self.zoom_in_btn, self.tr("zoom_in"))
         self.rotate_left_btn = ttk.Button(
             preview_header,
             text="\u27F2",
@@ -3740,7 +3796,7 @@ class ReimbursementHelperApp:
             state="disabled",
             style="Icon.TButton",
         )
-        self.rotate_left_btn.grid(row=0, column=1, sticky="e", padx=(0, 6))
+        self.rotate_left_btn.grid(row=0, column=4, sticky="e", padx=(0, 6))
         ToolTip(self.rotate_left_btn, self.tr("rotate_left"))
         self.rotate_right_btn = ttk.Button(
             preview_header,
@@ -3749,7 +3805,7 @@ class ReimbursementHelperApp:
             state="disabled",
             style="Icon.TButton",
         )
-        self.rotate_right_btn.grid(row=0, column=2, sticky="e", padx=(0, 6))
+        self.rotate_right_btn.grid(row=0, column=5, sticky="e", padx=(0, 6))
         ToolTip(self.rotate_right_btn, self.tr("rotate_right"))
         self.revert_crop_btn = ttk.Button(
             preview_header,
@@ -3757,7 +3813,7 @@ class ReimbursementHelperApp:
             command=self.revert_crop,
             state="disabled",
         )
-        self.revert_crop_btn.grid(row=0, column=3, sticky="e")
+        self.revert_crop_btn.grid(row=0, column=6, sticky="e")
         ToolTip(self.revert_crop_btn, self.tr("revert"))
         self.delete_screenshot_btn = ttk.Button(
             preview_header,
@@ -3766,7 +3822,7 @@ class ReimbursementHelperApp:
             state="disabled",
             style="Icon.TButton",
         )
-        self.delete_screenshot_btn.grid(row=0, column=4, sticky="e", padx=(6, 0))
+        self.delete_screenshot_btn.grid(row=0, column=7, sticky="e", padx=(6, 0))
         ToolTip(self.delete_screenshot_btn, self.tr("delete_screenshot"))
         preview_frame = ttk.Frame(right, style="Panel.TFrame")
         preview_frame.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
@@ -3781,10 +3837,19 @@ class ReimbursementHelperApp:
             relief="solid",
         )
         self.preview_canvas.grid(row=0, column=0, sticky="nsew")
+        preview_v_scroll = ttk.Scrollbar(preview_frame, orient="vertical", command=self.preview_canvas.yview)
+        preview_v_scroll.grid(row=0, column=1, sticky="ns")
+        preview_h_scroll = ttk.Scrollbar(preview_frame, orient="horizontal", command=self.preview_canvas.xview)
+        preview_h_scroll.grid(row=1, column=0, sticky="ew")
+        self.preview_canvas.configure(
+            yscrollcommand=preview_v_scroll.set,
+            xscrollcommand=preview_h_scroll.set,
+        )
         self.preview_canvas.bind("<Configure>", lambda _event: self.update_preview())
         self.preview_canvas.bind("<ButtonPress-1>", self._on_crop_press)
         self.preview_canvas.bind("<B1-Motion>", self._on_crop_drag)
         self.preview_canvas.bind("<ButtonRelease-1>", self._on_crop_release)
+        self.preview_canvas.bind("<MouseWheel>", self._on_preview_mousewheel)
 
         footer = ttk.Frame(self.root, padding=(18, 0, 18, 12))
         footer.pack(fill="x")
@@ -4066,6 +4131,48 @@ class ReimbursementHelperApp:
             self._syncing_amounts = False
         if should_save:
             self._save_amount_fields_to_selected(changed_key, refresh=True)
+
+    def preview_zoom_value(self) -> float:
+        try:
+            value = float(self.preview_zoom.get())
+        except Exception:
+            value = 1.0
+        return max(0.5, min(3.0, value))
+
+    def update_zoom_label(self) -> None:
+        if self.zoom_label is not None:
+            self.zoom_label.configure(text=f"{int(round(self.preview_zoom_value() * 100))}%")
+
+    def set_preview_zoom(self, value: float) -> None:
+        old_value = self.preview_zoom_value()
+        new_value = max(0.5, min(3.0, value))
+        if abs(old_value - new_value) < 0.001:
+            return
+        self.preview_zoom.set(new_value)
+        self.update_zoom_label()
+        self.update_preview()
+
+    def zoom_preview(self, direction: int) -> None:
+        factor = 1.25 if direction > 0 else 0.8
+        self.set_preview_zoom(self.preview_zoom_value() * factor)
+
+    def preview_event_coords(self, event: Any) -> Tuple[float, float]:
+        if self.preview_canvas is None:
+            return float(getattr(event, "x", 0)), float(getattr(event, "y", 0))
+        return (
+            float(self.preview_canvas.canvasx(getattr(event, "x", 0))),
+            float(self.preview_canvas.canvasy(getattr(event, "y", 0))),
+        )
+
+    def _on_preview_mousewheel(self, event: Any) -> str:
+        if self.preview_canvas is None:
+            return "break"
+        if getattr(event, "state", 0) & 0x0004:
+            self.zoom_preview(1 if getattr(event, "delta", 0) > 0 else -1)
+            return "break"
+        units = -1 * int(getattr(event, "delta", 0) / 120)
+        self.preview_canvas.yview_scroll(units, "units")
+        return "break"
 
     def update_item_amount_fields(self, item: ReceiptItem, source: str = "amount") -> None:
         version = self.form_version.get()
@@ -4378,38 +4485,6 @@ class ReimbursementHelperApp:
                     continue
                 if not page_paths:
                     failed.append(f"{path.name}: PDF has no pages")
-                    continue
-                if self.form_version.get() == "USA":
-                    for page_index, page_path in enumerate(page_paths, start=1):
-                        key = selected_file_key(page_path, str(path), str(page_index))
-                        if key in existing:
-                            continue
-                        filename = f"{path.name} page {page_index}"
-                        self.items.append(
-                            ReceiptItem(
-                                item_id=uuid.uuid4().hex,
-                                path=str(page_path),
-                                filename=filename,
-                                source_path=str(path),
-                                source_page=str(page_index),
-                                currency="USD",
-                                category="transportation",
-                                document_type="unknown",
-                                receipt_images=[
-                                    {
-                                        "id": uuid.uuid4().hex,
-                                        "path": str(page_path),
-                                        "filename": filename,
-                                        "source_path": str(path),
-                                        "source_page": str(page_index),
-                                        "crop_box": None,
-                                        "rotation_degrees": 0,
-                                    }
-                                ],
-                            )
-                        )
-                        existing.add(key)
-                        added += 1
                     continue
                 key = selected_file_key(page_paths[0], str(path), "1")
                 if key in existing:
@@ -5006,6 +5081,7 @@ class ReimbursementHelperApp:
             width=max(160, width - 30),
             justify="center",
         )
+        self.preview_canvas.configure(scrollregion=(0, 0, width, height))
         self.photo = None
         self.preview_photos = []
         self.preview_tiles = []
@@ -5026,6 +5102,11 @@ class ReimbursementHelperApp:
             self.rotate_right_btn.configure(state="disabled")
         if self.delete_screenshot_btn is not None:
             self.delete_screenshot_btn.configure(state="disabled")
+        if self.zoom_out_btn is not None:
+            self.zoom_out_btn.configure(state="disabled")
+        if self.zoom_in_btn is not None:
+            self.zoom_in_btn.configure(state="disabled")
+        self.update_zoom_label()
         if self.swap_proof_btn is not None:
             self.swap_proof_btn.configure(state="disabled")
         if self.unlink_proof_btn is not None:
@@ -5113,7 +5194,7 @@ class ReimbursementHelperApp:
             return
         receipt = self.selected_item()
         if receipt is None:
-            self.clear_preview("Select receipt image or PDF files to begin.")
+            self.clear_preview(self.tr("select_receipt_prompt"))
             return
         if Image is None or ImageTk is None:
             self.clear_preview("Image preview is unavailable. Install Pillow from requirements.txt.")
@@ -5130,6 +5211,9 @@ class ReimbursementHelperApp:
             self.selected_attachment_index = 0
         canvas_w = max(240, self.preview_canvas.winfo_width())
         canvas_h = max(240, self.preview_canvas.winfo_height())
+        zoom = self.preview_zoom_value()
+        layout_w = max(canvas_w, int(canvas_w * zoom))
+        layout_h = max(canvas_h, int(canvas_h * zoom))
         self.preview_canvas.delete("all")
         self.preview_photos = []
         self.preview_tiles = []
@@ -5142,36 +5226,36 @@ class ReimbursementHelperApp:
         try:
             if show_payment_proof:
                 gap = 46
-                left_w = max(120, int((canvas_w - gap) * 0.56))
-                right_w = max(100, canvas_w - left_w - gap)
+                left_w = max(120, int((layout_w - gap) * 0.56))
+                right_w = max(100, layout_w - left_w - gap)
                 proof_x = left_w + gap
-                self.proof_drop_region = (proof_x, 0, canvas_w, canvas_h)
+                self.proof_drop_region = (proof_x, 0, layout_w, layout_h)
                 self.draw_preview_section(
-                    "Receipt screenshots",
+                    self.tr("receipt_screenshots"),
                     0,
                     0,
                     left_w,
-                    canvas_h,
+                    layout_h,
                     receipt_images,
                     "receipt",
                 )
                 self.draw_preview_section(
-                    "Payment proof",
+                    self.tr("payment_proof_section"),
                     proof_x,
                     0,
                     right_w,
-                    canvas_h,
+                    layout_h,
                     proof_items,
                     "proof",
                 )
-                self.draw_preview_actions(left_w, gap, canvas_h)
+                self.draw_preview_actions(left_w, gap, layout_h)
             else:
                 self.draw_preview_section(
-                    "Receipt screenshots",
+                    self.tr("receipt_screenshots"),
                     0,
                     0,
-                    canvas_w,
-                    canvas_h,
+                    layout_w,
+                    layout_h,
                     receipt_images,
                     "receipt",
                 )
@@ -5180,6 +5264,18 @@ class ReimbursementHelperApp:
                 self.selected_attachment_kind = str(first_tile.get("kind") or "receipt")
                 self.selected_attachment_index = int(first_tile.get("index") or 0)
             self.draw_crop_overlay()
+            bbox = self.preview_canvas.bbox("all")
+            if bbox:
+                self.preview_canvas.configure(
+                    scrollregion=(
+                        0,
+                        0,
+                        max(layout_w, int(bbox[2]) + 12),
+                        max(layout_h, int(bbox[3]) + 12),
+                    )
+                )
+            else:
+                self.preview_canvas.configure(scrollregion=(0, 0, layout_w, layout_h))
             self.update_preview_buttons()
         except Exception as exc:
             log_exception("Receipt preview failed")
@@ -5218,7 +5314,13 @@ class ReimbursementHelperApp:
                 justify="center",
             )
             return
-        columns = 1 if width < 360 or len(entries) == 1 else 2
+        pdf_source_paths = {
+            str(entry.get("source_path") or "").strip().lower()
+            for entry in entries
+            if kind != "proof" and isinstance(entry, dict) and str(entry.get("source_path") or "").strip().lower().endswith(".pdf")
+        }
+        stack_pdf_pages = kind != "proof" and len(entries) > 1 and len(pdf_source_paths) == 1
+        columns = 1 if width < 360 or len(entries) == 1 or stack_pdf_pages else 2
         rows = max(1, (len(entries) + columns - 1) // columns)
         gap = 10
         top = y + 34
@@ -5368,6 +5470,11 @@ class ReimbursementHelperApp:
         state = "normal" if has_tile else "disabled"
         if not has_tile and self.revert_crop_btn is not None:
             self.revert_crop_btn.configure(state="disabled")
+        if self.zoom_out_btn is not None:
+            self.zoom_out_btn.configure(state=state)
+        if self.zoom_in_btn is not None:
+            self.zoom_in_btn.configure(state=state)
+        self.update_zoom_label()
         if self.rotate_left_btn is not None:
             self.rotate_left_btn.configure(state=state)
         if self.rotate_right_btn is not None:
@@ -5472,15 +5579,16 @@ class ReimbursementHelperApp:
     def _on_crop_press(self, event: Any) -> None:
         self._pressed_preview_tile = None
         self._dragging_preview_tile = None
-        self._drag_start = (event.x, event.y)
+        x, y = self.preview_event_coords(event)
+        self._drag_start = (int(x), int(y))
         if self._drag_outline_id is not None and self.preview_canvas is not None:
             self.preview_canvas.delete(self._drag_outline_id)
             self._drag_outline_id = None
-        action = self.preview_action_at(event.x, event.y)
+        action = self.preview_action_at(x, y)
         if action is not None:
             self.run_preview_action(action)
             return
-        tile = self.preview_tile_at(event.x, event.y)
+        tile = self.preview_tile_at(x, y)
         if tile is not None:
             kind = str(tile.get("kind") or "receipt")
             index = int(tile.get("index") or 0)
@@ -5490,18 +5598,19 @@ class ReimbursementHelperApp:
                 self.update_preview()
                 tile = self.selected_preview_tile()
             self._pressed_preview_tile = tile
-        self._dragging_crop_handle = self.nearest_crop_handle(event.x, event.y)
+        self._dragging_crop_handle = self.nearest_crop_handle(x, y)
         if self._dragging_crop_handle is not None:
             self._pressed_preview_tile = None
 
     def _on_crop_drag(self, event: Any) -> None:
         handle = self._dragging_crop_handle
         original_w, original_h = self._preview_original_size
+        x, y = self.preview_event_coords(event)
         if handle is None and self._pressed_preview_tile is not None:
             if self.form_version.get() != "USA" or self._pressed_preview_tile.get("kind") != "receipt":
                 return
-            dx = event.x - self._drag_start[0]
-            dy = event.y - self._drag_start[1]
+            dx = x - self._drag_start[0]
+            dy = y - self._drag_start[1]
             if self._dragging_preview_tile is None and (dx * dx + dy * dy) < 64:
                 return
             self._dragging_preview_tile = self._pressed_preview_tile
@@ -5511,14 +5620,14 @@ class ReimbursementHelperApp:
                 left, top, right, bottom = self._dragging_preview_tile.get("bbox", (0, 0, 0, 0))
                 width = right - left
                 height = bottom - top
-                x1 = int(event.x - width / 2)
-                y1 = int(event.y - height / 2)
+                x1 = int(x - width / 2)
+                y1 = int(y - height / 2)
                 self._drag_outline_id = self.preview_canvas.create_rectangle(
                     x1,
                     y1,
                     x1 + width,
                     y1 + height,
-                    outline="#2563EB" if self.point_in_proof_drop_region(event.x, event.y) else "#64748B",
+                    outline="#2563EB" if self.point_in_proof_drop_region(x, y) else "#64748B",
                     dash=(5, 4),
                     width=2,
                 )
@@ -5528,7 +5637,7 @@ class ReimbursementHelperApp:
         if self.selected_image_state() is None or handle is None or original_w <= 0 or original_h <= 0:
             return
         points = self.current_preview_crop_points()
-        x, y = self.canvas_to_original(event.x, event.y)
+        x, y = self.canvas_to_original(x, y)
         handle_indexes = {"nw": 0, "ne": 1, "se": 2, "sw": 3}
         points[handle_indexes[handle]] = (x, y)
         state = self.selected_image_state()
@@ -5537,9 +5646,10 @@ class ReimbursementHelperApp:
         self.draw_crop_overlay()
 
     def _on_crop_release(self, event: Any) -> None:
+        x, y = self.preview_event_coords(event)
         if self._dragging_preview_tile is not None:
             tile = self._dragging_preview_tile
-            dropped = self.point_in_proof_drop_region(event.x, event.y)
+            dropped = self.point_in_proof_drop_region(x, y)
             if self._drag_outline_id is not None and self.preview_canvas is not None:
                 self.preview_canvas.delete(self._drag_outline_id)
             self._drag_outline_id = None
