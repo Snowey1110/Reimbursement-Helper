@@ -89,6 +89,8 @@ DEFAULT_AI_REQUEST_CONCURRENCY = 4
 MAX_AI_REQUEST_CONCURRENCY = 8
 LOGGER = logging.getLogger("reimbursement_helper")
 ExportProgressCallback = Callable[[int, int, str], None]
+EXCEL_CONTACT_SHEET_CACHE: Dict[Tuple[Any, ...], Path] = {}
+EXCEL_CONTACT_SHEET_CACHE_LOCK = threading.Lock()
 
 
 USA_TEMPLATE_NAME = "usa_expense_report_template.xlsx"
@@ -2453,6 +2455,87 @@ def compact_vertical_whitespace(image: Any, padding: int = 10, gap: int = 12) ->
     return compacted
 
 
+def attachment_contact_sheet_token(attachment: Dict[str, Any]) -> Optional[Tuple[Any, ...]]:
+    normalized = normalize_attachment(attachment)
+    if not normalized:
+        return None
+    path = Path(str(normalized.get("path") or ""))
+    try:
+        resolved_path = str(path.resolve()).lower()
+    except Exception:
+        resolved_path = str(path).lower()
+    try:
+        stat = path.stat()
+        file_state: Tuple[Any, ...] = (stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        file_state = (None, None)
+    crop_box = normalized.get("crop_box")
+    crop_token: Optional[Tuple[float, ...]] = None
+    if isinstance(crop_box, (list, tuple)):
+        try:
+            crop_token = tuple(round(float(value), 4) for value in crop_box)
+        except (TypeError, ValueError):
+            crop_token = None
+    return (
+        resolved_path,
+        file_state,
+        str(normalized.get("source_path") or "").lower(),
+        str(normalized.get("source_page") or ""),
+        crop_token,
+        normalize_rotation(normalized.get("rotation_degrees", 0)),
+    )
+
+
+def attachment_contact_sheet_cache_key(
+    attachments: List[Dict[str, Any]],
+    max_width: int,
+    max_height: int,
+    allow_upscale: bool,
+    stretch_tiles: bool,
+    trim_whitespace: bool,
+    compact_whitespace: bool,
+    max_columns: int,
+) -> Optional[Tuple[Any, ...]]:
+    tokens = [attachment_contact_sheet_token(attachment) for attachment in attachments]
+    if not tokens or any(token is None for token in tokens):
+        return None
+    return (
+        "contact-sheet",
+        tuple(tokens),
+        int(max_width),
+        int(max_height),
+        bool(allow_upscale),
+        bool(stretch_tiles),
+        bool(trim_whitespace),
+        bool(compact_whitespace),
+        int(max_columns),
+        EXCEL_IMAGE_RENDER_SCALE,
+        EXCEL_IMAGE_JPEG_QUALITY,
+    )
+
+
+def get_cached_contact_sheet(cache_key: Optional[Tuple[Any, ...]]) -> Optional[Path]:
+    if cache_key is None:
+        return None
+    with EXCEL_CONTACT_SHEET_CACHE_LOCK:
+        cached = EXCEL_CONTACT_SHEET_CACHE.get(cache_key)
+    if cached is None:
+        return None
+    if cached.exists():
+        return cached
+    with EXCEL_CONTACT_SHEET_CACHE_LOCK:
+        if EXCEL_CONTACT_SHEET_CACHE.get(cache_key) == cached:
+            EXCEL_CONTACT_SHEET_CACHE.pop(cache_key, None)
+    return None
+
+
+def remember_contact_sheet(cache_key: Optional[Tuple[Any, ...]], path: Optional[Path]) -> Optional[Path]:
+    if cache_key is not None and path is not None:
+        with EXCEL_CONTACT_SHEET_CACHE_LOCK:
+            EXCEL_CONTACT_SHEET_CACHE[cache_key] = path
+    return path
+
+
 def prepare_attachment_contact_sheet(
     attachments: List[Dict[str, Any]],
     max_width: int,
@@ -2468,8 +2551,21 @@ def prepare_attachment_contact_sheet(
     normalized = [attachment for attachment in (normalize_attachment(raw) for raw in attachments) if attachment]
     if not normalized:
         return None
+    cache_key = attachment_contact_sheet_cache_key(
+        normalized,
+        max_width,
+        max_height,
+        allow_upscale,
+        stretch_tiles,
+        trim_whitespace,
+        compact_whitespace,
+        max_columns,
+    )
+    cached = get_cached_contact_sheet(cache_key)
+    if cached is not None:
+        return cached
     if len(normalized) == 1 and not allow_upscale:
-        return prepare_attachment_image_file(normalized[0])
+        return remember_contact_sheet(cache_key, prepare_attachment_image_file(normalized[0]))
     target_dir = WORK_DIR / "prepared_images"
     target_dir.mkdir(parents=True, exist_ok=True)
     prepared_images = []
@@ -2505,7 +2601,7 @@ def prepare_attachment_contact_sheet(
         resampling = getattr(Image, "Resampling", None)
         resample = getattr(resampling, "LANCZOS", getattr(Image, "LANCZOS", Image.BICUBIC))
         resized = source.resize((max(1, int(source.width * scale)), max(1, int(source.height * scale))), resample)
-        return save_excel_ready_image(resized, target_dir)
+        return remember_contact_sheet(cache_key, save_excel_ready_image(resized, target_dir))
     if max_columns == 1 and compact_whitespace and not stretch_tiles:
         render_scale = 2 if allow_upscale else 1
         render_width = max(1, int(max_width * render_scale))
@@ -2527,7 +2623,7 @@ def prepare_attachment_contact_sheet(
             y += tile.height
             if index < len(resized_tiles) - 1:
                 y += gutter
-        return save_excel_ready_image(sheet, target_dir)
+        return remember_contact_sheet(cache_key, save_excel_ready_image(sheet, target_dir))
     cols = max(1, min(max_columns, len(prepared_images)))
     rows = (len(prepared_images) + cols - 1) // cols
     render_scale = 2 if allow_upscale else 1
@@ -2555,7 +2651,7 @@ def prepare_attachment_contact_sheet(
         x = col * (cell_width + gutter) + max(0, (cell_width - tile.width) // 2)
         y = row * (cell_height + gutter) + max(0, (cell_height - tile.height) // 2)
         sheet.paste(tile, (x, y))
-    return save_excel_ready_image(sheet, target_dir)
+    return remember_contact_sheet(cache_key, save_excel_ready_image(sheet, target_dir))
 
 
 def resize_attachment_contact_sheet(
@@ -2589,6 +2685,31 @@ def resize_attachment_contact_sheet(
     img.width = max(1, int(width * scale))
     img.height = max(1, int(height * scale))
     return img
+
+
+def prewarm_attachment_contact_sheet(
+    attachments: List[Dict[str, Any]],
+    max_width: int,
+    max_height: int,
+    allow_upscale: bool = False,
+    stretch_tiles: bool = False,
+    trim_whitespace: bool = False,
+    compact_whitespace: bool = False,
+    max_columns: int = 2,
+) -> None:
+    try:
+        prepare_attachment_contact_sheet(
+            attachments,
+            max_width,
+            max_height,
+            allow_upscale,
+            stretch_tiles,
+            trim_whitespace,
+            compact_whitespace,
+            max_columns,
+        )
+    except Exception:
+        LOGGER.debug("Background Excel image preparation failed.", exc_info=True)
 
 
 def add_xl_image_with_padding(sheet: Any, image: Any, cell_ref: str, padding_px: int = 0) -> None:
@@ -3558,6 +3679,10 @@ class ReimbursementHelperApp:
         self._busy = False
         self._ai_cancel_event: Optional[threading.Event] = None
         self._details_ready_for_export = False
+        self._excel_prewarm_executor = ThreadPoolExecutor(max_workers=2)
+        self._excel_prewarm_futures: List[Any] = []
+        self._excel_prewarm_keys: set = set()
+        self._excel_prewarm_lock = threading.Lock()
         self.last_generated_output_path: Optional[Path] = None
         self._build_ui()
         self._attach_amount_traces()
@@ -6238,6 +6363,138 @@ class ReimbursementHelperApp:
             self.selected_index = max(0, len(self.items) - 1) if self.items else None
         return merged_count
 
+    def _submit_excel_image_prewarm(
+        self,
+        attachments: List[Dict[str, Any]],
+        max_width: int,
+        max_height: int,
+        allow_upscale: bool = False,
+        stretch_tiles: bool = False,
+        trim_whitespace: bool = False,
+        compact_whitespace: bool = False,
+        max_columns: int = 2,
+    ) -> None:
+        if Image is None:
+            return
+        normalized = [copy.deepcopy(attachment) for attachment in (normalize_attachment(raw) for raw in attachments) if attachment]
+        if not normalized:
+            return
+        cache_key = attachment_contact_sheet_cache_key(
+            normalized,
+            max_width,
+            max_height,
+            allow_upscale,
+            stretch_tiles,
+            trim_whitespace,
+            compact_whitespace,
+            max_columns,
+        )
+        if get_cached_contact_sheet(cache_key) is not None:
+            return
+        with self._excel_prewarm_lock:
+            self._excel_prewarm_futures = [pending for pending in self._excel_prewarm_futures if not pending.done()]
+            if cache_key is not None and cache_key in self._excel_prewarm_keys:
+                return
+            if cache_key is not None:
+                self._excel_prewarm_keys.add(cache_key)
+        try:
+            future = self._excel_prewarm_executor.submit(
+                prewarm_attachment_contact_sheet,
+                normalized,
+                max_width,
+                max_height,
+                allow_upscale,
+                stretch_tiles,
+                trim_whitespace,
+                compact_whitespace,
+                max_columns,
+            )
+        except RuntimeError:
+            if cache_key is not None:
+                with self._excel_prewarm_lock:
+                    self._excel_prewarm_keys.discard(cache_key)
+            return
+        if cache_key is not None:
+            def clear_prewarm_key(_future: Any, key: Tuple[Any, ...] = cache_key) -> None:
+                with self._excel_prewarm_lock:
+                    self._excel_prewarm_keys.discard(key)
+            future.add_done_callback(clear_prewarm_key)
+        with self._excel_prewarm_lock:
+            self._excel_prewarm_futures.append(future)
+
+    def _queue_usa_report_row_prewarm(self, row_data: Dict[str, Any]) -> None:
+        image_padding = USA_SUPPORT_IMAGE_PADDING_PX
+        receipt_image_width = max(1, USA_RECEIPT_IMAGE_MAX_WIDTH - image_padding * 2)
+        receipt_image_height = max(1, USA_RECEIPT_IMAGE_MAX_HEIGHT - image_padding * 2)
+        proof_image_width = max(1, USA_PROOF_IMAGE_MAX_WIDTH - image_padding * 2)
+        proof_image_height = max(1, USA_PROOF_IMAGE_MAX_HEIGHT - image_padding * 2)
+        receipt_images = list(row_data.get("receipt_images") or [])
+        if receipt_images:
+            self._submit_excel_image_prewarm(
+                receipt_images,
+                receipt_image_width,
+                receipt_image_height,
+                allow_upscale=True,
+            )
+        proof_images = list(row_data.get("proof_images") or [])
+        if proof_images:
+            self._submit_excel_image_prewarm(
+                proof_images,
+                proof_image_width,
+                proof_image_height,
+                allow_upscale=True,
+                trim_whitespace=True,
+                compact_whitespace=True,
+                max_columns=1,
+            )
+
+    def _queue_korea_receipt_block_prewarm(self, block: Dict[str, Any]) -> None:
+        attachments = list(block.get("attachments") or [])
+        if not attachments:
+            return
+        mode = str(block.get("mode") or "half")
+        slot = korea_receipt_slot(0, wide=mode == "wide", full_page=mode == "full")
+        self._submit_excel_image_prewarm(
+            attachments,
+            int(slot["max_width"]),
+            int(slot["max_height"]),
+            allow_upscale=True,
+            stretch_tiles=bool(block.get("stretch_tiles", False)),
+        )
+
+    def queue_excel_image_prewarm_for_item(self, item: ReceiptItem, form_version: Optional[str] = None) -> None:
+        form = normalized_form_version(form_version or self.form_version.get())
+        item_snapshot = copy.deepcopy(item)
+        if form == "USA":
+            attachments = ensure_receipt_images(item_snapshot)
+            if not attachments:
+                return
+            if is_usa_payment_proof_item(item_snapshot):
+                self._queue_usa_report_row_prewarm({"receipt_images": [], "proof_images": attachments})
+            elif is_usa_receipt_item(item_snapshot):
+                self._queue_usa_report_row_prewarm({"receipt_images": attachments, "proof_images": []})
+            return
+        for block in build_korea_receipt_blocks([item_snapshot], []):
+            self._queue_korea_receipt_block_prewarm(block)
+
+    def queue_excel_image_prewarm_for_bank_item(self, bank_item: BankStatementItem) -> None:
+        self._queue_usa_report_row_prewarm({"receipt_images": [], "proof_images": [attachment_from_item(bank_item)]})
+
+    def queue_excel_export_prewarm(self, form_version: Optional[str] = None) -> None:
+        form = normalized_form_version(form_version or self.form_version.get())
+        try:
+            if form == "USA":
+                report_rows = build_usa_report_rows(copy.deepcopy(self.items), copy.deepcopy(self.bank_items))
+                for row_data in report_rows:
+                    self._queue_usa_report_row_prewarm(row_data)
+            else:
+                sorted_items = sort_receipts_for_report(copy.deepcopy(self.items), "Korea")
+                exchange_rate_attachments = [attachment_from_item(item) for item in copy.deepcopy(self.exchange_rate_items)]
+                for block in build_korea_receipt_blocks(sorted_items, exchange_rate_attachments):
+                    self._queue_korea_receipt_block_prewarm(block)
+        except Exception:
+            LOGGER.debug("Could not queue background Excel image preparation.", exc_info=True)
+
     def generate_empty_details(self) -> None:
         self.save_current_fields()
         items = [item for item in self.items if receipt_needs_ai(item, self.form_version.get())]
@@ -6339,6 +6596,7 @@ class ReimbursementHelperApp:
                         )
                         return cancelled_result
                     self.apply_ai_data_to_item(item, data)
+                    self.queue_excel_image_prewarm_for_item(item, form_version)
                     self.move_item_to_processed(item)
                     done = next_done()
                     self.root.after(
@@ -6382,6 +6640,9 @@ class ReimbursementHelperApp:
                 if merged_count:
                     self.root.after(0, self.refresh_tree)
                     self.set_status(f"Merged {merged_count} duplicate receipt screenshot(s).")
+                self.queue_excel_export_prewarm(form_version)
+            elif form_version == "Korea" and not cancel_event.is_set():
+                self.queue_excel_export_prewarm(form_version)
             def process_bank_proof(index: int, bank_item: BankStatementItem) -> Optional[str]:
                 if cancel_event.is_set():
                     return cancelled_result
@@ -6421,6 +6682,7 @@ class ReimbursementHelperApp:
                         )
                         return cancelled_result
                     self.apply_ai_data_to_bank_item(bank_item, data)
+                    self.queue_excel_image_prewarm_for_bank_item(bank_item)
                     done = next_done()
                     self.root.after(
                         0,
@@ -6466,6 +6728,7 @@ class ReimbursementHelperApp:
                         self.match_bank_item(bank_item)
                 self.resolve_payment_proof_conflicts()
                 self.root.after(0, self.refresh_bank_tree)
+                self.queue_excel_export_prewarm(form_version)
             final_completed = current_done()
             self.root.after(
                 0,
@@ -6898,6 +7161,10 @@ class ReimbursementHelperApp:
         self.settings["language"] = normalize_language(self.language.get())
         save_user_settings(self.settings)
         self.save_session()
+        try:
+            self._excel_prewarm_executor.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
         self.root.destroy()
 
 
