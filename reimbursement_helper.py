@@ -333,6 +333,15 @@ USA_CATEGORY_ROWS: Dict[str, List[int]] = {
     "other": list(range(60, 65)),
 }
 
+USA_EXPENSE_REPORT_BLOCKS: List[Tuple[str, int, List[int], int]] = [
+    ("transportation", 6, list(range(7, 47)), 47),
+    ("lodging", 48, list(range(49, 52)), 52),
+    ("meals", 53, [54], 55),
+    ("advertising", 56, [57], 58),
+    ("office", 59, list(range(60, 65)), 65),
+    ("entertainment", 66, list(range(67, 69)), 69),
+]
+
 KOREA_CATEGORY_COLUMNS: Dict[str, str] = {
     "transportation": "F",
     "physical_exam": "G",
@@ -532,6 +541,9 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "generate_details": "Generate Details",
         "generate_empty": "Generate Empty",
         "generate_all": "Generate All",
+        "cancel_generation": "Cancel",
+        "cancel_requested": "Cancel requested. Finishing the current file, then stopping...",
+        "generation_cancelled": "Generation cancelled. Processed {done}/{total}.",
         "generate_excel": "Generate Excel",
         "inserted_receipts": "Inserted receipts and details",
         "file": "File",
@@ -575,6 +587,15 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "updated_exchange_rate": "Updated rate from exchange-rate image: {updates}",
         "no_empty_rows": "No empty or unprocessed rows need AI.",
         "unknown_document_type": "{count} row(s) still have unknown document type: {files}. Choose Receipt or Payment proof before exporting.",
+        "manual_review_title": "Manual review needed",
+        "unknown_document_type_detail": "{count} row(s) need a file type before Excel can be generated.\n\nSet each one to Receipt or Payment proof:\n{files}",
+        "attention_ai_failed": "AI failed",
+        "attention_unknown_type": "Missing file type",
+        "attention_missing_date": "Missing date",
+        "attention_missing_amount": "Missing amount",
+        "attention_missing_vendor": "Missing vendor",
+        "attention_missing_details": "Missing details",
+        "attention_missing_date_amount": "Missing date/amount",
     },
     "zh": {
         "app_title": "\u62a5\u9500\u52a9\u624b",
@@ -589,6 +610,9 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "generate_details": "\u751f\u6210\u660e\u7ec6",
         "generate_empty": "\u7a7a\u767d\u586b\u7a7a",
         "generate_all": "\u5168\u90e8\u751f\u6210",
+        "cancel_generation": "\u53d6\u6d88",
+        "cancel_requested": "\u5df2\u8bf7\u6c42\u53d6\u6d88\u3002\u5f53\u524d\u6587\u4ef6\u5b8c\u6210\u540e\u4f1a\u505c\u6b62...",
+        "generation_cancelled": "\u5df2\u53d6\u6d88\u751f\u6210\u3002\u5df2\u5904\u7406 {done}/{total}\u3002",
         "generate_excel": "\u751f\u6210 Excel",
         "inserted_receipts": "\u5df2\u63d2\u5165\u53d1\u7968\u548c\u660e\u7ec6",
         "file": "\u6587\u4ef6",
@@ -632,6 +656,15 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "updated_exchange_rate": "\u5df2\u6839\u636e\u6c47\u7387\u56fe\u7247\u66f4\u65b0\uff1a{updates}",
         "no_empty_rows": "\u6ca1\u6709\u9700\u8981 AI \u5904\u7406\u7684\u7a7a\u767d\u6216\u672a\u5904\u7406\u8bb0\u5f55\u3002",
         "unknown_document_type": "\u8fd8\u6709 {count} \u6761\u8bb0\u5f55\u7684\u6587\u4ef6\u7c7b\u578b\u662f\u672a\u77e5\uff1a{files}\u3002\u5bfc\u51fa\u524d\u8bf7\u9009\u62e9\u53d1\u7968\u6216\u4ed8\u6b3e\u51ed\u8bc1\u3002",
+        "manual_review_title": "\u9700\u8981\u4eba\u5de5\u5904\u7406",
+        "unknown_document_type_detail": "\u6709 {count} \u6761\u8bb0\u5f55\u9700\u8981\u5148\u9009\u62e9\u6587\u4ef6\u7c7b\u578b\uff0c\u624d\u80fd\u751f\u6210 Excel\u3002\n\n\u8bf7\u628a\u8fd9\u4e9b\u6587\u4ef6\u8bbe\u4e3a\u201c\u53d1\u7968\u201d\u6216\u201c\u4ed8\u6b3e\u51ed\u8bc1\u201d\uff1a\n{files}",
+        "attention_ai_failed": "AI \u5931\u8d25",
+        "attention_unknown_type": "\u7f3a\u5c11\u6587\u4ef6\u7c7b\u578b",
+        "attention_missing_date": "\u7f3a\u5c11\u65e5\u671f",
+        "attention_missing_amount": "\u7f3a\u5c11\u91d1\u989d",
+        "attention_missing_vendor": "\u7f3a\u5c11\u5546\u5bb6",
+        "attention_missing_details": "\u7f3a\u5c11\u660e\u7ec6",
+        "attention_missing_date_amount": "\u7f3a\u5c11\u65e5\u671f/\u91d1\u989d",
     },
     "ko": {
         "app_title": "\ud658\uae09 \ub3c4\uc6b0\ubbf8",
@@ -646,6 +679,9 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "generate_details": "\uc138\ubd80 \uc815\ubcf4 \uc0dd\uc131",
         "generate_empty": "\ube48 \ud56d\ubaa9 \uc0dd\uc131",
         "generate_all": "\uc804\uccb4 \uc0dd\uc131",
+        "cancel_generation": "\ucde8\uc18c",
+        "cancel_requested": "\ucde8\uc18c\ub97c \uc694\uccad\ud588\uc2b5\ub2c8\ub2e4. \ud604\uc7ac \ud30c\uc77c\uc774 \ub05d\ub098\uba74 \uc911\uc9c0\ud569\ub2c8\ub2e4...",
+        "generation_cancelled": "\uc0dd\uc131\uc774 \ucde8\uc18c\ub418\uc5c8\uc2b5\ub2c8\ub2e4. {done}/{total} \ucc98\ub9ac\ub428.",
         "generate_excel": "Excel \uc0dd\uc131",
         "inserted_receipts": "\ucd94\uac00\ub41c \uc601\uc218\uc99d \ubc0f \uc138\ubd80 \uc815\ubcf4",
         "file": "\ud30c\uc77c",
@@ -689,6 +725,15 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "updated_exchange_rate": "\ud658\uc728 \uc774\ubbf8\uc9c0\uc5d0\uc11c \ud658\uc728\uc744 \uc5c5\ub370\uc774\ud2b8\ud588\uc2b5\ub2c8\ub2e4: {updates}",
         "no_empty_rows": "AI\uac00 \ucc98\ub9ac\ud560 \ube48 \ud56d\ubaa9\uc774\ub098 \ubbf8\ucc98\ub9ac \ud589\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
         "unknown_document_type": "{count}\uac1c \ud589\uc758 \ubb38\uc11c \uc720\ud615\uc774 \uc54c \uc218 \uc5c6\uc74c\uc785\ub2c8\ub2e4: {files}. \ub0b4\ubcf4\ub0b4\uae30 \uc804\uc5d0 \uc601\uc218\uc99d \ub610\ub294 \uacb0\uc81c \uc99d\ube59\uc744 \uc120\ud0dd\ud558\uc138\uc694.",
+        "manual_review_title": "\uc218\ub3d9 \ud655\uc778 \ud544\uc694",
+        "unknown_document_type_detail": "Excel\uc744 \uc0dd\uc131\ud558\uae30 \uc804\uc5d0 {count}\uac1c \ud589\uc758 \ubb38\uc11c \uc720\ud615\uc744 \uc9c0\uc815\ud574\uc57c \ud569\ub2c8\ub2e4.\n\n\uac01 \ud30c\uc77c\uc744 \uc601\uc218\uc99d \ub610\ub294 \uacb0\uc81c \uc99d\ube59\uc73c\ub85c \uc124\uc815\ud558\uc138\uc694:\n{files}",
+        "attention_ai_failed": "AI \uc2e4\ud328",
+        "attention_unknown_type": "\ubb38\uc11c \uc720\ud615 \ub204\ub77d",
+        "attention_missing_date": "\ub0a0\uc9dc \ub204\ub77d",
+        "attention_missing_amount": "\uae08\uc561 \ub204\ub77d",
+        "attention_missing_vendor": "\uc0c1\ud638 \ub204\ub77d",
+        "attention_missing_details": "\uc138\ubd80 \ub0b4\uc6a9 \ub204\ub77d",
+        "attention_missing_date_amount": "\ub0a0\uc9dc/\uae08\uc561 \ub204\ub77d",
     },
 }
 
@@ -952,6 +997,9 @@ project_number, category, payment_method, receipt_label, document_type, confiden
 Rules:
 - date must be yyyy-mm-dd when visible, otherwise empty string.
 - amount should be the paid total. Preserve cents when visible.
+- For USA bank/card payment proof screenshots, date should be the Transaction date
+  line and amount should be the Sale/charge amount. Ignore print/export time and
+  use Posted date only when Transaction date is not present.
 - currency must match the receipt symbol/text: USD for "$", KRW for won/KRW,
   and RMB/CNY for yuan/RMB/CNY. Do not default to KRW just because the form is Korea.
 - category must be one of:
@@ -1455,15 +1503,38 @@ def looks_like_usa_payment_proof_text(*values: Any) -> bool:
     )
 
 
-def receipt_attention_reason(item: "ReceiptItem", form_version: str) -> Optional[str]:
+def receipt_attention_reasons(item: "ReceiptItem", form_version: str) -> List[str]:
     version = normalized_form_version(form_version)
+    reasons: List[str] = []
     if item.status == "Failed":
-        return "AI failed"
+        reasons.append("AI failed")
     if version == "USA" and normalize_document_type(item.document_type, "unknown") == "unknown":
-        return "Unknown document type"
+        reasons.append("Unknown document type")
     if not item.date.strip():
-        return "Missing date"
+        reasons.append("Missing date")
     if not (item.amount.strip() or item.krw_amount.strip() or item.rmb_amount.strip()):
+        reasons.append("Missing amount")
+    if is_usa_receipt_item(item) or version == "Korea":
+        if not (item.details.strip() or item.purpose.strip() or item.receipt_label.strip()):
+            reasons.append("Missing details")
+        if not item.place.strip():
+            reasons.append("Missing vendor")
+    return reasons
+
+
+def receipt_attention_reason(item: "ReceiptItem", form_version: str) -> Optional[str]:
+    reasons = receipt_attention_reasons(item, form_version)
+    return reasons[0] if reasons else None
+
+
+def payment_proof_missing_status(item: Any) -> Optional[str]:
+    missing_date = not str(getattr(item, "date", "") or "").strip()
+    missing_amount = safe_float(getattr(item, "amount", "")) is None
+    if missing_date and missing_amount:
+        return "Missing date/amount"
+    if missing_date:
+        return "Missing date"
+    if missing_amount:
         return "Missing amount"
     return None
 
@@ -1638,9 +1709,10 @@ def match_usa_payment_proof_items(items: List["ReceiptItem"]) -> None:
         if not is_usa_payment_proof_item(proof_item):
             continue
         proof_amount = safe_float(proof_item.amount)
-        if proof_amount is None or not proof_item.date.strip():
+        missing_status = payment_proof_missing_status(proof_item)
+        if missing_status:
             proof_item.matched_receipt_id = ""
-            proof_item.status = "Missing date/amount"
+            proof_item.status = missing_status
             continue
         matches: List[ReceiptItem] = []
         for receipt in receipts:
@@ -1662,9 +1734,10 @@ def match_usa_payment_proof_items(items: List["ReceiptItem"]) -> None:
 
 def match_bank_statement_to_receipt(bank_item: "BankStatementItem", receipts: List["ReceiptItem"]) -> None:
     bank_amount = safe_float(bank_item.amount)
-    if bank_amount is None or not bank_item.date:
+    missing_status = payment_proof_missing_status(bank_item)
+    if missing_status:
         bank_item.matched_receipt_id = ""
-        bank_item.status = "Missing date/amount"
+        bank_item.status = missing_status
         return
     matches: List[ReceiptItem] = []
     for receipt in receipts:
@@ -1755,12 +1828,39 @@ def build_usa_report_rows(
             }
         )
 
+    def proof_source_key(images: List[Dict[str, Any]]) -> str:
+        if not images:
+            return uuid.uuid4().hex
+        first = images[0]
+        source = str(first.get("source_path") or first.get("path") or "")
+        try:
+            return str(Path(source).resolve()).lower()
+        except Exception:
+            return source.lower()
+
     proof_only_rows: List[Dict[str, Any]] = []
     for proof in proof_candidates:
         matched_id = str(proof.get("matched_receipt_id") or "")
         target_row = row_by_receipt_id.get(matched_id)
+        proof_images = list(proof.get("images") or [])
         if target_row is not None:
-            target_row["proof_images"].extend(list(proof.get("images") or []))
+            source_key = proof_source_key(proof_images)
+            existing_source_key = str(target_row.get("_proof_source_key") or "")
+            if not existing_source_key or existing_source_key == source_key:
+                target_row["_proof_source_key"] = source_key
+                target_row["proof_images"].extend(proof_images)
+                continue
+            proof_only_rows.append(
+                {
+                    "id": str(proof.get("id") or uuid.uuid4().hex),
+                    "item": None,
+                    "expense_item": None,
+                    "date": str(proof.get("date") or ""),
+                    "amount": str(proof.get("amount") or ""),
+                    "receipt_images": [],
+                    "proof_images": proof_images,
+                }
+            )
             continue
         proof_only_rows.append(
             {
@@ -1770,7 +1870,7 @@ def build_usa_report_rows(
                 "date": str(proof.get("date") or ""),
                 "amount": str(proof.get("amount") or ""),
                 "receipt_images": [],
-                "proof_images": list(proof.get("images") or []),
+                "proof_images": proof_images,
             }
         )
     return rows + proof_only_rows
@@ -2598,6 +2698,125 @@ def set_korea_receipt_label(sheet: Any, cell_ref: str, label: str) -> None:
         cell.fill = PatternFill(fill_type="solid", fgColor="E9EEF3")
 
 
+def usa_report_section_for_category(category: str) -> str:
+    if category in {block[0] for block in USA_EXPENSE_REPORT_BLOCKS}:
+        return category
+    return "office"
+
+
+def copy_excel_cell(source_cell: Any, target_cell: Any, copy_value: bool = True) -> None:
+    if MergedCell is not None and isinstance(source_cell, MergedCell):
+        return
+    if copy_value:
+        target_cell.value = source_cell.value
+    if source_cell.has_style:
+        target_cell._style = copy.copy(source_cell._style)
+    if source_cell.number_format:
+        target_cell.number_format = source_cell.number_format
+    if source_cell.font:
+        target_cell.font = copy.copy(source_cell.font)
+    if source_cell.fill:
+        target_cell.fill = copy.copy(source_cell.fill)
+    if source_cell.border:
+        target_cell.border = copy.copy(source_cell.border)
+    if source_cell.alignment:
+        target_cell.alignment = copy.copy(source_cell.alignment)
+    if source_cell.protection:
+        target_cell.protection = copy.copy(source_cell.protection)
+    if source_cell.comment:
+        target_cell.comment = copy.copy(source_cell.comment)
+
+
+def copy_excel_row(source_ws: Any, target_ws: Any, source_row: int, target_row: int, max_col: int) -> None:
+    for col in range(1, max_col + 1):
+        copy_excel_cell(source_ws.cell(source_row, col), target_ws.cell(target_row, col))
+    source_dim = source_ws.row_dimensions[source_row]
+    target_dim = target_ws.row_dimensions[target_row]
+    target_dim.height = source_dim.height
+    target_dim.hidden = source_dim.hidden
+    target_dim.outlineLevel = source_dim.outlineLevel
+    target_dim.collapsed = source_dim.collapsed
+
+
+def prepare_usa_expense_report_sheet(
+    wb: Any,
+    template_ws: Any,
+    section_counts: Dict[str, int],
+) -> Tuple[Any, Dict[str, List[int]]]:
+    template_index = wb.worksheets.index(template_ws)
+    template_title = template_ws.title
+    generated_ws = wb.create_sheet(f"{template_title} generated", template_index)
+    max_col = max(template_ws.max_column or 1, 10)
+
+    for key, dim in template_ws.column_dimensions.items():
+        generated_ws.column_dimensions[key] = copy.copy(dim)
+    generated_ws.freeze_panes = template_ws.freeze_panes
+    generated_ws.sheet_view.showGridLines = template_ws.sheet_view.showGridLines
+    generated_ws.sheet_format = copy.copy(template_ws.sheet_format)
+    generated_ws.sheet_properties = copy.copy(template_ws.sheet_properties)
+    generated_ws.page_margins = copy.copy(template_ws.page_margins)
+    generated_ws.page_setup = copy.copy(template_ws.page_setup)
+    generated_ws.print_options = copy.copy(template_ws.print_options)
+
+    for row in range(1, 6):
+        copy_excel_row(template_ws, generated_ws, row, row, max_col)
+
+    category_rows: Dict[str, List[int]] = {}
+    subtotal_rows: List[int] = []
+    target_row = 6
+    for section, label_row, template_entry_rows, subtotal_row in USA_EXPENSE_REPORT_BLOCKS:
+        copy_excel_row(template_ws, generated_ws, label_row, target_row, max_col)
+        label_target_row = target_row
+        generated_ws[f"G{label_target_row}"] = f"=F{label_target_row}*$J$1"
+        target_row += 1
+
+        required_entries = max(len(template_entry_rows), section_counts.get(section, 0))
+        entry_rows: List[int] = []
+        for index in range(required_entries):
+            source_row = template_entry_rows[min(index, len(template_entry_rows) - 1)]
+            copy_excel_row(template_ws, generated_ws, source_row, target_row, max_col)
+            current_height = generated_ws.row_dimensions[target_row].height
+            if current_height is None or current_height < 18:
+                generated_ws.row_dimensions[target_row].height = 18
+            generated_ws[f"G{target_row}"] = f"=F{target_row}*$J$1"
+            entry_rows.append(target_row)
+            target_row += 1
+
+        copy_excel_row(template_ws, generated_ws, subtotal_row, target_row, max_col)
+        generated_ws.row_dimensions[target_row].height = max(
+            generated_ws.row_dimensions[target_row].height or 0,
+            30,
+        )
+        generated_ws[f"F{target_row}"] = f"=SUM(F{label_target_row}:F{entry_rows[-1]})"
+        generated_ws[f"G{target_row}"] = f"=F{target_row}*$J$1"
+        generated_ws.merge_cells(f"A{target_row}:C{target_row}")
+        category_rows[section] = entry_rows
+        subtotal_rows.append(target_row)
+        target_row += 1
+
+    copy_excel_row(template_ws, generated_ws, 70, target_row, max_col)
+    generated_ws.row_dimensions[target_row].height = max(
+        generated_ws.row_dimensions[target_row].height or 0,
+        30,
+    )
+    generated_ws[f"F{target_row}"] = f"=SUM({','.join(f'F{row}' for row in subtotal_rows)})"
+    generated_ws[f"G{target_row}"] = f"=F{target_row}*$J$1"
+    generated_ws.merge_cells(f"A{target_row}:C{target_row}")
+    generated_ws.merge_cells("A1:H1")
+    try:
+        generated_ws.merge_cells(f"H5:H{max(5, target_row - 1)}")
+    except Exception:
+        pass
+    try:
+        generated_ws.print_area = f"$A$1:$H${target_row}"
+    except Exception:
+        pass
+
+    wb.remove(template_ws)
+    generated_ws.title = template_title
+    return generated_ws, category_rows
+
+
 def add_korea_receipt_block(
     sheet: Any,
     index: int,
@@ -2652,26 +2871,28 @@ def export_usa(
         for row in report_rows
         if row.get("expense_item") is not None or row.get("item") is not None
     ]
+    section_counts = {block[0]: 0 for block in USA_EXPENSE_REPORT_BLOCKS}
+    for item in sorted_items:
+        category = report_category_for_item(item, "USA")
+        section_counts[usa_report_section_for_category(category)] += 1
+    ws, category_rows = prepare_usa_expense_report_sheet(wb, ws, section_counts)
 
     ws["A3"] = f"Date / 填表日期： {date.today().strftime('%m/%d/%Y')}"
     ws["A4"] = "Employee: / 申请人："
     ws["J1"] = exchange_rate
-    all_entry_rows = sorted({row for rows in USA_CATEGORY_ROWS.values() for row in rows})
+    all_entry_rows = sorted({row for rows in category_rows.values() for row in rows})
     clear_cells(ws, all_entry_rows, ["A", "B", "C", "D", "E", "F", "H"])
     for row in all_entry_rows:
         ws[f"G{row}"] = f"=F{row}*$J$1"
 
-    row_cursors = {cat: 0 for cat in USA_CATEGORY_ROWS}
+    row_cursors = {cat: 0 for cat in category_rows}
     for item in sorted_items:
         category = report_category_for_item(item, "USA")
-        if category not in USA_CATEGORY_ROWS:
-            category = "other"
-        rows = USA_CATEGORY_ROWS[category]
-        cursor = row_cursors[category]
-        if cursor >= len(rows):
-            raise RuntimeError(f"Not enough USA template rows for {USA_CATEGORY_LABELS.get(category, category)}.")
+        section = usa_report_section_for_category(category)
+        rows = category_rows[section]
+        cursor = row_cursors[section]
         row = rows[cursor]
-        row_cursors[category] += 1
+        row_cursors[section] += 1
         amount = safe_float(item.amount)
         ws[f"A{row}"] = item.place.strip()
         ws[f"B{row}"] = excel_date_formula_or_value(item.date)
@@ -3107,6 +3328,7 @@ class ReimbursementHelperApp:
         self._last_amount_source = "amount"
         self._last_form_version = self.form_version.get()
         self._busy = False
+        self._ai_cancel_event: Optional[threading.Event] = None
         self._details_ready_for_export = False
         self.last_generated_output_path: Optional[Path] = None
         self._build_ui()
@@ -3120,8 +3342,7 @@ class ReimbursementHelperApp:
 
     def _build_ui(self) -> None:
         self.root.title(self.tr("app_title"))
-        self.root.geometry("1220x760")
-        self.root.minsize(980, 640)
+        self._set_initial_window_geometry()
         app_bg = "#E9EEF3"
         panel_bg = "#F8FAFC"
         canvas_bg = "#F5F7FA"
@@ -3327,7 +3548,7 @@ class ReimbursementHelperApp:
         self.select_payment_proof_btn.pack(side="left", padx=4)
         self.generate_details_btn = ttk.Button(controls, text=self.tr("generate_empty"), command=self.generate_empty_details)
         self.generate_details_btn.pack(side="left", padx=4)
-        self.generate_all_btn = ttk.Button(controls, text=self.tr("generate_all"), command=self.generate_all_details)
+        self.generate_all_btn = ttk.Button(controls, text=self.tr("generate_all"), command=self.generate_all_or_cancel)
         self.generate_all_btn.pack(side="left", padx=4)
         self.generate_excel_btn = ttk.Button(controls, text=self.tr("generate_excel"), command=self.generate_excel)
         self.generate_excel_btn.pack(side="left", padx=4)
@@ -3362,7 +3583,7 @@ class ReimbursementHelperApp:
         self.tree.heading("date", text=self.tr("date"))
         self.tree.heading("amount", text=self.tr("amount"))
         self.tree.column("#0", width=140, stretch=True)
-        self.tree.column("status", width=78, stretch=False)
+        self.tree.column("status", width=118, stretch=False)
         self.tree.column("date", width=78, stretch=False)
         self.tree.column("amount", width=70, stretch=False)
         self.tree.pack(fill="both", expand=True)
@@ -3372,7 +3593,8 @@ class ReimbursementHelperApp:
         self.tree.bind("<BackSpace>", self.remove_selected)
         self.tree.bind("<Control-a>", self.select_all_receipts)
         self.tree.bind("<Control-A>", self.select_all_receipts)
-        self.tree.tag_configure("attention", background="#FFF1F2", foreground="#881337")
+        self.tree.tag_configure("danger", background="#FEE2E2", foreground="#991B1B")
+        self.tree.tag_configure("review", background="#FEF3C7", foreground="#92400E")
         left_buttons = ttk.Frame(left, style="Panel.TFrame")
         left_buttons.pack(fill="x", pady=(10, 0))
         self.remove_btn = ttk.Button(left_buttons, text=self.tr("remove"), command=self.remove_selected)
@@ -3514,6 +3736,19 @@ class ReimbursementHelperApp:
         self.open_output_btn = ttk.Button(footer, text=self.tr("open_output_folder"), command=self.open_output_folder)
         self.open_output_btn.pack(side="right")
 
+    def _set_initial_window_geometry(self) -> None:
+        try:
+            screen_width = max(900, int(self.root.winfo_screenwidth()))
+            screen_height = max(600, int(self.root.winfo_screenheight()))
+        except Exception:
+            screen_width, screen_height = 1280, 800
+        width = min(1220, max(900, screen_width - 32))
+        height = min(760, max(560, screen_height - 100))
+        x = max(0, (screen_width - width) // 2)
+        y = max(0, min((screen_height - height) // 2, screen_height - height - 40))
+        self.root.geometry(f"{width}x{height}+{x}+{y}")
+        self.root.minsize(min(980, width), min(640, height))
+
     def _attach_amount_traces(self) -> None:
         for key in ("amount", "currency", "krw_amount", "rmb_amount"):
             var = self.field_vars.get(key)
@@ -3557,6 +3792,19 @@ class ReimbursementHelperApp:
 
     def document_type_values(self) -> List[str]:
         return [self.document_type_display_label(key) for key in ("unknown", "receipt", "payment_proof")]
+
+    def attention_reason_label(self, reason: Optional[str]) -> str:
+        mapping = {
+            "AI failed": "attention_ai_failed",
+            "Unknown document type": "attention_unknown_type",
+            "Missing date": "attention_missing_date",
+            "Missing amount": "attention_missing_amount",
+            "Missing vendor": "attention_missing_vendor",
+            "Missing details": "attention_missing_details",
+            "Missing date/amount": "attention_missing_date_amount",
+        }
+        key = mapping.get(reason or "")
+        return self.tr(key) if key else str(reason or "")
 
     def update_document_type_options(self) -> None:
         if self.document_type_combo is None:
@@ -3615,6 +3863,11 @@ class ReimbursementHelperApp:
                     widget.configure(text=self.tr(key))
                 except Exception:
                     pass
+        if self._ai_cancel_event is not None and self.generate_all_btn is not None:
+            try:
+                self.generate_all_btn.configure(text=self.tr("cancel_generation"))
+            except Exception:
+                pass
         self.tree.heading("#0", text=self.tr("file"))
         self.tree.heading("status", text=self.tr("status"))
         self.tree.heading("date", text=self.tr("date"))
@@ -3817,7 +4070,7 @@ class ReimbursementHelperApp:
     def clear_attention_status_if_ready(self, item: ReceiptItem) -> None:
         if receipt_attention_reason(item, self.form_version.get()) is not None:
             return
-        if item.status in {"Empty", "Failed", "Missing date/amount"}:
+        if item.status in {"Empty", "Failed", "Missing date/amount", "Missing date", "Missing amount", "Missing details", "Missing vendor"}:
             item.status = "Payment proof" if is_usa_payment_proof_item(item) else "Manual filled"
 
     def _save_field_to_selected(self, key: str, refresh: bool = False) -> None:
@@ -4342,8 +4595,15 @@ class ReimbursementHelperApp:
         current_selection = set(self.tree.selection())
         self.tree.delete(*self.tree.get_children())
         for index, item in enumerate(self.items):
-            values = (item.status, item.date, item.amount or item.krw_amount or item.rmb_amount)
-            tags = ("attention",) if receipt_attention_reason(item, self.form_version.get()) else ()
+            attention_reason = receipt_attention_reason(item, self.form_version.get())
+            status_text = self.attention_reason_label(attention_reason) if attention_reason else item.status
+            values = (status_text, item.date, item.amount or item.krw_amount or item.rmb_amount)
+            if attention_reason == "AI failed":
+                tags = ("danger",)
+            elif attention_reason:
+                tags = ("review",)
+            else:
+                tags = ()
             self.tree.insert("", "end", iid=str(index), text=item.filename, values=values, tags=tags)
         valid_selection = [iid for iid in current_selection if iid.isdigit() and int(iid) < len(self.items)]
         if valid_selection:
@@ -5546,7 +5806,7 @@ class ReimbursementHelperApp:
             text = str(value).strip()
             if text:
                 setattr(item, dest_key, text)
-        item.status = "Needs match" if item.date.strip() and item.amount.strip() else "Missing date/amount"
+        item.status = payment_proof_missing_status(item) or "Needs match"
 
     def same_expense_date(self, left: str, right: str) -> bool:
         return same_expense_date_values(left, right)
@@ -5605,6 +5865,22 @@ class ReimbursementHelperApp:
     def generate_selected_details(self) -> None:
         self.generate_empty_details()
 
+    def generate_all_or_cancel(self) -> None:
+        if self._ai_cancel_event is not None:
+            self.cancel_generate_all_details()
+            return
+        self.generate_all_details()
+
+    def cancel_generate_all_details(self) -> None:
+        if self._ai_cancel_event is None:
+            return
+        self._ai_cancel_event.set()
+        self.status_text.set(self.tr("cancel_requested"))
+        try:
+            self.generate_all_btn.configure(text=self.tr("cancel_generation"), state="disabled")
+        except Exception:
+            pass
+
     def generate_all_details(self) -> None:
         self.save_current_fields()
         if not self.items:
@@ -5629,7 +5905,13 @@ class ReimbursementHelperApp:
         ai_concurrency = self.ai_concurrency_value()
         if include_bank:
             self._details_ready_for_export = False
+        cancel_event = threading.Event()
+        self._ai_cancel_event = cancel_event
         self.set_busy(True)
+        try:
+            self.generate_all_btn.configure(text=self.tr("cancel_generation"), state="normal")
+        except Exception:
+            pass
         self.set_progress(0, total, f"0/{total}")
         self.status_text.set(f"Generating details for {total} image(s)...")
 
@@ -5637,6 +5919,7 @@ class ReimbursementHelperApp:
             successes = 0
             failures: List[str] = []
             completed = 0
+            cancelled_result = "__cancelled__"
             progress_lock = threading.Lock()
 
             def next_done() -> int:
@@ -5650,6 +5933,8 @@ class ReimbursementHelperApp:
                     return completed
 
             def process_receipt(index: int, item: ReceiptItem) -> Optional[str]:
+                if cancel_event.is_set():
+                    return cancelled_result
                 display_index = index + 1
                 self.root.after(
                     0,
@@ -5663,6 +5948,12 @@ class ReimbursementHelperApp:
                         item,
                         progress=self.set_status,
                     )
+                    if cancel_event.is_set():
+                        self.root.after(
+                            0,
+                            lambda i=item: self.mark_item_status(i, "Needs regen", current_done(), total),
+                        )
+                        return cancelled_result
                     self.apply_ai_data_to_item(item, data)
                     self.move_item_to_processed(item)
                     done = next_done()
@@ -5685,18 +5976,31 @@ class ReimbursementHelperApp:
             with ThreadPoolExecutor(max_workers=receipt_workers) as executor:
                 futures = [executor.submit(process_receipt, idx, item) for idx, item in enumerate(items)]
                 for future in as_completed(futures):
-                    failure = future.result()
+                    if cancel_event.is_set():
+                        for pending in futures:
+                            pending.cancel()
+                    try:
+                        failure = future.result()
+                    except Exception as exc:
+                        if cancel_event.is_set():
+                            continue
+                        failures.append(str(exc))
+                        continue
+                    if failure == cancelled_result:
+                        continue
                     if failure:
                         failures.append(failure)
                     else:
                         successes += 1
-            if include_bank and form_version == "USA":
+            if include_bank and form_version == "USA" and not cancel_event.is_set():
                 merged_count = self.merge_same_usa_receipts()
                 match_usa_payment_proof_items(self.items)
                 if merged_count:
                     self.root.after(0, self.refresh_tree)
                     self.set_status(f"Merged {merged_count} duplicate receipt screenshot(s).")
             def process_bank_proof(index: int, bank_item: BankStatementItem) -> Optional[str]:
+                if cancel_event.is_set():
+                    return cancelled_result
                 display_index = index + 1
                 self.root.after(
                     0,
@@ -5726,6 +6030,12 @@ class ReimbursementHelperApp:
                         temp,
                         progress=self.set_status,
                     )
+                    if cancel_event.is_set():
+                        self.root.after(
+                            0,
+                            lambda i=bank_item: self.mark_bank_item_status(i, "Needs AI", current_done(), total),
+                        )
+                        return cancelled_result
                     self.apply_ai_data_to_bank_item(bank_item, data)
                     done = next_done()
                     self.root.after(
@@ -5745,23 +6055,46 @@ class ReimbursementHelperApp:
                         ),
                     )
                     return f"{bank_item.filename}: {exc}"
-            if bank_items:
+            if bank_items and not cancel_event.is_set():
                 bank_workers = min(ai_concurrency, max(1, len(bank_items)))
                 with ThreadPoolExecutor(max_workers=bank_workers) as executor:
                     futures = [executor.submit(process_bank_proof, idx, bank_item) for idx, bank_item in enumerate(bank_items)]
                     for future in as_completed(futures):
-                        failure = future.result()
+                        if cancel_event.is_set():
+                            for pending in futures:
+                                pending.cancel()
+                        try:
+                            failure = future.result()
+                        except Exception as exc:
+                            if cancel_event.is_set():
+                                continue
+                            failures.append(str(exc))
+                            continue
+                        if failure == cancelled_result:
+                            continue
                         if failure:
                             failures.append(failure)
                         else:
                             successes += 1
-            if bank_items:
+            if bank_items and not cancel_event.is_set():
                 for bank_item in bank_items:
                     if bank_item.status != "Missing date/amount":
                         self.match_bank_item(bank_item)
                 self.resolve_payment_proof_conflicts()
                 self.root.after(0, self.refresh_bank_tree)
-            self.root.after(0, lambda: self.after_ai_complete(successes, failures, total, reload_selected, include_bank))
+            final_completed = current_done()
+            self.root.after(
+                0,
+                lambda: self.after_ai_complete(
+                    successes,
+                    failures,
+                    total,
+                    reload_selected,
+                    include_bank,
+                    cancelled=cancel_event.is_set(),
+                    completed=final_completed,
+                ),
+            )
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -5772,11 +6105,19 @@ class ReimbursementHelperApp:
         total: int,
         reload_selected: bool,
         ready_for_export: bool = False,
+        cancelled: bool = False,
+        completed: Optional[int] = None,
     ) -> None:
+        done_count = total if completed is None else completed
+        self._ai_cancel_event = None
         self.set_busy(False)
+        try:
+            self.generate_all_btn.configure(text=self.tr("generate_all"), state="normal")
+        except Exception:
+            pass
         if ready_for_export and successes > 0:
             self._details_ready_for_export = True
-        self.set_progress(total, total, f"{total}/{total}")
+        self.set_progress(done_count, total, f"{done_count}/{total}")
         if ready_for_export and successes > 0:
             self.sort_items_for_current_report()
         else:
@@ -5786,6 +6127,10 @@ class ReimbursementHelperApp:
             self.load_selected_into_fields()
             self.update_preview()
         self.save_session()
+        if cancelled:
+            self.status_text.set(self.tr("generation_cancelled", done=done_count, total=total))
+            self.update_toolbar_recommendation()
+            return
         if failures:
             self.status_text.set(f"AI finished: {successes} succeeded, {len(failures)} failed.")
             if messagebox:
@@ -5813,7 +6158,20 @@ class ReimbursementHelperApp:
             self.generate_excel_btn,
         ):
             try:
-                button.configure(state=state)
+                if (
+                    button is self.generate_all_btn
+                    and busy
+                    and self._ai_cancel_event is not None
+                    and not self._ai_cancel_event.is_set()
+                ):
+                    button.configure(state="normal", text=self.tr("cancel_generation"))
+                else:
+                    button.configure(state=state)
+            except Exception:
+                pass
+        if not busy:
+            try:
+                self.generate_all_btn.configure(text=self.tr("generate_all"))
             except Exception:
                 pass
         if self.select_payment_proof_btn is not None:
@@ -5875,6 +6233,42 @@ class ReimbursementHelperApp:
         if not self.items:
             self.show_info("Upload at least one receipt before generating Excel.")
             return
+        form_version = self.form_version.get()
+        if form_version == "USA":
+            unknown_items = [
+                item
+                for item in self.items
+                if normalize_document_type(item.document_type, "unknown") == "unknown"
+            ]
+            if unknown_items:
+                files = ", ".join(item.filename for item in unknown_items[:5])
+                if len(unknown_items) > 5:
+                    files += f", +{len(unknown_items) - 5}"
+                self.status_text.set(self.tr("unknown_document_type", count=len(unknown_items), files=files))
+                self.refresh_tree()
+                try:
+                    first_index = self.items.index(unknown_items[0])
+                    self.selected_index = first_index
+                    self.tree.selection_set(str(first_index))
+                    self.tree.focus(str(first_index))
+                    self.tree.see(str(first_index))
+                    self.load_selected_into_fields()
+                    self.update_preview()
+                except Exception:
+                    pass
+                if messagebox:
+                    shown_files = "\n".join(item.filename for item in unknown_items[:10])
+                    if len(unknown_items) > 10:
+                        shown_files += f"\n...and {len(unknown_items) - 10} more."
+                    messagebox.showwarning(
+                        self.tr("manual_review_title"),
+                        self.tr(
+                            "unknown_document_type_detail",
+                            count=len(unknown_items),
+                            files=shown_files,
+                        ),
+                    )
+                return
         if filedialog is None:
             return
         default_name = f"reimbursement_{self.form_version.get().lower()}_{date.today().strftime('%Y%m%d')}.xlsx"
@@ -5889,20 +6283,7 @@ class ReimbursementHelperApp:
             return
         output_path = Path(output)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        form_version = self.form_version.get()
         if form_version == "USA":
-            unknown_items = [
-                item
-                for item in self.items
-                if normalize_document_type(item.document_type, "unknown") == "unknown"
-            ]
-            if unknown_items:
-                files = ", ".join(item.filename for item in unknown_items[:5])
-                if len(unknown_items) > 5:
-                    files += f", +{len(unknown_items) - 5}"
-                self.status_text.set(self.tr("unknown_document_type", count=len(unknown_items), files=files))
-                self.refresh_tree()
-                return
             self.merge_same_usa_receipts()
             match_usa_payment_proof_items(self.items)
             self.refresh_tree()
