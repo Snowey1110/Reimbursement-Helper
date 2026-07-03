@@ -1022,7 +1022,9 @@ Rules:
 - details should be a natural one-line description.
 - receipt_label should be short enough to fit above a receipt image in Excel.
 - For USA, document_type must be receipt, payment_proof, or unknown. Use payment_proof
-  for bank/card transaction screenshots or statements, not merchant receipts.
+  only for bank/card transaction screenshots or statements, not merchant receipts.
+  A merchant receipt that says Credit Card Receipt, Payment Method, Card Type,
+  authorization, terminal ID, total, or receipt number is still a receipt.
 - For Korea, use receipt unless the image is clearly not reimbursement support.
 - If a field is unclear, use an empty string rather than guessing.
 
@@ -1505,11 +1507,27 @@ def is_usa_payment_proof_item(item: "ReceiptItem") -> bool:
     return normalize_document_type(getattr(item, "document_type", "unknown"), "unknown") == "payment_proof"
 
 
+def looks_like_usa_merchant_receipt_text(*values: Any) -> bool:
+    text = " ".join(str(value or "") for value in values).lower()
+    if re.search(r"\b(credit card receipt|sales receipt|merchant receipt|customer receipt)\b", text):
+        return True
+    if re.search(r"\b(payment method|card type|authorization|terminal id|receipt\s*:|invoice\s*:)\b", text) and re.search(
+        r"\b(total|subtotal|tax|amount|paid)\b",
+        text,
+    ):
+        return True
+    if re.search(r"\b(receipt|invoice)\b", text) and re.search(r"\b(total|payment method|card type|thank you)\b", text):
+        return True
+    return False
+
+
 def looks_like_usa_payment_proof_text(*values: Any) -> bool:
     text = " ".join(str(value or "") for value in values).lower()
+    if looks_like_usa_merchant_receipt_text(text):
+        return False
     return bool(
         re.search(
-            r"\b(chase|bank|statement|transaction details|posted date|card number|account|sapphire|proof of payment|payment proof|merchant type)\b",
+            r"\b(chase|jpmorgan|bank statement|card statement|account activity|transaction details|posted date|sapphire reserve|freedom|proof of payment|payment proof|merchant type|rewards earned|ultimate rewards|printed from chase personal online)\b",
             text,
         )
     )
@@ -1556,9 +1574,6 @@ def usa_receipt_support_without_amount(item: "ReceiptItem") -> bool:
 
 def auto_classify_usa_document_type(item: "ReceiptItem", *extra_values: Any) -> None:
     current = normalize_document_type(item.document_type, "unknown")
-    if current != "unknown":
-        item.document_type = current
-        return
     values = (
         item.filename,
         item.place,
@@ -1568,6 +1583,12 @@ def auto_classify_usa_document_type(item: "ReceiptItem", *extra_values: Any) -> 
         item.receipt_label,
         *extra_values,
     )
+    if looks_like_usa_merchant_receipt_text(*values):
+        item.document_type = "receipt"
+        return
+    if current != "unknown":
+        item.document_type = current
+        return
     if looks_like_usa_payment_proof_text(*values):
         item.document_type = "payment_proof"
     elif looks_like_usa_receipt_support_text(*values):
@@ -4907,6 +4928,8 @@ class ReimbursementHelperApp:
         current_selection = set(self.tree.selection())
         self.tree.delete(*self.tree.get_children())
         for index, item in enumerate(self.items):
+            if self.form_version.get() == "USA" and item.status != "Manual filled":
+                auto_classify_usa_document_type(item)
             attention_reason = receipt_attention_reason(item, self.form_version.get())
             if attention_reason is None and item.status in {
                 "Missing date/amount",
