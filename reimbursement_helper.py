@@ -2835,6 +2835,44 @@ def copy_excel_row(source_ws: Any, target_ws: Any, source_row: int, target_row: 
     target_dim.collapsed = source_dim.collapsed
 
 
+def set_cell_alignment(
+    cell: Any,
+    horizontal: Optional[str] = None,
+    vertical: Optional[str] = None,
+    wrap_text: Optional[bool] = None,
+) -> None:
+    if Alignment is None:
+        return
+    existing = cell.alignment
+    cell.alignment = Alignment(
+        horizontal=horizontal if horizontal is not None else existing.horizontal,
+        vertical=vertical if vertical is not None else existing.vertical,
+        text_rotation=existing.textRotation,
+        wrap_text=wrap_text if wrap_text is not None else existing.wrap_text,
+        shrink_to_fit=existing.shrink_to_fit,
+        indent=existing.indent,
+    )
+
+
+def configure_usa_expense_header_row(sheet: Any) -> None:
+    sheet.row_dimensions[5].height = max(sheet.row_dimensions[5].height or 0, 32)
+    for col in "ABCDEFGH":
+        cell = sheet[f"{col}5"]
+        if MergedCell is not None and isinstance(cell, MergedCell):
+            continue
+        set_cell_alignment(
+            cell,
+            horizontal=cell.alignment.horizontal or "center",
+            vertical="center",
+            wrap_text=True,
+        )
+
+
+def configure_usa_expense_entry_row(sheet: Any, row: int) -> None:
+    sheet.row_dimensions[row].height = max(sheet.row_dimensions[row].height or 0, 18)
+    set_cell_alignment(sheet[f"B{row}"], horizontal="center", vertical="center")
+
+
 def prepare_usa_expense_report_sheet(
     wb: Any,
     template_ws: Any,
@@ -2857,6 +2895,7 @@ def prepare_usa_expense_report_sheet(
 
     for row in range(1, 6):
         copy_excel_row(template_ws, generated_ws, row, row, max_col)
+    configure_usa_expense_header_row(generated_ws)
 
     category_rows: Dict[str, List[int]] = {}
     subtotal_rows: List[int] = []
@@ -2875,6 +2914,7 @@ def prepare_usa_expense_report_sheet(
             current_height = generated_ws.row_dimensions[target_row].height
             if current_height is None or current_height < 18:
                 generated_ws.row_dimensions[target_row].height = 18
+            configure_usa_expense_entry_row(generated_ws, target_row)
             generated_ws[f"G{target_row}"] = f"=F{target_row}*$J$1"
             entry_rows.append(target_row)
             target_row += 1
