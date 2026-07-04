@@ -1348,12 +1348,17 @@ def clamp_ai_concurrency(value: Any) -> int:
     return max(1, min(MAX_AI_REQUEST_CONCURRENCY, parsed))
 
 
-def parse_date_value(value: str) -> Any:
-    text = (value or "").strip()
+def parse_date_value(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = (str(value) if value is not None else "").strip()
     if not text:
         return None
     formats = [
         "%Y-%m-%d",
+        "%Y-%m-%d %H:%M:%S",
         "%m/%d/%Y",
         "%m/%d/%y",
         "%Y.%m.%d",
@@ -3156,7 +3161,28 @@ def configure_usa_expense_header_row(sheet: Any) -> None:
 
 def configure_usa_expense_entry_row(sheet: Any, row: int) -> None:
     sheet.row_dimensions[row].height = max(sheet.row_dimensions[row].height or 0, 18)
+    set_cell_alignment(sheet[f"A{row}"], horizontal="center", vertical="center", wrap_text=True)
     set_cell_alignment(sheet[f"B{row}"], horizontal="center", vertical="center")
+
+
+def estimate_wrapped_lines(text: Any, width_chars: float) -> int:
+    cleaned = str(text or "").strip()
+    if not cleaned:
+        return 1
+    usable_width = max(8, int(width_chars * 0.82))
+    total = 0
+    for raw_line in cleaned.splitlines() or [""]:
+        line = raw_line.strip()
+        total += max(1, math.ceil(len(line) / usable_width))
+    return total
+
+
+def adjust_usa_expense_entry_row_height(sheet: Any, row: int) -> None:
+    width = sheet.column_dimensions["A"].width or 24
+    line_count = estimate_wrapped_lines(sheet[f"A{row}"].value, width)
+    target_height = 18 if line_count <= 1 else min(72, 18 * line_count)
+    sheet.row_dimensions[row].height = max(sheet.row_dimensions[row].height or 0, target_height)
+    set_cell_alignment(sheet[f"A{row}"], horizontal="center", vertical="center", wrap_text=True)
 
 
 def prepare_usa_expense_report_sheet(
@@ -3324,6 +3350,7 @@ def export_usa(
         ws[f"E{row}"] = item.project_number.strip()
         ws[f"F{row}"] = amount if amount is not None else None
         ws[f"G{row}"] = f"=F{row}*$J$1"
+        adjust_usa_expense_entry_row_height(ws, row)
 
     clear_images(receipts_ws)
     for row in range(2, max(56, len(report_rows) + 3)):
@@ -3766,6 +3793,7 @@ class ReimbursementHelperApp:
         self._excel_prewarm_futures: List[Any] = []
         self._excel_prewarm_keys: set = set()
         self._excel_prewarm_lock = threading.Lock()
+        self._receipt_import_active = False
         self.last_generated_output_path: Optional[Path] = None
         self._build_ui()
         self._attach_amount_traces()
@@ -4813,6 +4841,9 @@ class ReimbursementHelperApp:
         ensure_runtime_folders()
         if filedialog is None:
             return
+        if self._receipt_import_active:
+            self.show_info("Receipt files are still being added. Please wait a moment.")
+            return
         selected = filedialog.askopenfilenames(
             title="Select receipt files",
             initialdir=self.remembered_file_dialog_dir(),
@@ -4829,101 +4860,129 @@ class ReimbursementHelperApp:
         self.remember_file_dialog_dir(paths)
         self.save_current_fields()
         self._details_ready_for_export = False
+        self.start_incremental_receipt_import(paths)
+
+    def import_receipt_file(self, path: Path, existing: set) -> Tuple[bool, Optional[str]]:
+        suffix = path.suffix.lower()
+        if suffix not in SUPPORTED_UPLOAD_SUFFIXES:
+            return False, None
+        if suffix == ".pdf":
+            try:
+                page_paths = render_pdf_pages(path)
+            except Exception as exc:
+                log_exception(f"Could not import PDF: {path}")
+                return False, f"{path.name}: {exc}"
+            if not page_paths:
+                return False, f"{path.name}: PDF has no pages"
+            key = selected_file_key(page_paths[0], str(path), "1")
+            if key in existing:
+                return False, None
+            filename = f"{path.name} ({len(page_paths)} pages)"
+            receipt_images = []
+            for page_index, page_path in enumerate(page_paths, start=1):
+                receipt_images.append(
+                    {
+                        "id": uuid.uuid4().hex,
+                        "path": str(page_path),
+                        "filename": f"{path.name} page {page_index}",
+                        "source_path": str(path),
+                        "source_page": str(page_index),
+                        "crop_box": None,
+                        "rotation_degrees": 0,
+                    }
+                )
+            self.items.append(
+                ReceiptItem(
+                    item_id=uuid.uuid4().hex,
+                    path=str(page_paths[0]),
+                    filename=filename,
+                    source_path=str(path),
+                    source_page="1",
+                    currency="USD" if self.form_version.get() == "USA" else "KRW",
+                    category="transportation",
+                    document_type="unknown" if self.form_version.get() == "USA" else "receipt",
+                    receipt_images=receipt_images,
+                )
+            )
+            existing.add(key)
+            return True, None
+        key = selected_file_key(path, str(path), "")
+        if key in existing:
+            return False, None
+        self.items.append(
+            ReceiptItem(
+                item_id=uuid.uuid4().hex,
+                path=str(path),
+                filename=path.name,
+                source_path=str(path),
+                currency="USD" if self.form_version.get() == "USA" else "KRW",
+                category="transportation",
+                document_type="unknown" if self.form_version.get() == "USA" else "receipt",
+                receipt_images=[
+                    {
+                        "id": uuid.uuid4().hex,
+                        "path": str(path),
+                        "filename": path.name,
+                        "source_path": str(path),
+                        "source_page": "",
+                        "crop_box": None,
+                        "rotation_degrees": 0,
+                    }
+                ],
+            )
+        )
+        existing.add(key)
+        return True, None
+
+    def start_incremental_receipt_import(self, paths: List[Path]) -> None:
         existing = {
             selected_file_key(Path(item.path), item.source_path, item.source_page)
             for item in [*self.items, *self.bank_items]
             if item.path
         }
-        added = 0
+        total = len(paths)
+        if total <= 0:
+            return
+        state = {"index": 0, "added": 0}
         failed: List[str] = []
         first_new_index = len(self.items)
-        for path in paths:
-            suffix = path.suffix.lower()
-            if suffix not in SUPPORTED_UPLOAD_SUFFIXES:
-                continue
-            if suffix == ".pdf":
-                try:
-                    page_paths = render_pdf_pages(path)
-                except Exception as exc:
-                    log_exception(f"Could not import PDF: {path}")
-                    failed.append(f"{path.name}: {exc}")
-                    continue
-                if not page_paths:
-                    failed.append(f"{path.name}: PDF has no pages")
-                    continue
-                key = selected_file_key(page_paths[0], str(path), "1")
-                if key in existing:
-                    continue
-                filename = f"{path.name} ({len(page_paths)} pages)"
-                receipt_images = []
-                for page_index, page_path in enumerate(page_paths, start=1):
-                    receipt_images.append(
-                        {
-                            "id": uuid.uuid4().hex,
-                            "path": str(page_path),
-                            "filename": f"{path.name} page {page_index}",
-                            "source_path": str(path),
-                            "source_page": str(page_index),
-                            "crop_box": None,
-                            "rotation_degrees": 0,
-                        }
-                    )
-                self.items.append(
-                    ReceiptItem(
-                        item_id=uuid.uuid4().hex,
-                        path=str(page_paths[0]),
-                        filename=filename,
-                        source_path=str(path),
-                        source_page="1",
-                        currency="USD" if self.form_version.get() == "USA" else "KRW",
-                        category="transportation",
-                        document_type="unknown" if self.form_version.get() == "USA" else "receipt",
-                        receipt_images=receipt_images,
-                    )
+        self._receipt_import_active = True
+        self.status_text.set(f"Adding receipt files 0/{total}...")
+        self.set_progress(0, total, f"0/{total}")
+
+        def step() -> None:
+            processed = 0
+            started = time.perf_counter()
+            while state["index"] < total and processed < 4 and time.perf_counter() - started < 0.08:
+                path = paths[state["index"]]
+                state["index"] += 1
+                added, error_text = self.import_receipt_file(path, existing)
+                if added:
+                    state["added"] += 1
+                if error_text:
+                    failed.append(error_text)
+                processed += 1
+            self.refresh_tree()
+            self.set_progress(state["index"], total, f"{state['index']}/{total}")
+            self.status_text.set(f"Adding receipt files {state['index']}/{total}...")
+            if state["index"] < total:
+                self.root.after(10, step)
+                return
+            self._receipt_import_active = False
+            if state["added"] and self.items and self.selected_index is None:
+                self.select_index(first_new_index)
+            self.save_session()
+            self.status_text.set(f"Added {state['added']} receipt file(s).")
+            self.update_toolbar_recommendation()
+            if failed and messagebox:
+                messagebox.showwarning(
+                    "Select Files",
+                    "Some files could not be imported.\n\n"
+                    + "\n".join(failed[:5])
+                    + f"\n\nLogged to:\n{LOG_DIR / 'app.log'}",
                 )
-                existing.add(key)
-                added += 1
-                continue
-            key = selected_file_key(path, str(path), "")
-            if key in existing:
-                continue
-            self.items.append(
-                ReceiptItem(
-                    item_id=uuid.uuid4().hex,
-                    path=str(path),
-                    filename=path.name,
-                    source_path=str(path),
-                    currency="USD" if self.form_version.get() == "USA" else "KRW",
-                    category="transportation",
-                    document_type="unknown" if self.form_version.get() == "USA" else "receipt",
-                    receipt_images=[
-                        {
-                            "id": uuid.uuid4().hex,
-                            "path": str(path),
-                            "filename": path.name,
-                            "source_path": str(path),
-                            "source_page": "",
-                            "crop_box": None,
-                            "rotation_degrees": 0,
-                        }
-                    ],
-                )
-            )
-            existing.add(key)
-            added += 1
-        self.refresh_tree()
-        if added and self.items and self.selected_index is None:
-            self.select_index(first_new_index)
-        self.save_session()
-        self.status_text.set(f"Added {added} receipt file(s).")
-        self.update_toolbar_recommendation()
-        if failed and messagebox:
-            messagebox.showwarning(
-                "Select Files",
-                "Some files could not be imported.\n\n"
-                + "\n".join(failed[:5])
-                + f"\n\nLogged to:\n{LOG_DIR / 'app.log'}",
-            )
+
+        self.root.after(0, step)
 
     def upload_folder(self) -> None:
         self.select_files()
@@ -6579,6 +6638,9 @@ class ReimbursementHelperApp:
             LOGGER.debug("Could not queue background Excel image preparation.", exc_info=True)
 
     def generate_empty_details(self) -> None:
+        if self._receipt_import_active:
+            self.show_info("Receipt files are still being added. Please wait a moment.")
+            return
         self.save_current_fields()
         items = [item for item in self.items if receipt_needs_ai(item, self.form_version.get())]
         if not items:
@@ -6606,6 +6668,9 @@ class ReimbursementHelperApp:
             pass
 
     def generate_all_details(self) -> None:
+        if self._receipt_import_active:
+            self.show_info("Receipt files are still being added. Please wait a moment.")
+            return
         self.save_current_fields()
         if not self.items:
             self.show_info("Upload receipts first.")
@@ -6959,6 +7024,9 @@ class ReimbursementHelperApp:
             self.update_preview()
 
     def generate_excel(self) -> None:
+        if self._receipt_import_active:
+            self.show_info("Receipt files are still being added. Please wait a moment.")
+            return
         self.save_current_fields()
         if not self.items:
             self.show_info("Upload at least one receipt before generating Excel.")
