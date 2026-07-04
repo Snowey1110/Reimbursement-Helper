@@ -88,6 +88,7 @@ KRW_NUMBER_FORMAT = "\u20a9#,##0"
 USA_SUPPORT_DATE_NUMBER_FORMAT = "m/d/yyyy"
 MAX_AI_RECEIPT_IMAGES = 8
 AI_AUTO_ROTATE_LANDSCAPE_RATIO = 1.15
+EXPORT_AUTO_ROTATE_LANDSCAPE_RATIO = 1.35
 DEFAULT_AI_REQUEST_CONCURRENCY = 4
 MAX_AI_REQUEST_CONCURRENCY = 8
 LOGGER = logging.getLogger("reimbursement_helper")
@@ -1062,13 +1063,17 @@ def call_openai_receipt_extraction(
 Extract reimbursement fields from the attached receipt image(s) for a {form_hint}.
 Return only compact JSON with these keys:
 date, place, amount, currency, krw_amount, rmb_amount, purpose, details,
-project_number, category, payment_method, receipt_label, document_type, confidence_notes.
+project_number, category, payment_method, receipt_label, document_type,
+rotation_degrees, confidence_notes.
 
 Rules:
 - date must be yyyy-mm-dd when visible, otherwise empty string.
 - amount should be the paid total. Preserve cents when visible.
 - If the receipt text is sideways or upside down, mentally rotate the image upright
   before reading the fields.
+- rotation_degrees should be 0, 90, 180, or 270 clockwise degrees needed to rotate
+  the original primary image upright. If you used a candidate labeled rotated right,
+  return 90. If you used a candidate labeled rotated left, return 270.
 - Some uploads are multi-page PDFs. Review all {page_count_hint} attached image(s);
   the paid total may be on a later page, payment info panel, or receipt summary page.
   Use the page that contains the final Total/Payment info/Paid amount. Ignore page
@@ -1086,6 +1091,10 @@ Rules:
   nucleic_test, materials, courier, consumables, welfare, other.
 - project_number should stay empty unless printed on the receipt or obvious from context.
 - purpose should be short, for example Parking, Gas, Hotel, Meal, Baggage, Supplies.
+- For USA gas-station receipts, including 7-Eleven, Shell, BP, Exxon, Mobil,
+  Chevron, Speedway, Circle K, Marathon, Sunoco, Valero, Pilot, Love's, Wawa,
+  QuikTrip, Casey's, Murphy, Costco Gas, or Meijer Gas, use purpose Gas and
+  category transportation. Do not classify those as snacks or office purchases.
 - details should be a natural one-line description.
 - receipt_label should be short enough to fit above a receipt image in Excel.
 - For USA, document_type must be receipt, payment_proof, or unknown. Use payment_proof
@@ -1425,6 +1434,48 @@ def normalized_category(category: str, form_version: str) -> str:
     return "other"
 
 
+USA_FUEL_VENDOR_PATTERN = re.compile(
+    r"\b("
+    r"7[\s-]?eleven|shell|bp|exxon|mobil|chevron|speedway|circle\s*k|marathon|"
+    r"sunoco|valero|pilot|love'?s|wawa|quiktrip|quicktrip|casey'?s|murphy|"
+    r"costco\s*gas|meijer\s*gas|gas\s*station"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def looks_like_usa_fuel_receipt(item: Any, *extra_values: Any) -> bool:
+    text = " ".join(
+        str(value or "")
+        for value in (
+            getattr(item, "place", ""),
+            getattr(item, "purpose", ""),
+            getattr(item, "details", ""),
+            getattr(item, "receipt_label", ""),
+            getattr(item, "filename", ""),
+            *extra_values,
+        )
+    )
+    lower = text.lower()
+    if re.search(r"\b(fuel|gasoline|gas purchase|petrol|diesel|unleaded|gallons?|pump)\b", lower):
+        return True
+    return bool(USA_FUEL_VENDOR_PATTERN.search(text))
+
+
+def normalize_usa_fuel_receipt_fields(item: Any, *extra_values: Any) -> None:
+    if not looks_like_usa_fuel_receipt(item, *extra_values):
+        return
+    item.category = "transportation"
+    item.purpose = "Gas"
+    place = str(getattr(item, "place", "") or "").strip()
+    current_details = str(getattr(item, "details", "") or "").strip()
+    if not current_details or re.search(r"\b(snacks?|convenience|purchase at|purchasing)\b", current_details, re.IGNORECASE):
+        item.details = f"Fuel purchase at {place}." if place else "Fuel purchase."
+    label = str(getattr(item, "receipt_label", "") or "").strip()
+    if not label or re.search(r"\b(snacks?|convenience|purchase)\b", label, re.IGNORECASE):
+        item.receipt_label = "Gas Receipt"
+
+
 def is_korea_other_text(value: str) -> bool:
     raw = (value or "").lower()
     return bool(re.search(r"\b(e-?sim|sim card|data plan|internet access)\b", raw)) or any(
@@ -1741,6 +1792,63 @@ def usa_receipt_merge_key(item: "ReceiptItem") -> Optional[Tuple[str, float]]:
     return date_key, round(amount, 2)
 
 
+def usa_receipt_date_score(item: "ReceiptItem") -> int:
+    parsed = parse_date_value(item.date)
+    if isinstance(parsed, date):
+        return 2 if parsed.year == date.today().year else 1
+    return 0
+
+
+def usa_same_transaction_despite_bad_year(left: "ReceiptItem", right: "ReceiptItem") -> bool:
+    left_amount = safe_float(left.amount)
+    right_amount = safe_float(right.amount)
+    if left_amount is None or right_amount is None or abs(left_amount - right_amount) > 0.01:
+        return False
+    left_date = parse_date_value(left.date)
+    right_date = parse_date_value(right.date)
+    if not isinstance(left_date, date) or not isinstance(right_date, date):
+        return False
+    current_year = date.today().year
+    if not ({left_date.year, right_date.year} & {current_year}):
+        return False
+    if left_date.year == right_date.year:
+        return False
+    try:
+        normalized_left = left_date.replace(year=current_year)
+        normalized_right = right_date.replace(year=current_year)
+    except ValueError:
+        return False
+    if abs((normalized_left - normalized_right).days) > 3:
+        return False
+    left_tokens = usa_match_tokens(left)
+    right_tokens = usa_match_tokens(right)
+    if len(left_tokens & right_tokens) >= 1 and (
+        looks_like_usa_fuel_receipt(left) or looks_like_usa_fuel_receipt(right)
+    ):
+        return True
+    left_place = re.sub(r"[^a-z0-9]+", "", str(left.place or "").lower())
+    right_place = re.sub(r"[^a-z0-9]+", "", str(right.place or "").lower())
+    return bool(left_place and right_place and left_place == right_place)
+
+
+def merge_usa_receipt_item_into(target: "ReceiptItem", source: "ReceiptItem") -> None:
+    merge_attachment_lists(ensure_receipt_images(target), ensure_receipt_images(source))
+    for attr in (
+        "place",
+        "purpose",
+        "details",
+        "project_number",
+        "category",
+        "payment_method",
+        "receipt_label",
+        "rmb_amount",
+    ):
+        if not str(getattr(target, attr, "") or "").strip() and str(getattr(source, attr, "") or "").strip():
+            setattr(target, attr, getattr(source, attr))
+    if target.status not in {"Failed", "Processing"}:
+        target.status = "Merged"
+
+
 def same_expense_date_values(left: str, right: str) -> bool:
     left_value = parse_date_value(left)
     right_value = parse_date_value(right)
@@ -1881,9 +1989,11 @@ def merge_same_usa_receipt_items(items: List["ReceiptItem"]) -> Tuple[List["Rece
     removed_to_target: Dict[str, str] = {}
     for item in items:
         auto_classify_usa_document_type(item)
+        normalize_usa_fuel_receipt_fields(item)
         if not is_usa_receipt_item(item):
             merged_items.append(item)
             continue
+        auto_rotate_landscape_receipt_images(item)
         ensure_receipt_images(item)
         key = usa_receipt_merge_key(item)
         if key is None or key not in seen:
@@ -1892,23 +2002,36 @@ def merge_same_usa_receipt_items(items: List["ReceiptItem"]) -> Tuple[List["Rece
             merged_items.append(item)
             continue
         target = seen[key]
-        merge_attachment_lists(ensure_receipt_images(target), ensure_receipt_images(item))
-        for attr in (
-            "place",
-            "purpose",
-            "details",
-            "project_number",
-            "category",
-            "payment_method",
-            "receipt_label",
-            "rmb_amount",
-        ):
-            if not str(getattr(target, attr, "") or "").strip() and str(getattr(item, attr, "") or "").strip():
-                setattr(target, attr, getattr(item, attr))
-        if target.status not in {"Failed", "Processing"}:
-            target.status = "Merged"
+        merge_usa_receipt_item_into(target, item)
         removed_to_target[item.item_id] = target.item_id
         merged_count += 1
+    if merged_items:
+        retained_exact: List[ReceiptItem] = []
+        for item in merged_items:
+            if not is_usa_receipt_item(item) or safe_float(item.amount) is None:
+                retained_exact.append(item)
+                continue
+            target_index = next(
+                (
+                    index
+                    for index, candidate in enumerate(retained_exact)
+                    if is_usa_receipt_item(candidate)
+                    and usa_same_transaction_despite_bad_year(candidate, item)
+                ),
+                None,
+            )
+            if target_index is None:
+                retained_exact.append(item)
+                continue
+            target = retained_exact[target_index]
+            keeper = item if usa_receipt_date_score(item) > usa_receipt_date_score(target) else target
+            duplicate = target if keeper is item else item
+            if keeper is item:
+                retained_exact[target_index] = keeper
+            merge_usa_receipt_item_into(keeper, duplicate)
+            removed_to_target[duplicate.item_id] = keeper.item_id
+            merged_count += 1
+        merged_items = retained_exact
     if merged_items:
         retained: List[ReceiptItem] = []
         paid_receipts = [
@@ -1924,12 +2047,7 @@ def merge_same_usa_receipt_items(items: List["ReceiptItem"]) -> Tuple[List["Rece
             if target is None:
                 retained.append(item)
                 continue
-            merge_attachment_lists(ensure_receipt_images(target), ensure_receipt_images(item))
-            for attr in ("place", "purpose", "details", "project_number", "category", "payment_method", "receipt_label"):
-                if not str(getattr(target, attr, "") or "").strip() and str(getattr(item, attr, "") or "").strip():
-                    setattr(target, attr, getattr(item, attr))
-            if target.status not in {"Failed", "Processing"}:
-                target.status = "Merged"
+            merge_usa_receipt_item_into(target, item)
             removed_to_target[item.item_id] = target.item_id
             merged_count += 1
         merged_items = retained
@@ -2131,6 +2249,57 @@ def normalize_rotation(value: Any) -> int:
     except (TypeError, ValueError):
         degrees = 0
     return degrees % 360 // 90 * 90
+
+
+def apply_primary_receipt_rotation_hint(item: "ReceiptItem", value: Any) -> bool:
+    rotation = normalize_rotation(value)
+    if not rotation:
+        return False
+    images = ensure_receipt_images(item)
+    if not images:
+        return False
+    primary = images[0]
+    if normalize_rotation(primary.get("rotation_degrees", 0)):
+        return False
+    primary["rotation_degrees"] = rotation
+    item.rotation_degrees = rotation
+    item.crop_box = primary.get("crop_box")
+    return True
+
+
+def attachment_needs_landscape_rotation(attachment: Dict[str, Any]) -> bool:
+    if Image is None:
+        return False
+    if normalize_rotation(attachment.get("rotation_degrees", 0)):
+        return False
+    if attachment.get("crop_box"):
+        return False
+    path = Path(str(attachment.get("path") or ""))
+    if not path.exists():
+        return False
+    try:
+        with Image.open(path) as source:
+            image = ImageOps.exif_transpose(source) if ImageOps is not None else source
+            width, height = image.size
+    except Exception:
+        return False
+    return width > max(1, int(height * EXPORT_AUTO_ROTATE_LANDSCAPE_RATIO))
+
+
+def auto_rotate_landscape_receipt_images(item: "ReceiptItem") -> bool:
+    if not is_usa_receipt_item(item):
+        return False
+    changed = False
+    images = ensure_receipt_images(item)
+    for attachment in images:
+        if attachment_needs_landscape_rotation(attachment):
+            attachment["rotation_degrees"] = 90
+            changed = True
+    if changed and images:
+        primary = images[0]
+        item.rotation_degrees = normalize_rotation(primary.get("rotation_degrees", 0))
+        item.crop_box = primary.get("crop_box")
+    return changed
 
 
 def oriented_image_from_path(path: Path, rotation_degrees: Any = 0) -> Any:
@@ -6420,6 +6589,7 @@ class ReimbursementHelperApp:
         if self.form_version.get() == "USA":
             item.currency = "USD"
             item.document_type = normalize_document_type(item.document_type, "unknown")
+            apply_primary_receipt_rotation_hint(item, data.get("rotation_degrees"))
             auto_classify_usa_document_type(
                 item,
                 data.get("vendor"),
@@ -6436,10 +6606,13 @@ class ReimbursementHelperApp:
                 data.get("confidence_notes"),
             ):
                 item.document_type = "payment_proof"
+            if item.document_type == "receipt":
+                normalize_usa_fuel_receipt_fields(item, data.get("vendor"), data.get("confidence_notes"))
         else:
             item.currency = normalize_currency(item.currency, "KRW")
             item.document_type = "receipt"
             item.matched_receipt_id = ""
+            apply_primary_receipt_rotation_hint(item, data.get("rotation_degrees"))
         self.update_item_amount_fields(item, "amount")
         item.status = "AI filled"
 
