@@ -38,6 +38,12 @@ const USA_RECEIPT_IMAGE_MAX_HEIGHT = 720;
 const USA_PROOF_IMAGE_MAX_WIDTH = 590;
 const USA_PROOF_IMAGE_MAX_HEIGHT = 720;
 const USA_SUPPORT_IMAGE_PADDING = 12;
+const SPREADSHEET_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+const OFFICE_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+const PACKAGE_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships";
+const CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types";
+const DRAWING_NS = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing";
+const DRAWING_MAIN_NS = "http://schemas.openxmlformats.org/drawingml/2006/main";
 
 function dataUrlBase64(dataUrl: string): string {
   return dataUrl.split(",", 2)[1] ?? dataUrl;
@@ -45,6 +51,7 @@ function dataUrlBase64(dataUrl: string): string {
 
 export function sanitizeDrawingXml(xml: string): string {
   return xml
+    .replace(/\s+editAs="oneCell"/g, "")
     .replace(/<a:extLst>[\s\S]*?<\/a:extLst>/g, "")
     .replace(
       /(<xdr:oneCellAnchor\b[\s\S]*?<xdr:ext cx="(\d+)" cy="(\d+)"\/>[\s\S]*?<a:xfrm><a:off x="0" y="0"\/><a:ext )cx="0" cy="0"(\/><\/a:xfrm>)/g,
@@ -63,8 +70,404 @@ export function sanitizeWorkbookXml(xml: string): string {
   });
 }
 
+type CellPatch =
+  | { kind: "blank" }
+  | { kind: "formula"; value: string }
+  | { kind: "number"; value: string }
+  | { kind: "string"; value: string };
+
+interface GeneratedSheetData {
+  cells: Map<string, CellPatch>;
+  rowHeights: Map<number, string>;
+}
+
+interface CleanDrawingPackage {
+  drawingXml: string;
+  relsXml: string;
+  mediaNames: string[];
+}
+
+function parseXml(xml: string): Document {
+  const doc = new DOMParser().parseFromString(xml, "application/xml");
+  if (doc.getElementsByTagName("parsererror").length) throw new Error("Could not parse workbook XML.");
+  return doc;
+}
+
+function serializeXml(doc: Document): string {
+  return new XMLSerializer().serializeToString(doc);
+}
+
+function zipInput(buffer: unknown): ArrayBuffer | Uint8Array {
+  if (buffer instanceof ArrayBuffer) return buffer;
+  if (ArrayBuffer.isView(buffer)) return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  if (buffer && typeof buffer === "object" && "byteLength" in buffer && typeof (buffer as ArrayBuffer).slice === "function") {
+    return new Uint8Array(buffer as ArrayBuffer);
+  }
+  return buffer as ArrayBuffer;
+}
+
+function elementChildren(parent: Element, localName?: string): Element[] {
+  return Array.from(parent.children).filter((child) => !localName || child.localName === localName);
+}
+
+function firstChild(parent: Element | Document, localName: string): Element | undefined {
+  return Array.from(parent.getElementsByTagNameNS("*", localName))[0] as Element | undefined;
+}
+
+function directChild(parent: Element, localName: string): Element | undefined {
+  return elementChildren(parent, localName)[0];
+}
+
+function textFromRichText(parent: Element): string {
+  return Array.from(parent.getElementsByTagNameNS("*", "t"))
+    .map((node) => node.textContent ?? "")
+    .join("");
+}
+
+function columnNameFromRef(ref: string): string {
+  return /^([A-Z]+)/.exec(ref)?.[1] ?? "";
+}
+
+function rowNumberFromRef(ref: string): number {
+  return Number(/[A-Z]+(\d+)/.exec(ref)?.[1] ?? 0);
+}
+
+function columnNumber(column: string): number {
+  let value = 0;
+  for (const char of column) value = value * 26 + (char.charCodeAt(0) - 64);
+  return value;
+}
+
+function readSharedStrings(zip: JSZip): Promise<string[]> {
+  const file = zip.file("xl/sharedStrings.xml");
+  if (!file) return Promise.resolve([]);
+  return file.async("string").then((xml) => {
+    const doc = parseXml(xml);
+    return Array.from(doc.getElementsByTagNameNS(SPREADSHEET_NS, "si")).map((item) => textFromRichText(item));
+  });
+}
+
+function cellPatchFromElement(cell: Element, sharedStrings: string[]): CellPatch {
+  const formula = directChild(cell, "f");
+  if (formula) return { kind: "formula", value: formula.textContent ?? "" };
+  const type = cell.getAttribute("t");
+  if (type === "s") {
+    const index = Number(directChild(cell, "v")?.textContent ?? -1);
+    return { kind: "string", value: sharedStrings[index] ?? "" };
+  }
+  if (type === "inlineStr") return { kind: "string", value: textFromRichText(cell) };
+  if (type === "str") return { kind: "string", value: directChild(cell, "v")?.textContent ?? "" };
+  const value = directChild(cell, "v");
+  if (value) return { kind: "number", value: value.textContent ?? "" };
+  return { kind: "blank" };
+}
+
+async function extractGeneratedSheetData(zip: JSZip, sheetPath: string): Promise<GeneratedSheetData> {
+  const sheetFile = zip.file(sheetPath);
+  if (!sheetFile) throw new Error(`Missing generated worksheet: ${sheetPath}`);
+  const [sheetXml, sharedStrings] = await Promise.all([sheetFile.async("string"), readSharedStrings(zip)]);
+  const doc = parseXml(sheetXml);
+  const cells = new Map<string, CellPatch>();
+  const rowHeights = new Map<number, string>();
+  const sheetData = firstChild(doc, "sheetData");
+  if (!sheetData) return { cells, rowHeights };
+  for (const row of elementChildren(sheetData, "row")) {
+    const rowNumber = Number(row.getAttribute("r") ?? 0);
+    const height = row.getAttribute("ht");
+    if (rowNumber && height) rowHeights.set(rowNumber, height);
+    for (const cell of elementChildren(row, "c")) {
+      const ref = cell.getAttribute("r");
+      if (ref) cells.set(ref, cellPatchFromElement(cell, sharedStrings));
+    }
+  }
+  return { cells, rowHeights };
+}
+
+function collectStyleByColumn(sheetData: Element, preferredRow?: number): Map<string, string> {
+  const styles = new Map<string, string>();
+  const rows = elementChildren(sheetData, "row");
+  const orderedRows = preferredRow ? [...rows.filter((row) => Number(row.getAttribute("r")) === preferredRow), ...rows] : rows;
+  for (const row of orderedRows) {
+    for (const cell of elementChildren(row, "c")) {
+      const ref = cell.getAttribute("r") ?? "";
+      const column = columnNameFromRef(ref);
+      const style = cell.getAttribute("s");
+      if (column && style && !styles.has(column)) styles.set(column, style);
+    }
+  }
+  return styles;
+}
+
+function ensureRow(doc: Document, sheetData: Element, rowNumber: number, templateRow?: Element): Element {
+  const existing = elementChildren(sheetData, "row").find((row) => Number(row.getAttribute("r")) === rowNumber);
+  if (existing) return existing;
+  const row = doc.createElementNS(SPREADSHEET_NS, "row");
+  row.setAttribute("r", String(rowNumber));
+  if (templateRow) {
+    for (const { name, value } of Array.from(templateRow.attributes)) {
+      if (name !== "r") row.setAttribute(name, value);
+    }
+  }
+  const nextRow = elementChildren(sheetData, "row").find((candidate) => Number(candidate.getAttribute("r")) > rowNumber);
+  sheetData.insertBefore(row, nextRow ?? null);
+  return row;
+}
+
+function ensureCell(doc: Document, row: Element, ref: string, fallbackStyle?: string): Element {
+  const existing = elementChildren(row, "c").find((cell) => cell.getAttribute("r") === ref);
+  if (existing) return existing;
+  const cell = doc.createElementNS(SPREADSHEET_NS, "c");
+  cell.setAttribute("r", ref);
+  if (fallbackStyle) cell.setAttribute("s", fallbackStyle);
+  const targetColumn = columnNumber(columnNameFromRef(ref));
+  const nextCell = elementChildren(row, "c").find((candidate) => columnNumber(columnNameFromRef(candidate.getAttribute("r") ?? "")) > targetColumn);
+  row.insertBefore(cell, nextCell ?? null);
+  return cell;
+}
+
+function setCellPatch(doc: Document, cell: Element, patch: CellPatch): void {
+  for (const child of Array.from(cell.children)) {
+    if (["f", "v", "is"].includes(child.localName)) cell.removeChild(child);
+  }
+  if (patch.kind === "blank" || !patch.value) {
+    cell.removeAttribute("t");
+    return;
+  }
+  if (patch.kind === "formula") {
+    cell.removeAttribute("t");
+    const formula = doc.createElementNS(SPREADSHEET_NS, "f");
+    formula.textContent = patch.value;
+    cell.appendChild(formula);
+    return;
+  }
+  if (patch.kind === "number") {
+    cell.removeAttribute("t");
+    const value = doc.createElementNS(SPREADSHEET_NS, "v");
+    value.textContent = patch.value;
+    cell.appendChild(value);
+    return;
+  }
+  cell.setAttribute("t", "inlineStr");
+  const inline = doc.createElementNS(SPREADSHEET_NS, "is");
+  const text = doc.createElementNS(SPREADSHEET_NS, "t");
+  if (patch.value.trim() !== patch.value) text.setAttributeNS("http://www.w3.org/XML/1998/namespace", "xml:space", "preserve");
+  text.textContent = patch.value;
+  inline.appendChild(text);
+  cell.appendChild(inline);
+}
+
+function patchWorksheetValues(
+  templateXml: string,
+  generated: GeneratedSheetData,
+  options: {
+    staticRefs?: string[];
+    rowRanges?: Array<{ start: number; end: number; cols: string[]; templateRow?: number }>;
+    columnWidths?: Record<string, number>;
+    dimensionRef?: string;
+    drawingRelId?: string;
+  }
+): string {
+  const doc = parseXml(templateXml);
+  const worksheet = doc.documentElement;
+  const sheetData = firstChild(doc, "sheetData");
+  if (!sheetData) return templateXml;
+  const stylesByColumn = collectStyleByColumn(sheetData);
+
+  for (const ref of options.staticRefs ?? []) {
+    const rowNumber = rowNumberFromRef(ref);
+    const column = columnNameFromRef(ref);
+    if (!rowNumber || !column) continue;
+    const row = ensureRow(doc, sheetData, rowNumber);
+    const cell = ensureCell(doc, row, ref, stylesByColumn.get(column));
+    setCellPatch(doc, cell, generated.cells.get(ref) ?? { kind: "blank" });
+  }
+
+  for (const range of options.rowRanges ?? []) {
+    const templateRow = elementChildren(sheetData, "row").find((row) => Number(row.getAttribute("r")) === range.templateRow);
+    const rangeStyles = collectStyleByColumn(sheetData, range.templateRow);
+    for (let rowNumber = range.start; rowNumber <= range.end; rowNumber += 1) {
+      const row = ensureRow(doc, sheetData, rowNumber, templateRow);
+      const height = generated.rowHeights.get(rowNumber);
+      if (height) {
+        row.setAttribute("ht", height);
+        row.setAttribute("customHeight", "1");
+      }
+      for (const col of range.cols) {
+        const ref = `${col}${rowNumber}`;
+        const cell = ensureCell(doc, row, ref, rangeStyles.get(col) ?? stylesByColumn.get(col));
+        setCellPatch(doc, cell, generated.cells.get(ref) ?? { kind: "blank" });
+      }
+    }
+  }
+
+  if (options.columnWidths) {
+    const cols = firstChild(doc, "cols");
+    if (cols) {
+      for (const col of elementChildren(cols, "col")) {
+        const min = Number(col.getAttribute("min"));
+        const max = Number(col.getAttribute("max"));
+        for (const [column, width] of Object.entries(options.columnWidths)) {
+          const index = columnNumber(column);
+          if (index >= min && index <= max) {
+            col.setAttribute("width", String(width));
+            col.setAttribute("customWidth", "1");
+          }
+        }
+      }
+    }
+  }
+
+  if (options.dimensionRef) firstChild(doc, "dimension")?.setAttribute("ref", options.dimensionRef);
+  for (const drawing of Array.from(doc.getElementsByTagNameNS(SPREADSHEET_NS, "drawing"))) drawing.remove();
+  if (options.drawingRelId) {
+    const drawing = doc.createElementNS(SPREADSHEET_NS, "drawing");
+    drawing.setAttributeNS(OFFICE_REL_NS, "r:id", options.drawingRelId);
+    const pageSetup = firstChild(doc, "pageSetup");
+    worksheet.insertBefore(drawing, pageSetup?.nextSibling ?? null);
+  }
+  return serializeXml(doc);
+}
+
+function normalizePackagePath(baseFolder: string, target: string): string {
+  if (target.startsWith("/")) return target.slice(1);
+  const parts = [...baseFolder.split("/"), ...target.split("/")];
+  const normalized: string[] = [];
+  for (const part of parts) {
+    if (!part || part === ".") continue;
+    if (part === "..") normalized.pop();
+    else normalized.push(part);
+  }
+  return normalized.join("/");
+}
+
+async function buildCleanDrawingPackage(generatedZip: JSZip): Promise<CleanDrawingPackage | undefined> {
+  const sheetRelFile = generatedZip.file("xl/worksheets/_rels/sheet2.xml.rels");
+  if (!sheetRelFile) return undefined;
+  const sheetRels = parseXml(await sheetRelFile.async("string"));
+  const drawingRel = Array.from(sheetRels.getElementsByTagNameNS(PACKAGE_REL_NS, "Relationship")).find((rel) =>
+    rel.getAttribute("Type")?.endsWith("/drawing")
+  );
+  if (!drawingRel) return undefined;
+  const drawingPath = normalizePackagePath("xl/worksheets", drawingRel.getAttribute("Target") ?? "");
+  const drawingFile = generatedZip.file(drawingPath);
+  const drawingRelsFile = generatedZip.file(`xl/drawings/_rels/${drawingPath.split("/").pop()}.rels`);
+  if (!drawingFile || !drawingRelsFile) return undefined;
+
+  const drawingDoc = parseXml(await drawingFile.async("string"));
+  const drawingRels = parseXml(await drawingRelsFile.async("string"));
+  const mediaByRelId = new Map<string, string>();
+  for (const rel of Array.from(drawingRels.getElementsByTagNameNS(PACKAGE_REL_NS, "Relationship"))) {
+    if (!rel.getAttribute("Type")?.endsWith("/image")) continue;
+    const id = rel.getAttribute("Id");
+    const target = rel.getAttribute("Target");
+    if (id && target) mediaByRelId.set(id, normalizePackagePath("xl/drawings", target));
+  }
+
+  const anchors = Array.from(drawingDoc.getElementsByTagNameNS(DRAWING_NS, "oneCellAnchor"));
+  if (!anchors.length) return undefined;
+  const usedMedia = new Map<string, string>();
+  const anchorXml = anchors
+    .map((anchor, index) => {
+      const from = directChild(anchor, "from");
+      const ext = directChild(anchor, "ext");
+      const blip = Array.from(anchor.getElementsByTagNameNS(DRAWING_MAIN_NS, "blip"))[0];
+      const relId = blip?.getAttributeNS(OFFICE_REL_NS, "embed") ?? blip?.getAttribute("r:embed") ?? `rId${index + 1}`;
+      const media = mediaByRelId.get(relId);
+      if (media) usedMedia.set(relId, media);
+      const value = (name: string) => directChild(from!, name)?.textContent ?? "0";
+      return `<oneCellAnchor><from><col>${value("col")}</col><colOff>${value("colOff")}</colOff><row>${value("row")}</row><rowOff>${value(
+        "rowOff"
+      )}</rowOff></from><ext cx="${ext?.getAttribute("cx") ?? "1"}" cy="${ext?.getAttribute("cy") ?? "1"}" /><pic><nvPicPr><cNvPr id="${
+        index + 1
+      }" name="Image ${index + 1}" descr="Picture" /><cNvPicPr /></nvPicPr><blipFill><a:blip cstate="print" r:embed="${relId}" /><a:stretch><a:fillRect /></a:stretch></blipFill><spPr><a:prstGeom prst="rect" /></spPr></pic><clientData /></oneCellAnchor>`;
+    })
+    .join("");
+  const relsXml = `<Relationships xmlns="${PACKAGE_REL_NS}">${Array.from(usedMedia.entries())
+    .map(([relId, media]) => `<Relationship Type="${OFFICE_REL_NS}/image" Target="/${media}" Id="${relId}" />`)
+    .join("")}</Relationships>`;
+  return {
+    drawingXml: `<wsDr xmlns:a="${DRAWING_MAIN_NS}" xmlns:r="${OFFICE_REL_NS}" xmlns="${DRAWING_NS}">${anchorXml}</wsDr>`,
+    relsXml,
+    mediaNames: Array.from(usedMedia.values())
+  };
+}
+
+function patchContentTypes(xml: string, mediaNames: string[], hasDrawing: boolean): string {
+  const doc = parseXml(xml);
+  const root = doc.documentElement;
+  const defaults = Array.from(doc.getElementsByTagNameNS(CONTENT_TYPES_NS, "Default"));
+  const firstOverride = Array.from(doc.getElementsByTagNameNS(CONTENT_TYPES_NS, "Override"))[0] ?? null;
+  const ensureDefault = (extension: string, contentType: string) => {
+    if (defaults.some((item) => item.getAttribute("Extension")?.toLowerCase() === extension)) return;
+    const node = doc.createElementNS(CONTENT_TYPES_NS, "Default");
+    node.setAttribute("Extension", extension);
+    node.setAttribute("ContentType", contentType);
+    root.insertBefore(node, firstOverride);
+  };
+  for (const mediaName of mediaNames) {
+    const extension = mediaName.split(".").pop()?.toLowerCase();
+    if (extension === "png") ensureDefault("png", "image/png");
+    if (extension === "jpg" || extension === "jpeg") ensureDefault(extension, "image/jpeg");
+  }
+  if (hasDrawing && !Array.from(doc.getElementsByTagNameNS(CONTENT_TYPES_NS, "Override")).some((node) => node.getAttribute("PartName") === "/xl/drawings/drawing1.xml")) {
+    const override = doc.createElementNS(CONTENT_TYPES_NS, "Override");
+    override.setAttribute("PartName", "/xl/drawings/drawing1.xml");
+    override.setAttribute("ContentType", "application/vnd.openxmlformats-officedocument.drawing+xml");
+    root.appendChild(override);
+  }
+  return serializeXml(doc);
+}
+
+export async function sanitizeUsaWorkbookBuffer(buffer: ExcelJS.Buffer, templateBuffer: ArrayBuffer): Promise<ArrayBuffer> {
+  const [generatedZip, outputZip] = await Promise.all([JSZip.loadAsync(zipInput(buffer)), JSZip.loadAsync(zipInput(templateBuffer))]);
+  const [templateSheet1, templateSheet2, generatedSheet1, generatedSheet2] = await Promise.all([
+    outputZip.file("xl/worksheets/sheet1.xml")?.async("string"),
+    outputZip.file("xl/worksheets/sheet2.xml")?.async("string"),
+    extractGeneratedSheetData(generatedZip, "xl/worksheets/sheet1.xml"),
+    extractGeneratedSheetData(generatedZip, "xl/worksheets/sheet2.xml")
+  ]);
+  if (!templateSheet1 || !templateSheet2) throw new Error("USA template is missing worksheet XML.");
+  const drawing = await buildCleanDrawingPackage(generatedZip);
+  const maxReceiptRow = Math.max(55, ...Array.from(generatedSheet2.cells.keys()).map(rowNumberFromRef).filter(Boolean));
+  const expenseRows = Array.from(new Set(Object.values(USA_CATEGORY_ROWS).flat()));
+
+  outputZip.file(
+    "xl/worksheets/sheet1.xml",
+    patchWorksheetValues(templateSheet1, generatedSheet1, {
+      staticRefs: ["A3", "A4", "J1"],
+      rowRanges: [{ start: Math.min(...expenseRows), end: Math.max(...expenseRows), cols: "ABCDEFGH".split(""), templateRow: 7 }],
+      dimensionRef: "A1:J70"
+    })
+  );
+  outputZip.file(
+    "xl/worksheets/sheet2.xml",
+    patchWorksheetValues(templateSheet2, generatedSheet2, {
+      rowRanges: [{ start: 2, end: maxReceiptRow, cols: "ABCDE".split(""), templateRow: 2 }],
+      columnWidths: { A: 11, B: 25.9, C: 17, D: USA_RECEIPT_COLUMN_WIDTH, E: USA_PROOF_COLUMN_WIDTH },
+      dimensionRef: `A1:E${maxReceiptRow}`,
+      drawingRelId: drawing ? "rId1" : undefined
+    })
+  );
+
+  if (drawing) {
+    outputZip.file("xl/worksheets/_rels/sheet2.xml.rels", `<Relationships xmlns="${PACKAGE_REL_NS}"><Relationship Type="${OFFICE_REL_NS}/drawing" Target="/xl/drawings/drawing1.xml" Id="rId1" /></Relationships>`);
+    outputZip.file("xl/drawings/drawing1.xml", drawing.drawingXml);
+    outputZip.file("xl/drawings/_rels/drawing1.xml.rels", drawing.relsXml);
+    for (const mediaName of drawing.mediaNames) {
+      const media = generatedZip.file(mediaName);
+      if (media) outputZip.file(mediaName, await media.async("arraybuffer"));
+    }
+  }
+
+  const contentTypes = outputZip.file("[Content_Types].xml");
+  if (contentTypes) outputZip.file("[Content_Types].xml", patchContentTypes(await contentTypes.async("string"), drawing?.mediaNames ?? [], Boolean(drawing)));
+  const workbookXml = outputZip.file("xl/workbook.xml");
+  if (workbookXml) outputZip.file("xl/workbook.xml", sanitizeWorkbookXml(await workbookXml.async("string")));
+  return outputZip.generateAsync({ type: "arraybuffer", compression: "DEFLATE" });
+}
+
 async function sanitizeWorkbookBuffer(buffer: ExcelJS.Buffer): Promise<ArrayBuffer> {
-  const zip = await JSZip.loadAsync(buffer as ArrayBuffer);
+  const zip = await JSZip.loadAsync(zipInput(buffer));
   const workbookXml = zip.file("xl/workbook.xml");
   if (workbookXml) {
     zip.file("xl/workbook.xml", sanitizeWorkbookXml(await workbookXml.async("string")));
@@ -87,6 +490,15 @@ async function fetchWorkbook(url: string): Promise<ExcelJS.Workbook> {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(buffer);
   return workbook;
+}
+
+async function fetchWorkbookWithBuffer(url: string): Promise<{ workbook: ExcelJS.Workbook; buffer: ArrayBuffer }> {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Could not load template: ${url}`);
+  const buffer = await response.arrayBuffer();
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+  return { workbook, buffer };
 }
 
 function clearCells(sheet: ExcelJS.Worksheet, rows: number[], cols: string[]): void {
@@ -500,7 +912,7 @@ function configureKoreaReceiptPage(sheet: ExcelJS.Worksheet, slotCount: number):
 }
 
 export async function exportUsaWorkbook(items: ReceiptItem[], proofs: PaymentProof[], rates: ExchangeRates): Promise<void> {
-  const workbook = await fetchWorkbook(USA_TEMPLATE_URL);
+  const { workbook, buffer: templateBuffer } = await fetchWorkbookWithBuffer(USA_TEMPLATE_URL);
   const expense = workbook.getWorksheet("Expense report");
   const receipts = workbook.getWorksheet("Receipt and Payment of expenses");
   if (!expense || !receipts) throw new Error("USA template is missing required sheets.");
@@ -577,7 +989,7 @@ export async function exportUsaWorkbook(items: ReceiptItem[], proofs: PaymentPro
       USA_SUPPORT_IMAGE_PADDING
     );
   }
-  const buffer = await sanitizeWorkbookBuffer(await workbook.xlsx.writeBuffer());
+  const buffer = await sanitizeUsaWorkbookBuffer(await workbook.xlsx.writeBuffer(), templateBuffer);
   downloadBlob(new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `reimbursement_usa_${dateStamp()}.xlsx`);
 }
 

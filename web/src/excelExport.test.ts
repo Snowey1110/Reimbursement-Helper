@@ -1,4 +1,5 @@
 import ExcelJS from "exceljs";
+import JSZip from "jszip";
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { image, receipt } from "./test/factories";
@@ -17,8 +18,13 @@ import {
   mapKoreaDetailRows,
   mapUsaExpenseRows,
   sanitizeDrawingXml,
+  sanitizeUsaWorkbookBuffer,
   sanitizeWorkbookXml
 } from "./excelExport";
+
+function arrayBufferFromBuffer(buffer: Buffer): ArrayBuffer {
+  return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -54,7 +60,36 @@ describe("Excel row mapping", () => {
     const sanitized = sanitizeDrawingXml(xml);
 
     expect(sanitized).toContain('<a:ext cx="12345" cy="67890"/>');
+    expect(sanitized).not.toContain('editAs="oneCell"');
     expect(sanitized).not.toContain("<a:extLst>");
+  });
+
+  it("repackages USA web exports with Excel-safe template sheets and drawing order", async () => {
+    const template = readFileSync("public/templates/usa_expense_report_template.xlsx");
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(template);
+    const receipts = workbook.getWorksheet("Receipt and Payment of expenses");
+    if (!receipts) throw new Error("Missing USA receipts sheet.");
+    receipts.getCell("A2").value = 1;
+    receipts.getCell("B2").value = "2026-06-26";
+    receipts.getCell("C2").value = 2.5;
+    const imageId = workbook.addImage({
+      base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+      extension: "png"
+    });
+    receipts.addImage(imageId, { tl: { col: 3, row: 1 }, ext: { width: 200, height: 200 } });
+
+    const raw = await workbook.xlsx.writeBuffer();
+    const sanitized = await sanitizeUsaWorkbookBuffer(raw, arrayBufferFromBuffer(template));
+    const zip = await JSZip.loadAsync(sanitized);
+    const sheet2 = await zip.file("xl/worksheets/sheet2.xml")!.async("string");
+    const drawingRels = await zip.file("xl/drawings/_rels/drawing1.xml.rels")!.async("string");
+
+    expect(sheet2.indexOf("<pageSetup")).toBeGreaterThan(-1);
+    expect(sheet2.indexOf("<drawing")).toBeGreaterThan(sheet2.indexOf("<pageSetup"));
+    expect(drawingRels).toContain('Target="/xl/media/image1.png"');
+    expect(zip.file("xl/sharedStrings.xml")).toBeNull();
+    expect(zip.file("xl/media/image1.png")).toBeDefined();
   });
 
   it("sanitizes ExcelJS print-area defined names back to absolute cell references", () => {
