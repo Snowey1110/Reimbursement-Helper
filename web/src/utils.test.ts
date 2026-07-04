@@ -5,6 +5,7 @@ import {
   matchPaymentProofs,
   mergeSameUsaReceipts,
   normalizeCurrency,
+  normalizeUsaTransportationFields,
   receiptNeedsAi,
   reportCategoryForItem,
   swapProofForReceipt,
@@ -118,6 +119,33 @@ describe("payment proof matching", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].receiptImages.map((entry) => entry.id)).toEqual(["receipt-img"]);
     expect(rows[0].proofImages.map((entry) => entry.id)).toEqual(["proof-img"]);
+  });
+
+  it("forces parking and toll text back to transportation even if AI says meals", () => {
+    const item = receipt({
+      id: "wabash",
+      place: "Wabash Randolph",
+      purpose: "Breakfast",
+      details: "Breakfast at Wabash Randolph",
+      category: "meals",
+      receiptLabel: "Parking lots and garages"
+    });
+
+    expect(reportCategoryForItem(item, "USA")).toBe("transportation");
+    const normalized = normalizeUsaTransportationFields(item);
+    expect(normalized.category).toBe("transportation");
+    expect(normalized.purpose).toBe("Parking");
+    expect(normalized.details).toBe("Parking at Wabash Randolph.");
+  });
+
+  it("sorts USA receipt support rows by date after matching proofs", () => {
+    const rows = buildUsaReportRows([
+      receipt({ id: "late", date: "2026-06-22", amount: "22", documentType: "receipt" }),
+      receipt({ id: "proof-only", date: "2026-06-18", amount: "18", documentType: "payment_proof" }),
+      receipt({ id: "early", date: "2026-06-19", amount: "19", documentType: "receipt" })
+    ]);
+
+    expect(rows.map((row) => row.date)).toEqual(["2026-06-18", "2026-06-19", "2026-06-22"]);
   });
 
   it("identifies only unprocessed or incomplete rows for Generate Empty", () => {

@@ -1,5 +1,14 @@
 import type { FormVersion, ImageAttachment, ReceiptExtraction, ReceiptItem } from "./types";
-import { normalizeCategory, normalizeCurrency, normalizeDocumentType, updateAmounts } from "./utils";
+import {
+  looksLikeUsaFuelReceipt,
+  looksLikeUsaParkingReceipt,
+  looksLikeUsaTollReceipt,
+  normalizeCategory,
+  normalizeCurrency,
+  normalizeDocumentType,
+  normalizeUsaTransportationFields,
+  updateAmounts
+} from "./utils";
 import { DEFAULT_KRW_TO_RMB, DEFAULT_USD_TO_KRW, DEFAULT_USD_TO_RMB } from "./constants";
 
 const RECEIPT_SCHEMA = {
@@ -53,7 +62,14 @@ const EXCHANGE_RATE_SCHEMA = {
 
 function looksLikeUsaPaymentProof(values: unknown[]): boolean {
   const text = values.join(" ").toLowerCase();
-  return /\b(chase|bank|statement|transaction details|posted date|card number|account|sapphire|proof of payment|payment proof|merchant type)\b/.test(text);
+  return /\b(chase|bank|statement|transaction details|posted date|sapphire|freedom|proof of payment|payment proof|merchant type|rewards earned|printed from chase personal online)\b/.test(
+    text
+  );
+}
+
+function looksLikeMerchantReceipt(values: unknown[]): boolean {
+  const text = values.join(" ").toLowerCase();
+  return /\b(receipt|ticket|invoice|total|subtotal|tax|authorization|terminal|thank you|cashier|merchant copy)\b/.test(text);
 }
 
 function parseRate(value: unknown): number | undefined {
@@ -74,6 +90,8 @@ export async function extractReceiptWithOpenAI(apiKey: string, model: string, fo
     "Prefer charged/paid total amount over subtotal, tax-only, or authorization metadata.",
     "Choose category from transportation, lodging, meals, advertising, office, entertainment, materials, consumables, physical_exam, nucleic_test, courier, welfare, other.",
     "For USA uploads, classify document_type as receipt, payment_proof, or unknown. Payment proof means a bank/card transaction screenshot or statement, not the merchant receipt.",
+    "A merchant receipt paid by credit card is still document_type receipt, not payment_proof.",
+    "Parking, parking lots and garages, toll, bridge, fuel, gas, rideshare, taxi, airfare, airline, car rental, and baggage fees are transportation, never meals.",
     "For Korea uploads, document_type should normally be receipt unless the image is clearly not reimbursement support.",
     "Keep applicant/personal identity fields blank."
   ].join("\n");
@@ -192,14 +210,16 @@ export async function extractKoreaExchangeRatesWithOpenAI(
 export function applyExtraction(item: ReceiptItem, extraction: ReceiptExtraction, formVersion: FormVersion): ReceiptItem {
   const currency = normalizeCurrency(extraction.currency, formVersion === "USA" ? "USD" : item.currency);
   let documentType = formVersion === "USA" ? normalizeDocumentType(extraction.document_type, item.documentType) : item.documentType;
+  const classificationValues = [item.filename, extraction.place, extraction.vendor, extraction.details, extraction.payment_method, extraction.receipt_label, extraction.category];
+  const bankProof = looksLikeUsaPaymentProof(classificationValues);
   if (
     formVersion === "USA" &&
     documentType === "unknown" &&
-    looksLikeUsaPaymentProof([item.filename, extraction.place, extraction.vendor, extraction.details, extraction.payment_method, extraction.receipt_label])
+    bankProof
   ) {
     documentType = "payment_proof";
   }
-  const next: ReceiptItem = {
+  let next: ReceiptItem = {
     ...item,
     date: String(extraction.date ?? item.date ?? ""),
     place: String(extraction.place ?? extraction.vendor ?? item.place ?? ""),
@@ -216,5 +236,16 @@ export function applyExtraction(item: ReceiptItem, extraction: ReceiptExtraction
     documentType,
     status: "AI filled"
   };
+  if (
+    formVersion === "USA" &&
+    next.documentType === "payment_proof" &&
+    !bankProof &&
+    (looksLikeMerchantReceipt(classificationValues) || looksLikeUsaParkingReceipt(next) || looksLikeUsaTollReceipt(next) || looksLikeUsaFuelReceipt(next))
+  ) {
+    next = { ...next, documentType: "receipt" };
+  }
+  if (formVersion === "USA") {
+    next = normalizeUsaTransportationFields(next);
+  }
   return updateAmounts(next, { usdToRmb: DEFAULT_USD_TO_RMB, usdToKrw: DEFAULT_USD_TO_KRW, krwToRmb: DEFAULT_KRW_TO_RMB }, "amount");
 }

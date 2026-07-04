@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { extractKoreaExchangeRatesWithOpenAI, extractReceiptWithOpenAI } from "./ai";
+import { applyExtraction, extractKoreaExchangeRatesWithOpenAI, extractReceiptWithOpenAI } from "./ai";
 import { receipt } from "./test/factories";
 
 describe("OpenAI extraction", () => {
@@ -73,5 +73,29 @@ describe("OpenAI extraction", () => {
     expect(rate.usdToKrw).toBeCloseTo(1548.86);
     const body = JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body));
     expect(body.input[0].content.filter((part: any) => part.type === "input_image")).toHaveLength(2);
+  });
+
+  it("keeps merchant credit-card receipts as receipts, not payment proof", () => {
+    const result = applyExtraction(
+      receipt({ filename: "toll_250_receipt.png" }),
+      {
+        date: "2026-06-26",
+        place: "Indiana Toll Road",
+        vendor: "Indiana Toll Road",
+        amount: "2.50",
+        currency: "USD",
+        purpose: "Breakfast",
+        details: "Credit Card Receipt. Total $2.50.",
+        category: "meals",
+        payment_method: "VISA CREDIT",
+        receipt_label: "Toll receipt",
+        document_type: "payment_proof"
+      },
+      "USA"
+    );
+
+    expect(result.documentType).toBe("receipt");
+    expect(result.category).toBe("transportation");
+    expect(result.purpose).toBe("Toll");
   });
 });

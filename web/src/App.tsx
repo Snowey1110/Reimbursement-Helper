@@ -31,6 +31,7 @@ import { loadTrackerConfig, loadTrackerStats, trackReportGenerated, type ReportT
 import type { Category, CropPoint, Currency, DocumentType, ExchangeRates, ImageAttachment, PaymentProof, ReceiptExtraction, ReceiptItem, SelectedTile } from "./types";
 import {
   blankReceipt,
+  buildUsaReportRows,
   formatAmount,
   matchPaymentProofs,
   mergeSameUsaReceipts,
@@ -38,6 +39,8 @@ import {
   normalizeCurrency,
   receiptAttentionReason,
   receiptNeedsAi,
+  safeNumber,
+  sortReceiptsForReview,
   sortReceiptsForReport,
   swapProofForReceipt,
   updateAmounts,
@@ -47,14 +50,14 @@ import {
 const STORAGE_KEY = "reimbursement-helper-web-api-key";
 const AI_CONCURRENCY_STORAGE_KEY = "reimbursement-helper-web-ai-concurrency";
 const DEFAULT_AI_REQUEST_CONCURRENCY = 4;
-const MAX_AI_REQUEST_CONCURRENCY = 8;
+const AI_REQUEST_CONCURRENCY_WARNING_THRESHOLD = 12;
 type SuggestedAction = "selectFiles" | "selectExchangeRate" | "generateEmpty" | "generateAll" | "generateExcel";
 type FormVersion = "USA" | "Korea";
 
 function clampAiConcurrency(value: unknown): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return DEFAULT_AI_REQUEST_CONCURRENCY;
-  return Math.max(1, Math.min(MAX_AI_REQUEST_CONCURRENCY, Math.round(parsed)));
+  return Math.max(1, Math.round(parsed));
 }
 
 async function runWithConcurrency<T>(
@@ -141,6 +144,7 @@ export default function App() {
   const selectedItem = selectedIds.length ? items.find((item) => item.id === selectedIds[selectedIds.length - 1]) ?? null : null;
   const selectedProofs = selectedItem ? proofs.filter((proof) => proof.matchedReceiptId === selectedItem.id) : [];
   const t = (key: Parameters<typeof text>[1], values?: Record<string, string | number>) => text(language, key, values);
+  const attentionLabel = (reason: string | undefined) => (reason === "Wrong year" ? t("attentionWrongYear") : reason);
   const categoryLabels = CATEGORY_LABELS[language];
   const suggestedAction = useMemo<SuggestedAction | undefined>(() => {
     if (busy) return undefined;
@@ -346,6 +350,16 @@ export default function App() {
       setStatus(t("enterApiKeyFirst"));
       return;
     }
+    const activeConcurrency = Math.min(
+      aiConcurrency,
+      Math.max(1, targets.length, includeProofs && formVersion === "USA" ? proofs.length : 0)
+    );
+    if (
+      activeConcurrency > AI_REQUEST_CONCURRENCY_WARNING_THRESHOLD &&
+      !window.confirm(t("highAiConcurrencyWarning", { requested: aiConcurrency, active: activeConcurrency }))
+    ) {
+      return;
+    }
     const apiKeyValue = apiKey.trim();
     setBusy(true);
     setProgress(0);
@@ -447,6 +461,7 @@ export default function App() {
       }
       if (includeProofs) {
         workingItems = formVersion === "USA" ? workingItems : sortReceiptsForReport(workingItems, formVersion);
+        workingItems = sortReceiptsForReview(workingItems);
         setItems(workingItems);
         setSelectedIds((current) => current.filter((id) => workingItems.some((item) => item.id === id)));
         setReadyForExport(successes > 0);
@@ -564,12 +579,36 @@ export default function App() {
     }
     setBusy(true);
     try {
+      const blockingFiles = new Map<string, string>();
+      for (const item of items) {
+        const reason = receiptAttentionReason(item, formVersion);
+        if (!reason) continue;
+        if (formVersion === "USA" && reason === "Missing amount" && item.documentType === "receipt") continue;
+        blockingFiles.set(item.filename, attentionLabel(reason) ?? reason);
+      }
       if (formVersion === "USA") {
         const unknownItems = items.filter((item) => item.documentType === "unknown");
         if (unknownItems.length) {
           setStatus(t("unknownDocumentType", { count: unknownItems.length, files: unknownItems.slice(0, 5).map((item) => item.filename).join(", ") }));
           return;
         }
+        for (const row of buildUsaReportRows(items, proofs)) {
+          const item = row.expenseItem ?? row.item;
+          if (!item) continue;
+          if (!row.date.trim()) blockingFiles.set(item.filename, t("missingDate"));
+          if (safeNumber(row.amount) === undefined) blockingFiles.set(item.filename, t("missingAmount"));
+        }
+      }
+      if (blockingFiles.size) {
+        const files = [...blockingFiles.entries()]
+          .slice(0, 8)
+          .map(([filename, reason]) => `${filename} (${reason})`)
+          .join(", ");
+        setStatus(t("exportBlockedRows", { count: blockingFiles.size, files }));
+        setItems((current) => sortReceiptsForReview(current));
+        return;
+      }
+      if (formVersion === "USA") {
         await exportUsaWorkbook(items, proofs, rates);
       } else {
         await exportKoreaWorkbook(items, rates, exchangeRateImages);
@@ -678,7 +717,6 @@ export default function App() {
           <input
             type="number"
             min={1}
-            max={MAX_AI_REQUEST_CONCURRENCY}
             value={aiConcurrency}
             onChange={(event) => setAiConcurrency(clampAiConcurrency(event.target.value))}
           />
@@ -720,20 +758,23 @@ export default function App() {
               <span>{t("date")}</span>
               <span>{t("amount")}</span>
             </div>
-            {items.map((item, index) => (
-              <button
-                type="button"
-                key={item.id}
-                className={`receipt-row ${selectedIds.includes(item.id) ? "selected" : ""} ${receiptAttentionReason(item, formVersion) ? "needs-attention" : ""}`}
-                onClick={(event) => selectReceiptRow(item, index, event)}
-                title={receiptAttentionReason(item, formVersion) ?? item.filename}
-              >
-                <span>{item.filename}</span>
-                <span>{item.status}</span>
-                <span>{item.date}</span>
-                <span>{item.amount || item.krwAmount || item.rmbAmount}</span>
-              </button>
-            ))}
+            {items.map((item, index) => {
+              const reason = receiptAttentionReason(item, formVersion);
+              return (
+                <button
+                  type="button"
+                  key={item.id}
+                  className={`receipt-row ${selectedIds.includes(item.id) ? "selected" : ""} ${reason ? "needs-attention" : ""}`}
+                  onClick={(event) => selectReceiptRow(item, index, event)}
+                  title={attentionLabel(reason) ?? item.filename}
+                >
+                  <span>{item.filename}</span>
+                  <span>{attentionLabel(reason) ?? item.status}</span>
+                  <span>{item.date}</span>
+                  <span>{item.amount || item.krwAmount || item.rmbAmount}</span>
+                </button>
+              );
+            })}
           </div>
           <div className="row-actions">
             <button type="button" onClick={removeSelectedRows} disabled={!selectedIds.length}>

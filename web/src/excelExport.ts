@@ -1,4 +1,5 @@
 import ExcelJS from "exceljs";
+import JSZip from "jszip";
 import type { ExchangeRates, ImageAttachment, PaymentProof, ReceiptItem } from "./types";
 import {
   KOREA_CATEGORY_COLUMNS,
@@ -40,6 +41,28 @@ const USA_SUPPORT_IMAGE_PADDING = 12;
 
 function dataUrlBase64(dataUrl: string): string {
   return dataUrl.split(",", 2)[1] ?? dataUrl;
+}
+
+export function sanitizeDrawingXml(xml: string): string {
+  return xml
+    .replace(/<a:extLst>[\s\S]*?<\/a:extLst>/g, "")
+    .replace(
+      /(<xdr:oneCellAnchor\b[\s\S]*?<xdr:ext cx="(\d+)" cy="(\d+)"\/>[\s\S]*?<a:xfrm><a:off x="0" y="0"\/><a:ext )cx="0" cy="0"(\/><\/a:xfrm>)/g,
+      (_match, prefix: string, cx: string, cy: string, suffix: string) => `${prefix}cx="${cx}" cy="${cy}"${suffix}`
+    );
+}
+
+async function sanitizeWorkbookBuffer(buffer: ExcelJS.Buffer): Promise<ArrayBuffer> {
+  const zip = await JSZip.loadAsync(buffer as ArrayBuffer);
+  const drawingNames = Object.keys(zip.files).filter((name) => /^xl\/drawings\/drawing\d+\.xml$/.test(name));
+  await Promise.all(
+    drawingNames.map(async (name) => {
+      const file = zip.file(name);
+      if (!file) return;
+      zip.file(name, sanitizeDrawingXml(await file.async("string")));
+    })
+  );
+  return zip.generateAsync({ type: "arraybuffer", compression: "DEFLATE" });
 }
 
 async function fetchWorkbook(url: string): Promise<ExcelJS.Workbook> {
@@ -469,7 +492,7 @@ export async function exportUsaWorkbook(items: ReceiptItem[], proofs: PaymentPro
   const reportRows = buildUsaReportRows(items, proofs);
   const expenseItems = reportRows.flatMap((row) => {
     const item = row.expenseItem ?? row.item;
-    return item ? [item] : [];
+    return item && row.date.trim() && safeNumber(row.amount) !== undefined ? [item] : [];
   });
   expense.getCell("A3").value = `Date / 填表日期： ${new Date().toLocaleDateString("en-US")}`;
   expense.getCell("A4").value = "Employee: / 申请人：";
@@ -539,7 +562,7 @@ export async function exportUsaWorkbook(items: ReceiptItem[], proofs: PaymentPro
       USA_SUPPORT_IMAGE_PADDING
     );
   }
-  const buffer = await workbook.xlsx.writeBuffer();
+  const buffer = await sanitizeWorkbookBuffer(await workbook.xlsx.writeBuffer());
   downloadBlob(new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `reimbursement_usa_${dateStamp()}.xlsx`);
 }
 
@@ -676,7 +699,7 @@ export async function exportKoreaWorkbook(items: ReceiptItem[], rates: ExchangeR
     await addImageToCell(workbook, receipts, block.images, slot.imageCell, slot.maxWidth, slot.maxHeight, true, true, block.stretchTiles);
     slotIndex += block.mode === "full" ? KOREA_RECEIPT_SLOTS_PER_PAGE : block.mode === "wide" ? 2 : 1;
   }
-  const buffer = await workbook.xlsx.writeBuffer();
+  const buffer = await sanitizeWorkbookBuffer(await workbook.xlsx.writeBuffer());
   downloadBlob(new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `reimbursement_korea_${dateStamp()}.xlsx`);
 }
 

@@ -15,7 +15,8 @@ import {
   koreaReceiptShouldBeWide,
   koreaReceiptWideSlot,
   mapKoreaDetailRows,
-  mapUsaExpenseRows
+  mapUsaExpenseRows,
+  sanitizeDrawingXml
 } from "./excelExport";
 
 afterEach(() => {
@@ -28,11 +29,31 @@ describe("Excel row mapping", () => {
     const rows = mapUsaExpenseRows([
       receipt({ id: "r1", category: "transportation" }),
       receipt({ id: "r2", category: "transportation" }),
-      receipt({ id: "r3", category: "lodging" })
+      receipt({ id: "r3", category: "lodging", place: "Hotel", purpose: "Hotel", details: "Hotel stay", receiptLabel: "Hotel receipt" })
     ]);
 
     expect(rows.map((row) => row.row)).toEqual([7, 8, 49]);
     expect(rows.map((row) => row.category)).toEqual(["transportation", "transportation", "lodging"]);
+  });
+
+  it("maps obvious USA parking expenses to transportation even when AI picked meals", () => {
+    const rows = mapUsaExpenseRows([receipt({ id: "wabash", place: "Wabash Randolph", category: "meals", purpose: "Breakfast", details: "Parking lots and garages" })]);
+
+    expect(rows[0].row).toBe(7);
+    expect(rows[0].category).toBe("transportation");
+  });
+
+  it("sanitizes ExcelJS drawing XML so images do not have zero-size transforms", () => {
+    const xml =
+      '<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">' +
+      '<xdr:oneCellAnchor editAs="oneCell"><xdr:from/><xdr:ext cx="12345" cy="67890"/><xdr:pic><xdr:spPr>' +
+      '<a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></a:xfrm><a:extLst><a:ext uri="{test}"/></a:extLst>' +
+      "</xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor></xdr:wsDr>";
+
+    const sanitized = sanitizeDrawingXml(xml);
+
+    expect(sanitized).toContain('<a:ext cx="12345" cy="67890"/>');
+    expect(sanitized).not.toContain("<a:extLst>");
   });
 
   it("maps Korea detail rows with converted KRW and RMB amounts", () => {

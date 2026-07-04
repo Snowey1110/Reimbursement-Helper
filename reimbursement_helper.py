@@ -88,9 +88,9 @@ KRW_NUMBER_FORMAT = "\u20a9#,##0"
 USA_SUPPORT_DATE_NUMBER_FORMAT = "m/d/yyyy"
 MAX_AI_RECEIPT_IMAGES = 8
 AI_AUTO_ROTATE_LANDSCAPE_RATIO = 1.15
-EXPORT_AUTO_ROTATE_LANDSCAPE_RATIO = 1.35
+EXPORT_AUTO_ROTATE_LANDSCAPE_RATIO = 1.15
 DEFAULT_AI_REQUEST_CONCURRENCY = 4
-MAX_AI_REQUEST_CONCURRENCY = 8
+AI_REQUEST_CONCURRENCY_WARNING_THRESHOLD = 12
 LOGGER = logging.getLogger("reimbursement_helper")
 ExportProgressCallback = Callable[[int, int, str], None]
 EXCEL_CONTACT_SHEET_CACHE: Dict[Tuple[Any, ...], Path] = {}
@@ -596,6 +596,8 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "selected_exchange_failed": "Selected exchange-rate image(s), but could not auto-read rate: {message}",
         "updated_exchange_rate": "Updated rate from exchange-rate image: {updates}",
         "no_empty_rows": "No empty or unprocessed rows need AI.",
+        "high_ai_concurrency_title": "High parallel request count",
+        "high_ai_concurrency_warning": "You set AI batch to {requested}. This run may send up to {active} OpenAI requests at the same time. A high value can hit rate limits or slow this computer. Continue?",
         "unknown_document_type": "{count} row(s) still have unknown document type: {files}. Choose Receipt or Payment proof before exporting.",
         "manual_review_title": "Manual review needed",
         "unknown_document_type_detail": "{count} row(s) need a file type before Excel can be generated.\n\nSet each one to Receipt or Payment proof:\n{files}",
@@ -606,6 +608,7 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "attention_missing_vendor": "Missing vendor",
         "attention_missing_details": "Missing details",
         "attention_missing_date_amount": "Missing date/amount",
+        "attention_wrong_year": "Check year",
     },
     "zh": {
         "app_title": "\u62a5\u9500\u52a9\u624b",
@@ -669,6 +672,8 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "selected_exchange_failed": "\u5df2\u9009\u62e9\u6c47\u7387\u56fe\u7247\uff0c\u4f46\u65e0\u6cd5\u81ea\u52a8\u8bfb\u53d6\u6c47\u7387\uff1a{message}",
         "updated_exchange_rate": "\u5df2\u6839\u636e\u6c47\u7387\u56fe\u7247\u66f4\u65b0\uff1a{updates}",
         "no_empty_rows": "\u6ca1\u6709\u9700\u8981 AI \u5904\u7406\u7684\u7a7a\u767d\u6216\u672a\u5904\u7406\u8bb0\u5f55\u3002",
+        "high_ai_concurrency_title": "\u5e76\u884c\u8bf7\u6c42\u8f83\u9ad8",
+        "high_ai_concurrency_warning": "\u4f60\u8bbe\u7f6e\u4e86\u540c\u65f6\u5904\u7406 {requested} \u4e2a\uff0c\u672c\u6b21\u5c06\u6700\u591a\u540c\u65f6\u53d1\u9001 {active} \u4e2a OpenAI \u8bf7\u6c42\u3002\u6570\u503c\u8fc7\u9ad8\u53ef\u80fd\u89e6\u53d1\u9650\u901f\u6216\u8ba9\u7535\u8111\u53d8\u6162\u3002\u8981\u7ee7\u7eed\u5417\uff1f",
         "unknown_document_type": "\u8fd8\u6709 {count} \u6761\u8bb0\u5f55\u7684\u6587\u4ef6\u7c7b\u578b\u662f\u672a\u77e5\uff1a{files}\u3002\u5bfc\u51fa\u524d\u8bf7\u9009\u62e9\u53d1\u7968\u6216\u4ed8\u6b3e\u51ed\u8bc1\u3002",
         "manual_review_title": "\u9700\u8981\u4eba\u5de5\u5904\u7406",
         "unknown_document_type_detail": "\u6709 {count} \u6761\u8bb0\u5f55\u9700\u8981\u5148\u9009\u62e9\u6587\u4ef6\u7c7b\u578b\uff0c\u624d\u80fd\u751f\u6210 Excel\u3002\n\n\u8bf7\u628a\u8fd9\u4e9b\u6587\u4ef6\u8bbe\u4e3a\u201c\u53d1\u7968\u201d\u6216\u201c\u4ed8\u6b3e\u51ed\u8bc1\u201d\uff1a\n{files}",
@@ -679,6 +684,7 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "attention_missing_vendor": "\u7f3a\u5c11\u5546\u5bb6",
         "attention_missing_details": "\u7f3a\u5c11\u660e\u7ec6",
         "attention_missing_date_amount": "\u7f3a\u5c11\u65e5\u671f/\u91d1\u989d",
+        "attention_wrong_year": "\u68c0\u67e5\u5e74\u4efd",
     },
     "ko": {
         "app_title": "\ud658\uae09 \ub3c4\uc6b0\ubbf8",
@@ -742,6 +748,8 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "selected_exchange_failed": "\ud658\uc728 \uc774\ubbf8\uc9c0\ub97c \uc120\ud0dd\ud588\uc9c0\ub9cc \uc790\ub3d9\uc73c\ub85c \uc77d\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4: {message}",
         "updated_exchange_rate": "\ud658\uc728 \uc774\ubbf8\uc9c0\uc5d0\uc11c \ud658\uc728\uc744 \uc5c5\ub370\uc774\ud2b8\ud588\uc2b5\ub2c8\ub2e4: {updates}",
         "no_empty_rows": "AI\uac00 \ucc98\ub9ac\ud560 \ube48 \ud56d\ubaa9\uc774\ub098 \ubbf8\ucc98\ub9ac \ud589\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "high_ai_concurrency_title": "\ub3d9\uc2dc \uc694\uccad \uc218\uac00 \ub192\uc74c",
+        "high_ai_concurrency_warning": "\ub3d9\uc2dc \ucc98\ub9ac\ub97c {requested}\uac1c\ub85c \uc124\uc815\ud588\uc2b5\ub2c8\ub2e4. \uc774\ubc88 \uc2e4\ud589\uc5d0\uc11c OpenAI \uc694\uccad\uc744 \ucd5c\ub300 {active}\uac1c\uae4c\uc9c0 \ub3d9\uc2dc\uc5d0 \ubcf4\ub0bc \uc218 \uc788\uc2b5\ub2c8\ub2e4. \ub108\ubb34 \ub192\uc740 \uac12\uc740 \uc18d\ub3c4 \uc81c\ud55c\uc774\ub098 PC \uc9c0\uc5f0\uc744 \uc77c\uc73c\ud0ac \uc218 \uc788\uc2b5\ub2c8\ub2e4. \uacc4\uc18d\ud560\uae4c\uc694?",
         "unknown_document_type": "{count}\uac1c \ud589\uc758 \ubb38\uc11c \uc720\ud615\uc774 \uc54c \uc218 \uc5c6\uc74c\uc785\ub2c8\ub2e4: {files}. \ub0b4\ubcf4\ub0b4\uae30 \uc804\uc5d0 \uc601\uc218\uc99d \ub610\ub294 \uacb0\uc81c \uc99d\ube59\uc744 \uc120\ud0dd\ud558\uc138\uc694.",
         "manual_review_title": "\uc218\ub3d9 \ud655\uc778 \ud544\uc694",
         "unknown_document_type_detail": "Excel\uc744 \uc0dd\uc131\ud558\uae30 \uc804\uc5d0 {count}\uac1c \ud589\uc758 \ubb38\uc11c \uc720\ud615\uc744 \uc9c0\uc815\ud574\uc57c \ud569\ub2c8\ub2e4.\n\n\uac01 \ud30c\uc77c\uc744 \uc601\uc218\uc99d \ub610\ub294 \uacb0\uc81c \uc99d\ube59\uc73c\ub85c \uc124\uc815\ud558\uc138\uc694:\n{files}",
@@ -752,6 +760,7 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "attention_missing_vendor": "\uc0c1\ud638 \ub204\ub77d",
         "attention_missing_details": "\uc138\ubd80 \ub0b4\uc6a9 \ub204\ub77d",
         "attention_missing_date_amount": "\ub0a0\uc9dc/\uae08\uc561 \ub204\ub77d",
+        "attention_wrong_year": "\uc5f0\ub3c4 \ud655\uc778",
     },
 }
 
@@ -1095,6 +1104,11 @@ Rules:
   Chevron, Speedway, Circle K, Marathon, Sunoco, Valero, Pilot, Love's, Wawa,
   QuikTrip, Casey's, Murphy, Costco Gas, or Meijer Gas, use purpose Gas and
   category transportation. Do not classify those as snacks or office purchases.
+- For USA parking or garage charges, including merchant type "Parking lots and
+  garages", Wabash Randolph, McCormick Place Lot, iParkit, Metropolis, ParkWhiz,
+  SpotHero, or any parking/toll/garage wording, use purpose Parking or Toll and
+  category transportation. Do not classify parking as breakfast, meals, food, or
+  entertainment.
 - details should be a natural one-line description.
 - receipt_label should be short enough to fit above a receipt image in Excel.
 - For USA, document_type must be receipt, payment_proof, or unknown. Use payment_proof
@@ -1354,7 +1368,7 @@ def clamp_ai_concurrency(value: Any) -> int:
         parsed = int(round(float(value)))
     except (TypeError, ValueError):
         parsed = DEFAULT_AI_REQUEST_CONCURRENCY
-    return max(1, min(MAX_AI_REQUEST_CONCURRENCY, parsed))
+    return max(1, parsed)
 
 
 def parse_date_value(value: Any) -> Any:
@@ -1388,6 +1402,17 @@ def excel_date_formula_or_value(value: str) -> Any:
     parsed = parse_date_value(value)
     if isinstance(parsed, date):
         return parsed
+    return parsed
+
+
+def excel_report_date_value(value: Any, expected_year: Optional[int] = None) -> Any:
+    parsed = parse_date_value(value)
+    if isinstance(parsed, date):
+        year = expected_year or expected_report_year()
+        try:
+            return parsed.replace(year=year)
+        except ValueError:
+            return parsed
     return parsed
 
 
@@ -1444,6 +1469,17 @@ USA_FUEL_VENDOR_PATTERN = re.compile(
 )
 
 
+USA_PARKING_VENDOR_PATTERN = re.compile(
+    r"\b("
+    r"parking|park(?:ing)?\s+lot|parking\s+lots?\s+and\s+garages?|garage|self\s+park|"
+    r"valet|meter|metropolis|iparkit|parkwhiz|spot\s*hero|wabash\s+randolph|"
+    r"mccormick\s+place\s+lot|millennium\s+garages?|interpark|laz\s+parking|"
+    r"sp\+\s*parking|airport\s+parking"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
 def looks_like_usa_fuel_receipt(item: Any, *extra_values: Any) -> bool:
     text = " ".join(
         str(value or "")
@@ -1474,6 +1510,62 @@ def normalize_usa_fuel_receipt_fields(item: Any, *extra_values: Any) -> None:
     label = str(getattr(item, "receipt_label", "") or "").strip()
     if not label or re.search(r"\b(snacks?|convenience|purchase)\b", label, re.IGNORECASE):
         item.receipt_label = "Gas Receipt"
+
+
+def looks_like_usa_parking_receipt(item: Any, *extra_values: Any) -> bool:
+    text = " ".join(
+        str(value or "")
+        for value in (
+            getattr(item, "place", ""),
+            getattr(item, "purpose", ""),
+            getattr(item, "details", ""),
+            getattr(item, "receipt_label", ""),
+            getattr(item, "filename", ""),
+            getattr(item, "payment_method", ""),
+            *extra_values,
+        )
+    )
+    lower = text.lower()
+    if re.search(r"\b(toll|bridge fee|road charge|turnpike)\b", lower):
+        return True
+    return bool(USA_PARKING_VENDOR_PATTERN.search(text))
+
+
+def normalize_usa_parking_receipt_fields(item: Any, *extra_values: Any) -> None:
+    if not looks_like_usa_parking_receipt(item, *extra_values):
+        return
+    item.category = "transportation"
+    place = str(getattr(item, "place", "") or "").strip()
+    text = " ".join(str(value or "") for value in extra_values).lower()
+    is_toll = bool(
+        re.search(
+            r"\b(toll|bridge fee|road charge|turnpike)\b",
+            " ".join(
+                str(value or "")
+                for value in (
+                    getattr(item, "place", ""),
+                    getattr(item, "purpose", ""),
+                    getattr(item, "details", ""),
+                    getattr(item, "receipt_label", ""),
+                    getattr(item, "filename", ""),
+                    text,
+                )
+            ).lower(),
+        )
+    )
+    corrected_purpose = "Toll" if is_toll else "Parking"
+    current_purpose = str(getattr(item, "purpose", "") or "").strip()
+    if not current_purpose or re.search(r"\b(breakfast|lunch|dinner|meal|meals|food|restaurant|snack)\b", current_purpose, re.IGNORECASE):
+        item.purpose = corrected_purpose
+    current_details = str(getattr(item, "details", "") or "").strip()
+    if not current_details or re.search(r"\b(breakfast|lunch|dinner|meal|meals|food|restaurant|snack)\b", current_details, re.IGNORECASE):
+        if is_toll:
+            item.details = f"Toll charge at {place}." if place else "Toll charge."
+        else:
+            item.details = f"Parking at {place}." if place else "Parking fee."
+    current_label = str(getattr(item, "receipt_label", "") or "").strip()
+    if not current_label or re.search(r"\b(breakfast|lunch|dinner|meal|meals|food|restaurant|snack)\b", current_label, re.IGNORECASE):
+        item.receipt_label = "Toll Receipt" if is_toll else "Parking Receipt"
 
 
 def is_korea_other_text(value: str) -> bool:
@@ -1600,11 +1692,68 @@ def report_category_for_item(item: Any, form_version: str) -> str:
     return "other"
 
 
-def date_sort_value(value: str) -> float:
+def usa_export_category_for_item(item: Any) -> str:
+    category = report_category_for_item(item, "USA")
+    text = item_search_text(item)
+    if looks_like_usa_fuel_receipt(item):
+        return "transportation"
+    if looks_like_usa_parking_receipt(item):
+        return "transportation"
+    if category == "other" and re.search(r"\b(parking|park|toll|ticket|garage|transport|fuel|gas|flight|airline|airport|ride|taxi|lyft|uber)\b", text):
+        return "transportation"
+    if category == "other":
+        return "transportation"
+    return category
+
+
+def expected_report_year() -> int:
+    return date.today().year
+
+
+def date_year_needs_review(value: Any, expected_year: Optional[int] = None) -> bool:
     parsed = parse_date_value(value)
     if isinstance(parsed, date):
-        return float(parsed.toordinal())
+        return parsed.year != (expected_year or expected_report_year())
+    return False
+
+
+def date_sort_value(value: str, expected_year: Optional[int] = None) -> float:
+    parsed = parse_date_value(value)
+    if isinstance(parsed, date):
+        year = expected_year or expected_report_year()
+        try:
+            return float(parsed.replace(year=year).toordinal())
+        except ValueError:
+            return float((parsed.month * 32) + parsed.day)
     return float("inf")
+
+
+def assumed_report_date_key(value: Any, expected_year: Optional[int] = None) -> str:
+    parsed = parse_date_value(value)
+    if isinstance(parsed, date):
+        year = expected_year or expected_report_year()
+        return f"{year:04d}-{parsed.month:02d}-{parsed.day:02d}"
+    return str(value or "").strip()
+
+
+def same_month_day_values(left: Any, right: Any) -> bool:
+    left_value = parse_date_value(left)
+    right_value = parse_date_value(right)
+    if isinstance(left_value, date) and isinstance(right_value, date):
+        return (left_value.month, left_value.day) == (right_value.month, right_value.day)
+    return bool(left and right and str(left).strip() == str(right).strip())
+
+
+def sort_receipt_list_for_review(items: List[Any]) -> List[Any]:
+    indexed = [
+        (
+            0 if date_year_needs_review(getattr(item, "date", "")) else 1,
+            index,
+            item,
+        )
+        for index, item in enumerate(items)
+    ]
+    return [entry[2] for entry in sorted(indexed, key=lambda entry: (entry[0], entry[1]))]
 
 
 def sort_receipts_for_report(items: List[Any], form_version: str) -> List[Any]:
@@ -1657,6 +1806,51 @@ def looks_like_usa_payment_proof_text(*values: Any) -> bool:
     )
 
 
+def looks_like_usa_workbook_proof_name(*values: Any) -> bool:
+    text = " ".join(str(value or "") for value in values).lower()
+    return bool(
+        re.search(r"\bworkbook[_\s-]*row\d+[_\s-]*proof[_\s-]*e[_\s-]", text)
+        or re.search(r"[_\s-]proof[_\s-]*e[_\s-]*20\d{2}[-_]\d{1,2}[-_]\d{1,2}", text)
+    )
+
+
+def parse_usa_support_metadata_from_text(*values: Any) -> Tuple[str, str]:
+    text = " ".join(str(value or "") for value in values)
+    patterns = [
+        r"(20\d{2})[-_](\d{1,2})[-_](\d{1,2})[_\s-]+(-?\d+(?:\.\d+)?)",
+        r"(20\d{2})(\d{2})(\d{2})[_\s-]+(-?\d+(?:\.\d+)?)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if not match:
+            continue
+        year, month, day, amount = match.groups()
+        try:
+            parsed_date = date(int(year), int(month), int(day)).isoformat()
+        except ValueError:
+            parsed_date = ""
+        return parsed_date, format_amount(safe_float(amount))
+    return "", ""
+
+
+def apply_usa_workbook_proof_metadata(item: Any, *extra_values: Any) -> None:
+    values = (
+        getattr(item, "filename", ""),
+        getattr(item, "path", ""),
+        getattr(item, "source_path", ""),
+        getattr(item, "source_page", ""),
+        *extra_values,
+    )
+    if not looks_like_usa_workbook_proof_name(*values):
+        return
+    parsed_date, parsed_amount = parse_usa_support_metadata_from_text(*values)
+    if parsed_date:
+        item.date = parsed_date
+    if parsed_amount:
+        item.amount = parsed_amount
+    item.document_type = "payment_proof"
+
+
 def looks_like_usa_receipt_support_text(*values: Any) -> bool:
     text = " ".join(str(value or "") for value in values).lower()
     if looks_like_usa_payment_proof_text(text):
@@ -1707,6 +1901,9 @@ def auto_classify_usa_document_type(item: "ReceiptItem", *extra_values: Any) -> 
         item.receipt_label,
         *extra_values,
     )
+    if looks_like_usa_workbook_proof_name(*values):
+        apply_usa_workbook_proof_metadata(item, *extra_values)
+        return
     if looks_like_usa_merchant_receipt_text(*values):
         item.document_type = "receipt"
         return
@@ -1730,6 +1927,8 @@ def receipt_attention_reasons(item: "ReceiptItem", form_version: str) -> List[st
         reasons.append("Unknown document type")
     if not item.date.strip():
         reasons.append("Missing date")
+    elif date_year_needs_review(item.date):
+        reasons.append("Wrong year")
     if not (item.amount.strip() or item.krw_amount.strip() or item.rmb_amount.strip()) and not (
         version == "USA" and usa_receipt_support_without_amount(item)
     ):
@@ -1782,11 +1981,7 @@ def usa_receipt_merge_key(item: "ReceiptItem") -> Optional[Tuple[str, float]]:
     amount = safe_float(item.amount)
     if amount is None:
         return None
-    date_value = parse_date_value(item.date)
-    if isinstance(date_value, date):
-        date_key = date_value.isoformat()
-    else:
-        date_key = (item.date or "").strip()
+    date_key = assumed_report_date_key(item.date)
     if not date_key:
         return None
     return date_key, round(amount, 2)
@@ -1850,11 +2045,7 @@ def merge_usa_receipt_item_into(target: "ReceiptItem", source: "ReceiptItem") ->
 
 
 def same_expense_date_values(left: str, right: str) -> bool:
-    left_value = parse_date_value(left)
-    right_value = parse_date_value(right)
-    if isinstance(left_value, date) and isinstance(right_value, date):
-        return left_value == right_value
-    return (left or "").strip() == (right or "").strip()
+    return same_month_day_values(left, right)
 
 
 USA_MATCH_STOP_WORDS = {
@@ -1982,6 +2173,97 @@ def usa_amountless_receipt_match(item: "ReceiptItem", candidates: List["ReceiptI
     return scored[0][1]
 
 
+def attachment_looks_like_usa_payment_proof(attachment: Dict[str, Any]) -> bool:
+    values = (
+        attachment.get("filename", ""),
+        attachment.get("path", ""),
+        attachment.get("source_path", ""),
+        attachment.get("source_page", ""),
+    )
+    return looks_like_usa_workbook_proof_name(*values) or looks_like_usa_payment_proof_text(*values)
+
+
+def receipt_item_from_payment_proof_attachment(
+    attachment: Dict[str, Any],
+    parent: "ReceiptItem",
+) -> "ReceiptItem":
+    parsed_date, parsed_amount = parse_usa_support_metadata_from_text(
+        attachment.get("filename", ""),
+        attachment.get("path", ""),
+        attachment.get("source_path", ""),
+        attachment.get("source_page", ""),
+    )
+    path = str(attachment.get("path") or "")
+    filename = str(attachment.get("filename") or Path(path).name or parent.filename)
+    proof = ReceiptItem(
+        item_id=str(attachment.get("id") or uuid.uuid4().hex),
+        path=path,
+        filename=filename,
+        source_path=str(attachment.get("source_path") or path),
+        source_page=str(attachment.get("source_page") or ""),
+        date=parsed_date,
+        place="",
+        amount=parsed_amount,
+        currency="USD",
+        purpose="",
+        details="",
+        project_number=getattr(parent, "project_number", ""),
+        category=getattr(parent, "category", "transportation") or "transportation",
+        payment_method=getattr(parent, "payment_method", ""),
+        receipt_label=filename,
+        document_type="payment_proof",
+        status="Payment proof",
+        crop_box=copy.deepcopy(attachment.get("crop_box")),
+        rotation_degrees=normalize_rotation(attachment.get("rotation_degrees", 0)),
+        receipt_images=[copy.deepcopy(attachment)],
+    )
+    return proof
+
+
+def split_embedded_usa_payment_proofs(items: List["ReceiptItem"]) -> List["ReceiptItem"]:
+    split_items: List[ReceiptItem] = []
+    for item in items:
+        auto_classify_usa_document_type(item)
+        images = ensure_receipt_images(item)
+        if is_usa_payment_proof_item(item):
+            split_items.append(item)
+            continue
+        proof_images = [attachment for attachment in images if attachment_looks_like_usa_payment_proof(attachment)]
+        if not proof_images:
+            split_items.append(item)
+            continue
+        receipt_images = [
+            attachment
+            for attachment in images
+            if not attachment_looks_like_usa_payment_proof(attachment)
+        ]
+        if receipt_images:
+            item.receipt_images = receipt_images
+            ensure_receipt_images(item)
+            split_items.append(item)
+        else:
+            item.receipt_images = proof_images
+            ensure_receipt_images(item)
+            apply_usa_workbook_proof_metadata(item)
+            parsed_date, parsed_amount = parse_usa_support_metadata_from_text(
+                proof_images[0].get("filename", ""),
+                proof_images[0].get("path", ""),
+                proof_images[0].get("source_path", ""),
+                proof_images[0].get("source_page", ""),
+            )
+            if parsed_date:
+                item.date = parsed_date
+            if parsed_amount:
+                item.amount = parsed_amount
+            item.document_type = "payment_proof"
+            item.status = payment_proof_missing_status(item) or "Payment proof"
+            split_items.append(item)
+            continue
+        for attachment in proof_images:
+            split_items.append(receipt_item_from_payment_proof_attachment(attachment, item))
+    return split_items
+
+
 def merge_same_usa_receipt_items(items: List["ReceiptItem"]) -> Tuple[List["ReceiptItem"], Dict[str, str], int]:
     merged_count = 0
     merged_items: List[ReceiptItem] = []
@@ -1990,6 +2272,7 @@ def merge_same_usa_receipt_items(items: List["ReceiptItem"]) -> Tuple[List["Rece
     for item in items:
         auto_classify_usa_document_type(item)
         normalize_usa_fuel_receipt_fields(item)
+        normalize_usa_parking_receipt_fields(item)
         if not is_usa_receipt_item(item):
             merged_items.append(item)
             continue
@@ -2116,7 +2399,9 @@ def build_usa_report_rows(
     items: List["ReceiptItem"],
     bank_items: Optional[List["BankStatementItem"]] = None,
 ) -> List[Dict[str, Any]]:
-    working_items, removed_to_target, _merged_count = merge_same_usa_receipt_items(list(items))
+    working_items, removed_to_target, _merged_count = merge_same_usa_receipt_items(
+        split_embedded_usa_payment_proofs(copy.deepcopy(list(items)))
+    )
     for bank_item in bank_items or []:
         if bank_item.matched_receipt_id in removed_to_target:
             bank_item.matched_receipt_id = removed_to_target[bank_item.matched_receipt_id]
@@ -3487,11 +3772,12 @@ def export_usa(
     sorted_items = [
         row.get("expense_item") or row.get("item")
         for row in report_rows
-        if row.get("expense_item") is not None or row.get("item") is not None
+        if (row.get("expense_item") is not None or row.get("item") is not None)
+        and safe_float(getattr(row.get("expense_item") or row.get("item"), "amount", "")) is not None
     ]
     section_counts = {block[0]: 0 for block in USA_EXPENSE_REPORT_BLOCKS}
     for item in sorted_items:
-        category = report_category_for_item(item, "USA")
+        category = usa_export_category_for_item(item)
         section_counts[usa_report_section_for_category(category)] += 1
     ws, category_rows = prepare_usa_expense_report_sheet(wb, ws, section_counts)
 
@@ -3505,7 +3791,7 @@ def export_usa(
 
     row_cursors = {cat: 0 for cat in category_rows}
     for item in sorted_items:
-        category = report_category_for_item(item, "USA")
+        category = usa_export_category_for_item(item)
         section = usa_report_section_for_category(category)
         rows = category_rows[section]
         cursor = row_cursors[section]
@@ -3513,7 +3799,7 @@ def export_usa(
         row_cursors[section] += 1
         amount = safe_float(item.amount)
         ws[f"A{row}"] = item.place.strip()
-        ws[f"B{row}"] = excel_date_formula_or_value(item.date)
+        ws[f"B{row}"] = excel_report_date_value(item.date)
         ws[f"C{row}"] = item.details.strip() or item.receipt_label.strip() or item.filename
         ws[f"D{row}"] = item.purpose.strip()
         ws[f"E{row}"] = item.project_number.strip()
@@ -3542,7 +3828,7 @@ def export_usa(
     for index, row_data in enumerate(support_rows, start=1):
         row = index + 1
         receipts_ws[f"A{row}"] = index
-        receipts_ws[f"B{row}"] = excel_date_formula_or_value(str(row_data.get("date") or ""))
+        receipts_ws[f"B{row}"] = excel_report_date_value(str(row_data.get("date") or ""))
         receipts_ws[f"C{row}"] = safe_float(row_data.get("amount"))
         receipts_ws[f"B{row}"].number_format = USA_SUPPORT_DATE_NUMBER_FORMAT
         receipts_ws[f"C{row}"].number_format = '$#,##0.00'
@@ -4086,6 +4372,20 @@ class ReimbursementHelperApp:
             relief="flat",
         )
         style.configure(
+            "Warning.TEntry",
+            fieldbackground="#FFF1F2",
+            background="#FFF1F2",
+            foreground="#7F1D1D",
+            insertcolor=text,
+            bordercolor="#DC2626",
+            lightcolor="#FFF1F2",
+            darkcolor="#DC2626",
+            focuscolor="#DC2626",
+            selectbackground="#FECACA",
+            selectforeground="#7F1D1D",
+            relief="flat",
+        )
+        style.configure(
             "TCombobox",
             fieldbackground=control_bg,
             background=button_bg,
@@ -4464,6 +4764,7 @@ class ReimbursementHelperApp:
             "Missing vendor": "attention_missing_vendor",
             "Missing details": "attention_missing_details",
             "Missing date/amount": "attention_missing_date_amount",
+            "Wrong year": "attention_wrong_year",
         }
         key = mapping.get(reason or "")
         return self.tr(key) if key else str(reason or "")
@@ -4563,6 +4864,16 @@ class ReimbursementHelperApp:
         if self.ai_concurrency.get() != str(value):
             self.ai_concurrency.set(str(value))
         return value
+
+    def confirm_ai_concurrency(self, requested: int, receipt_count: int, bank_count: int = 0) -> bool:
+        active = min(requested, max(1, receipt_count, bank_count))
+        if active <= AI_REQUEST_CONCURRENCY_WARNING_THRESHOLD:
+            return True
+        message = self.tr("high_ai_concurrency_warning", requested=requested, active=active)
+        if messagebox:
+            return bool(messagebox.askyesno(self.tr("high_ai_concurrency_title"), message))
+        self.status_text.set(message)
+        return True
 
     def remembered_file_dialog_dir(self) -> str:
         candidates = [
@@ -4802,8 +5113,19 @@ class ReimbursementHelperApp:
     def clear_attention_status_if_ready(self, item: ReceiptItem) -> None:
         if receipt_attention_reason(item, self.form_version.get()) is not None:
             return
-        if item.status in {"Empty", "Failed", "Missing date/amount", "Missing date", "Missing amount", "Missing details", "Missing vendor"}:
+        if item.status in {"Empty", "Failed", "Missing date/amount", "Missing date", "Missing amount", "Missing details", "Missing vendor", "Wrong year"}:
             item.status = "Payment proof" if is_usa_payment_proof_item(item) else "Manual filled"
+
+    def update_date_field_attention(self) -> None:
+        widget = self.field_widgets.get("date")
+        if widget is None:
+            return
+        item = self.selected_item()
+        style = "Warning.TEntry" if item is not None and date_year_needs_review(item.date) else "TEntry"
+        try:
+            widget.configure(style=style)
+        except Exception:
+            pass
 
     def _save_field_to_selected(self, key: str, refresh: bool = False) -> None:
         var = self.field_vars.get(key)
@@ -4825,6 +5147,8 @@ class ReimbursementHelperApp:
             self.clear_attention_status_if_ready(item)
         if refresh:
             self.refresh_tree()
+        if key == "date":
+            self.update_date_field_attention()
 
     def _save_amount_fields_to_selected(self, source: str, refresh: bool = False) -> None:
         version = self.form_version.get()
@@ -5377,7 +5701,7 @@ class ReimbursementHelperApp:
                 item.status = "Payment proof" if is_usa_payment_proof_item(item) else "Manual filled"
             status_text = self.attention_reason_label(attention_reason) if attention_reason else item.status
             values = (status_text, item.date, item.amount or item.krw_amount or item.rmb_amount)
-            if attention_reason == "AI failed":
+            if attention_reason in {"AI failed", "Wrong year"}:
                 tags = ("danger",)
             elif attention_reason:
                 tags = ("review",)
@@ -5610,6 +5934,7 @@ class ReimbursementHelperApp:
             self.items = ordered
         else:
             self.items = sort_receipts_for_report(self.items, self.form_version.get())
+        self.items = sort_receipt_list_for_review(self.items)
         id_to_index = {item.item_id: index for index, item in enumerate(self.items)}
         if focused_id in id_to_index:
             self.selected_index = id_to_index[focused_id]
@@ -5660,6 +5985,7 @@ class ReimbursementHelperApp:
                     var.set("")
             finally:
                 self._loading_fields = False
+            self.update_date_field_attention()
             return
         self._loading_fields = True
         try:
@@ -5673,6 +5999,7 @@ class ReimbursementHelperApp:
         finally:
             self._loading_fields = False
         self._sync_amount_fields("rate")
+        self.update_date_field_attention()
 
     def clear_preview(self, message: str) -> None:
         if self.preview_canvas is None:
@@ -6608,6 +6935,9 @@ class ReimbursementHelperApp:
                 item.document_type = "payment_proof"
             if item.document_type == "receipt":
                 normalize_usa_fuel_receipt_fields(item, data.get("vendor"), data.get("confidence_notes"))
+                normalize_usa_parking_receipt_fields(item, data.get("vendor"), data.get("confidence_notes"))
+            elif item.document_type == "payment_proof":
+                normalize_usa_parking_receipt_fields(item, data.get("vendor"), data.get("confidence_notes"))
         else:
             item.currency = normalize_currency(item.currency, "KRW")
             item.document_type = "receipt"
@@ -6865,6 +7195,8 @@ class ReimbursementHelperApp:
             return
         form_version = self.form_version.get()
         ai_concurrency = self.ai_concurrency_value()
+        if not self.confirm_ai_concurrency(ai_concurrency, len(items), len(bank_items)):
+            return
         if include_bank:
             self._details_ready_for_export = False
         cancel_event = threading.Event()

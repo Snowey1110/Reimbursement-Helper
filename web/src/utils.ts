@@ -115,6 +115,44 @@ export function itemSearchText(item: ReceiptItem): string {
   return [item.category, item.purpose, item.details, item.receiptLabel, item.place, item.filename, item.paymentMethod].join(" ").toLowerCase();
 }
 
+export function looksLikeUsaParkingReceipt(item: ReceiptItem): boolean {
+  const text = itemSearchText(item);
+  return /\b(parking|garage|park(?:ing)? lots?|self park|valet|meter|mccormick place|metropolis|iparkit|parkwhiz|spothero|wabash randolph|millennium park|lakeside center)\b/.test(
+    text
+  );
+}
+
+export function looksLikeUsaTollReceipt(item: ReceiptItem): boolean {
+  const text = itemSearchText(item);
+  return /\b(toll|turnpike|i-pass|e-zpass|ez-pass|indiana toll road|itr concession|bridge fee)\b/.test(text);
+}
+
+export function looksLikeUsaFuelReceipt(item: ReceiptItem): boolean {
+  const text = itemSearchText(item);
+  return /\b(fuel|gasoline|gas station|shell|bp|chevron|exxon|mobil|speedway|marathon)\b/.test(text);
+}
+
+export function normalizeUsaTransportationFields(item: ReceiptItem): ReceiptItem {
+  const parking = looksLikeUsaParkingReceipt(item);
+  const toll = looksLikeUsaTollReceipt(item);
+  const fuel = looksLikeUsaFuelReceipt(item);
+  if (!parking && !toll && !fuel) return item;
+
+  const mealLike = /\b(breakfast|lunch|dinner|meal|food|snack|restaurant)\b/i;
+  const purpose = toll ? "Toll" : fuel ? "Gas" : "Parking";
+  const place = item.place.trim() || item.receiptLabel.trim() || item.filename;
+  const details =
+    !item.details.trim() || mealLike.test(item.details)
+      ? `${purpose} at ${place}.`
+      : item.details;
+  return {
+    ...item,
+    category: "transportation",
+    purpose: !item.purpose.trim() || mealLike.test(item.purpose) ? purpose : item.purpose,
+    details
+  };
+}
+
 export function reportCategoryForItem(item: ReceiptItem, formVersion: "USA" | "Korea"): Category {
   if (formVersion === "Korea") {
     const text = itemSearchText(item);
@@ -124,6 +162,7 @@ export function reportCategoryForItem(item: ReceiptItem, formVersion: "USA" | "K
     if (item.category === "entertainment") return "meals";
     return "other";
   }
+  if (looksLikeUsaParkingReceipt(item) || looksLikeUsaTollReceipt(item) || looksLikeUsaFuelReceipt(item)) return "transportation";
   if (item.category in USA_CATEGORY_ROWS) return item.category;
   if (item.category === "materials" || item.category === "consumables") return "office";
   return "other";
@@ -145,8 +184,40 @@ function dateSortValue(value: string): number {
   const key = parseDateKey(value);
   if (!key) return Number.POSITIVE_INFINITY;
   const iso = /^\d{4}-\d{2}-\d{2}$/.test(key) ? `${key}T00:00:00` : key;
+  const parsed = new Date(iso);
+  if (!Number.isNaN(parsed.getTime())) {
+    parsed.setFullYear(new Date().getFullYear());
+    return parsed.getTime();
+  }
   const time = Date.parse(iso);
   return Number.isNaN(time) ? Number.POSITIVE_INFINITY : time;
+}
+
+export function dateYearNeedsReview(value: string): boolean {
+  const key = parseDateKey(value);
+  if (!key) return false;
+  const iso = /^\d{4}-\d{2}-\d{2}$/.test(key) ? `${key}T00:00:00` : key;
+  const parsed = new Date(iso);
+  return !Number.isNaN(parsed.getTime()) && parsed.getFullYear() !== new Date().getFullYear();
+}
+
+function sameMonthDay(left: string, right: string): boolean {
+  const leftKey = parseDateKey(left);
+  const rightKey = parseDateKey(right);
+  if (!leftKey || !rightKey) return false;
+  const leftDate = new Date(/^\d{4}-\d{2}-\d{2}$/.test(leftKey) ? `${leftKey}T00:00:00` : leftKey);
+  const rightDate = new Date(/^\d{4}-\d{2}-\d{2}$/.test(rightKey) ? `${rightKey}T00:00:00` : rightKey);
+  if (!Number.isNaN(leftDate.getTime()) && !Number.isNaN(rightDate.getTime())) {
+    return leftDate.getMonth() === rightDate.getMonth() && leftDate.getDate() === rightDate.getDate();
+  }
+  return leftKey === rightKey;
+}
+
+export function sortReceiptsForReview(items: ReceiptItem[]): ReceiptItem[] {
+  return items
+    .map((item, index) => ({ item, index, review: dateYearNeedsReview(item.date) ? 0 : 1 }))
+    .sort((left, right) => left.review - right.review || left.index - right.index)
+    .map(({ item }) => item);
 }
 
 export function sortReceiptsForReport(items: ReceiptItem[], formVersion: "USA" | "Korea"): ReceiptItem[] {
@@ -230,9 +301,18 @@ export function parseDateKey(value: string): string {
   return value.trim();
 }
 
+function assumedYearDateKey(value: string): string {
+  const key = parseDateKey(value);
+  if (!key) return "";
+  const parsed = new Date(/^\d{4}-\d{2}-\d{2}$/.test(key) ? `${key}T00:00:00` : key);
+  if (Number.isNaN(parsed.getTime())) return key;
+  parsed.setFullYear(new Date().getFullYear());
+  return parsed.toISOString().slice(0, 10);
+}
+
 export function receiptMergeKey(item: ReceiptItem): string | undefined {
   const amount = safeNumber(item.amount);
-  const date = parseDateKey(item.date);
+  const date = assumedYearDateKey(item.date);
   if (amount === undefined || !date) return undefined;
   return `${date}|${amount.toFixed(2)}`;
 }
@@ -249,6 +329,7 @@ export function receiptAttentionReason(item: ReceiptItem, formVersion: "USA" | "
   if (item.status === "Failed") return "AI failed";
   if (formVersion === "USA" && item.documentType === "unknown") return "Unknown document type";
   if (!item.date.trim()) return "Missing date";
+  if (dateYearNeedsReview(item.date)) return "Wrong year";
   if (!item.amount.trim() && !item.krwAmount.trim() && !item.rmbAmount.trim()) return "Missing amount";
   return undefined;
 }
@@ -267,20 +348,21 @@ export function mergeSameUsaReceipts(items: ReceiptItem[]): ReceiptItem[] {
   const seen = new Map<string, ReceiptItem>();
   const merged: ReceiptItem[] = [];
   for (const item of items) {
-    if (!isUsaReceiptItem(item)) {
-      merged.push({ ...item, images: [...item.images] });
+    const normalizedItem = normalizeUsaTransportationFields(item);
+    if (!isUsaReceiptItem(normalizedItem)) {
+      merged.push({ ...normalizedItem, images: [...normalizedItem.images] });
       continue;
     }
-    const key = receiptMergeKey(item);
+    const key = receiptMergeKey(normalizedItem);
     if (!key || !seen.has(key)) {
-      const copy = { ...item, images: [...item.images] };
+      const copy = { ...normalizedItem, images: [...normalizedItem.images] };
       if (key) seen.set(key, copy);
       merged.push(copy);
       continue;
     }
     const target = seen.get(key)!;
     const existing = new Set(target.images.map((image) => `${image.sourceName}|${image.filename}|${image.dataUrl.slice(0, 64)}`));
-    for (const image of item.images) {
+    for (const image of normalizedItem.images) {
       const imageKey = `${image.sourceName}|${image.filename}|${image.dataUrl.slice(0, 64)}`;
       if (!existing.has(imageKey)) {
         target.images.push(image);
@@ -288,8 +370,8 @@ export function mergeSameUsaReceipts(items: ReceiptItem[]): ReceiptItem[] {
       }
     }
     for (const keyName of ["place", "purpose", "details", "projectNumber", "paymentMethod", "receiptLabel"] as const) {
-      if (!target[keyName] && item[keyName]) {
-        target[keyName] = item[keyName];
+      if (!target[keyName] && normalizedItem[keyName]) {
+        target[keyName] = normalizedItem[keyName];
       }
     }
     target.status = "Merged";
@@ -308,11 +390,9 @@ export function matchUsaPaymentProofItems(items: ReceiptItem[]): ReceiptItem[] {
     }
     const matches = receipts.filter((receipt) => {
       const itemAmount = safeNumber(receipt.amount);
-      const itemDate = parseDateKey(receipt.date);
       return Boolean(
         proofDate &&
-          itemDate &&
-          proofDate === itemDate &&
+          sameMonthDay(receipt.date, item.date) &&
           proofAmount !== undefined &&
           itemAmount !== undefined &&
           Math.abs(itemAmount - proofAmount) < 0.01
@@ -458,11 +538,9 @@ export function buildUsaReportRows(items: ReceiptItem[], proofs: PaymentProof[] 
       const proofDate = parseDateKey(proof.date);
       const matches = rows.filter((row) => {
         const rowAmount = safeNumber(row.amount);
-        const rowDate = parseDateKey(row.date);
         return Boolean(
           proofDate &&
-            rowDate &&
-            proofDate === rowDate &&
+            sameMonthDay(row.date, proof.date) &&
             proofAmount !== undefined &&
             rowAmount !== undefined &&
             Math.abs(rowAmount - proofAmount) < 0.01
@@ -483,8 +561,13 @@ export function buildUsaReportRows(items: ReceiptItem[], proofs: PaymentProof[] 
       });
     }
   }
-  proofOnlyRows.sort((left, right) => dateSortValue(left.date) - dateSortValue(right.date));
-  return [...rows, ...proofOnlyRows];
+  return [...rows, ...proofOnlyRows]
+    .map((row, index) => ({ row, index, date: dateSortValue(row.date) }))
+    .sort((left, right) => {
+      if (left.date !== right.date) return left.date - right.date;
+      return left.index - right.index;
+    })
+    .map(({ row }) => row);
 }
 
 export function matchPaymentProofs(proofs: PaymentProof[], items: ReceiptItem[]): PaymentProof[] {
@@ -496,11 +579,9 @@ export function matchPaymentProofs(proofs: PaymentProof[], items: ReceiptItem[])
     }
     const matches = items.filter((item) => {
       const itemAmount = safeNumber(item.amount);
-      const itemDate = parseDateKey(item.date);
       return Boolean(
         proofDate &&
-          itemDate &&
-          proofDate === itemDate &&
+          sameMonthDay(item.date, proof.date) &&
           proofAmount !== undefined &&
           itemAmount !== undefined &&
           Math.abs(itemAmount - proofAmount) < 0.01
