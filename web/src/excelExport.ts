@@ -52,8 +52,23 @@ export function sanitizeDrawingXml(xml: string): string {
     );
 }
 
+export function sanitizeWorkbookXml(xml: string): string {
+  return xml.replace(/(<definedName\b[^>]*>)([\s\S]*?)(<\/definedName>)/g, (_match, open: string, body: string, close: string) => {
+    const fixedBody = body.replace(
+      /((?:&apos;[^<]+?&apos;|'[^<]+?'|[A-Za-z0-9_. ]+)!)\$?([A-Z]{1,3})\$?(\d+)(?::\$?([A-Z]{1,3})\$?(\d+))?/g,
+      (_range, sheetPrefix: string, col1: string, row1: string, col2?: string, row2?: string) =>
+        `${sheetPrefix}$${col1}$${row1}${col2 && row2 ? `:$${col2}$${row2}` : ""}`
+    );
+    return `${open}${fixedBody}${close}`;
+  });
+}
+
 async function sanitizeWorkbookBuffer(buffer: ExcelJS.Buffer): Promise<ArrayBuffer> {
   const zip = await JSZip.loadAsync(buffer as ArrayBuffer);
+  const workbookXml = zip.file("xl/workbook.xml");
+  if (workbookXml) {
+    zip.file("xl/workbook.xml", sanitizeWorkbookXml(await workbookXml.async("string")));
+  }
   const drawingNames = Object.keys(zip.files).filter((name) => /^xl\/drawings\/drawing\d+\.xml$/.test(name));
   await Promise.all(
     drawingNames.map(async (name) => {

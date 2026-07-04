@@ -16,7 +16,8 @@ import {
   koreaReceiptWideSlot,
   mapKoreaDetailRows,
   mapUsaExpenseRows,
-  sanitizeDrawingXml
+  sanitizeDrawingXml,
+  sanitizeWorkbookXml
 } from "./excelExport";
 
 afterEach(() => {
@@ -54,6 +55,19 @@ describe("Excel row mapping", () => {
 
     expect(sanitized).toContain('<a:ext cx="12345" cy="67890"/>');
     expect(sanitized).not.toContain("<a:extLst>");
+  });
+
+  it("sanitizes ExcelJS print-area defined names back to absolute cell references", () => {
+    const xml =
+      '<workbook><definedNames><definedName name="_xlnm.Print_Area" localSheetId="0">&apos;Expense report&apos;!$A1:$J70</definedName>' +
+      '<definedName name="_xlnm.Print_Area" localSheetId="1">&apos;Receipt and Payment of expenses&apos;!$B1:$E27</definedName></definedNames></workbook>';
+
+    const sanitized = sanitizeWorkbookXml(xml);
+
+    expect(sanitized).toContain("&apos;Expense report&apos;!$A$1:$J$70");
+    expect(sanitized).toContain("&apos;Receipt and Payment of expenses&apos;!$B$1:$E$27");
+    expect(sanitized).not.toContain("$A1");
+    expect(sanitized).not.toContain("$B1");
   });
 
   it("maps Korea detail rows with converted KRW and RMB amounts", () => {
