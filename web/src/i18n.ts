@@ -79,6 +79,7 @@ export const UI_TEXT = {
     generateEmpty: "Generate Empty",
     generateAll: "Generate All",
     generateExcel: "Generate Excel",
+    debugExcel: "Debug Excel",
     insertedReceipts: "Inserted receipts and details",
     file: "File",
     status: "Status",
@@ -143,6 +144,7 @@ export const UI_TEXT = {
     removeConfirm: "Remove {count} selected receipt row(s)?",
     removedReceipts: "Removed {count} receipt row(s).",
     workbookGenerated: "Workbook generated.",
+    debugWorkbookGenerated: "Debug package downloaded.",
     workbookFailed: "Workbook generation failed.",
     reportsGenerated: "Reports generated: {count}",
     ready: "Ready"
@@ -165,6 +167,7 @@ export const UI_TEXT = {
     generateEmpty: "空白填空",
     generateAll: "全部生成",
     generateExcel: "生成 Excel",
+    debugExcel: "调试 Excel",
     insertedReceipts: "已插入发票和明细",
     file: "文件",
     status: "状态",
@@ -229,6 +232,7 @@ export const UI_TEXT = {
     removeConfirm: "删除选中的 {count} 条发票记录？",
     removedReceipts: "已删除 {count} 条发票记录。",
     workbookGenerated: "工作簿已生成。",
+    debugWorkbookGenerated: "调试包已下载。",
     workbookFailed: "工作簿生成失败。",
     reportsGenerated: "已生成报表：{count}",
     ready: "就绪"
@@ -251,6 +255,7 @@ export const UI_TEXT = {
     generateEmpty: "빈 항목 생성",
     generateAll: "전체 생성",
     generateExcel: "Excel 생성",
+    debugExcel: "디버그 Excel",
     insertedReceipts: "추가된 영수증 및 세부 정보",
     file: "파일",
     status: "상태",
@@ -315,6 +320,7 @@ export const UI_TEXT = {
     removeConfirm: "선택한 영수증 행 {count}개를 삭제하시겠습니까?",
     removedReceipts: "영수증 행 {count}개를 삭제했습니다.",
     workbookGenerated: "통합 문서를 생성했습니다.",
+    debugWorkbookGenerated: "디버그 패키지를 다운로드했습니다.",
     workbookFailed: "통합 문서 생성에 실패했습니다.",
     reportsGenerated: "생성된 보고서: {count}",
     ready: "준비됨"

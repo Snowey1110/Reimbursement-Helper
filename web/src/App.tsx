@@ -118,6 +118,7 @@ function readStoredLanguage(): AppLanguage {
 export default function App() {
   const initialUrlSettings = readUrlSettings();
   const initialLanguage = initialUrlSettings.language ?? readStoredLanguage();
+  const excelDebugMode = useMemo(() => new URLSearchParams(window.location.search).get("debug") === "1", []);
   const [language, setLanguage] = useState<AppLanguage>(initialLanguage);
   const [formVersion, setFormVersion] = useState<FormVersion>(() => initialUrlSettings.formVersion ?? readStoredFormVersion());
   const [items, setItems] = useState<ReceiptItem[]>([]);
@@ -626,6 +627,26 @@ export default function App() {
     }
   }
 
+  async function generateExcelDebugBundle() {
+    if (!items.length) {
+      setStatus(t("uploadReceiptsFirst"));
+      return;
+    }
+    setBusy(true);
+    try {
+      if (formVersion === "USA") {
+        await exportUsaWorkbook(items, proofs, rates, true);
+      } else {
+        await exportKoreaWorkbook(items, rates, exchangeRateImages, true);
+      }
+      setStatus(t("debugWorkbookGenerated"));
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : t("workbookFailed"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function handleRowKeyDown(event: React.KeyboardEvent) {
     if (event.key === "a" && event.ctrlKey) {
       event.preventDefault();
@@ -899,6 +920,12 @@ export default function App() {
           <a href={KOREA_TEMPLATE_URL} download>
             Korea
           </a>
+          {excelDebugMode && (
+            <button type="button" onClick={generateExcelDebugBundle} disabled={busy || !items.length} title={t("debugExcel")}>
+              <FileSpreadsheet size={14} />
+              {t("debugExcel")}
+            </button>
+          )}
         </div>
       </footer>
     </div>

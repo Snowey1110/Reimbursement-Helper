@@ -439,17 +439,27 @@ label {
   gap: 6px;
 }
 
-.template-links a {
+.template-links a,
+.template-links button {
   color: #17202a;
   text-decoration: none;
   border: 1px solid #cbd5e1;
   background: #f8fafc;
   padding: 4px 8px;
+  font: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
-.template-links a:hover {
+.template-links a:hover,
+.template-links button:hover:not(:disabled) {
   border-color: #2563eb;
   color: #1d4ed8;
+}
+
+.template-links button:disabled {
+  opacity: 0.55;
 }
 
 .spin {

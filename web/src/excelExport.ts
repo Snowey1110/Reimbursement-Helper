@@ -483,6 +483,89 @@ async function sanitizeWorkbookBuffer(buffer: ExcelJS.Buffer): Promise<ArrayBuff
   return zip.generateAsync({ type: "arraybuffer", compression: "DEFLATE" });
 }
 
+async function workbookDebugReport(label: string, raw: ExcelJS.Buffer, final: ArrayBuffer, templateBuffer: ArrayBuffer): Promise<string> {
+  const [rawZip, finalZip, templateZip] = await Promise.all([JSZip.loadAsync(zipInput(raw)), JSZip.loadAsync(zipInput(final)), JSZip.loadAsync(zipInput(templateBuffer))]);
+  const lines: string[] = [
+    `Reimbursement Helper Excel debug package`,
+    `Form: ${label}`,
+    `Generated: ${new Date().toISOString()}`,
+    "",
+    `File sizes:`,
+    `- raw-exceljs.xlsx: ${zipInput(raw).byteLength} bytes`,
+    `- final.xlsx: ${final.byteLength} bytes`,
+    `- template.xlsx: ${templateBuffer.byteLength} bytes`,
+    "",
+    `Package entries:`,
+    `- raw: ${Object.keys(rawZip.files).length}`,
+    `- final: ${Object.keys(finalZip.files).length}`,
+    `- template: ${Object.keys(templateZip.files).length}`,
+    ""
+  ];
+  for (const [name, zip] of [
+    ["raw", rawZip],
+    ["final", finalZip],
+    ["template", templateZip]
+  ] as const) {
+    lines.push(`${name} key parts:`);
+    for (const part of [
+      "xl/workbook.xml",
+      "xl/worksheets/sheet1.xml",
+      "xl/worksheets/sheet2.xml",
+      "xl/worksheets/_rels/sheet2.xml.rels",
+      "xl/drawings/drawing1.xml",
+      "xl/drawings/_rels/drawing1.xml.rels",
+      "[Content_Types].xml"
+    ]) {
+      const file = zip.file(part);
+      lines.push(`- ${part}: ${file ? "present" : "missing"}`);
+    }
+    lines.push("");
+  }
+  const finalSheet2 = await finalZip.file("xl/worksheets/sheet2.xml")?.async("string");
+  if (finalSheet2) {
+    lines.push("Final sheet2 XML order:");
+    lines.push(`- pageSetup index: ${finalSheet2.indexOf("<pageSetup")}`);
+    lines.push(`- drawing index: ${finalSheet2.indexOf("<drawing")}`);
+    lines.push("");
+  }
+  const finalDrawingRels = await finalZip.file("xl/drawings/_rels/drawing1.xml.rels")?.async("string");
+  if (finalDrawingRels) {
+    lines.push("Final drawing relationships:");
+    lines.push(finalDrawingRels);
+    lines.push("");
+  }
+  return lines.join("\n");
+}
+
+async function downloadWorkbookDebugBundle(
+  label: "usa" | "korea",
+  raw: ExcelJS.Buffer,
+  final: ArrayBuffer,
+  templateBuffer: ArrayBuffer,
+  filename: string
+): Promise<void> {
+  const bundle = new JSZip();
+  bundle.file("final.xlsx", final);
+  bundle.file("raw-exceljs.xlsx", zipInput(raw));
+  bundle.file("template.xlsx", templateBuffer);
+  bundle.file("debug-report.txt", await workbookDebugReport(label, raw, final, templateBuffer));
+  const finalZip = await JSZip.loadAsync(zipInput(final));
+  for (const part of [
+    "xl/workbook.xml",
+    "xl/worksheets/sheet1.xml",
+    "xl/worksheets/sheet2.xml",
+    "xl/worksheets/_rels/sheet2.xml.rels",
+    "xl/drawings/drawing1.xml",
+    "xl/drawings/_rels/drawing1.xml.rels",
+    "[Content_Types].xml"
+  ]) {
+    const file = finalZip.file(part);
+    if (file) bundle.file(`final-parts/${part.replace(/\//g, "__")}`, await file.async("string"));
+  }
+  const debugZip = await bundle.generateAsync({ type: "arraybuffer", compression: "DEFLATE" });
+  downloadBlob(new Blob([debugZip], { type: "application/zip" }), filename);
+}
+
 async function fetchWorkbook(url: string): Promise<ExcelJS.Workbook> {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`Could not load template: ${url}`);
@@ -911,7 +994,7 @@ function configureKoreaReceiptPage(sheet: ExcelJS.Worksheet, slotCount: number):
   return lastRow;
 }
 
-export async function exportUsaWorkbook(items: ReceiptItem[], proofs: PaymentProof[], rates: ExchangeRates): Promise<void> {
+export async function exportUsaWorkbook(items: ReceiptItem[], proofs: PaymentProof[], rates: ExchangeRates, debug = false): Promise<void> {
   const { workbook, buffer: templateBuffer } = await fetchWorkbookWithBuffer(USA_TEMPLATE_URL);
   const expense = workbook.getWorksheet("Expense report");
   const receipts = workbook.getWorksheet("Receipt and Payment of expenses");
@@ -989,12 +1072,17 @@ export async function exportUsaWorkbook(items: ReceiptItem[], proofs: PaymentPro
       USA_SUPPORT_IMAGE_PADDING
     );
   }
-  const buffer = await sanitizeUsaWorkbookBuffer(await workbook.xlsx.writeBuffer(), templateBuffer);
+  const raw = await workbook.xlsx.writeBuffer();
+  const buffer = await sanitizeUsaWorkbookBuffer(raw, templateBuffer);
+  if (debug) {
+    await downloadWorkbookDebugBundle("usa", raw, buffer, templateBuffer, `reimbursement_usa_debug_${dateStamp()}.zip`);
+    return;
+  }
   downloadBlob(new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `reimbursement_usa_${dateStamp()}.xlsx`);
 }
 
-export async function exportKoreaWorkbook(items: ReceiptItem[], rates: ExchangeRates, exchangeRateImages: ImageAttachment[] = []): Promise<void> {
-  const workbook = await fetchWorkbook(KOREA_TEMPLATE_URL);
+export async function exportKoreaWorkbook(items: ReceiptItem[], rates: ExchangeRates, exchangeRateImages: ImageAttachment[] = [], debug = false): Promise<void> {
+  const { workbook, buffer: templateBuffer } = await fetchWorkbookWithBuffer(KOREA_TEMPLATE_URL);
   const cover = workbook.worksheets[0];
   const details = workbook.getWorksheet("报销明细") ?? workbook.worksheets[1];
   const receipts = workbook.worksheets[2];
@@ -1126,7 +1214,12 @@ export async function exportKoreaWorkbook(items: ReceiptItem[], rates: ExchangeR
     await addImageToCell(workbook, receipts, block.images, slot.imageCell, slot.maxWidth, slot.maxHeight, true, true, block.stretchTiles);
     slotIndex += block.mode === "full" ? KOREA_RECEIPT_SLOTS_PER_PAGE : block.mode === "wide" ? 2 : 1;
   }
-  const buffer = await sanitizeWorkbookBuffer(await workbook.xlsx.writeBuffer());
+  const raw = await workbook.xlsx.writeBuffer();
+  const buffer = await sanitizeWorkbookBuffer(raw);
+  if (debug) {
+    await downloadWorkbookDebugBundle("korea", raw, buffer, templateBuffer, `reimbursement_korea_debug_${dateStamp()}.zip`);
+    return;
+  }
   downloadBlob(new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `reimbursement_korea_${dateStamp()}.xlsx`);
 }
 
