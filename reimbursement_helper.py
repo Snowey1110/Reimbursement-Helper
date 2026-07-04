@@ -87,6 +87,7 @@ PDF_RENDER_SCALE = 3
 KRW_NUMBER_FORMAT = "\u20a9#,##0"
 USA_SUPPORT_DATE_NUMBER_FORMAT = "m/d/yyyy"
 MAX_AI_RECEIPT_IMAGES = 8
+AI_AUTO_ROTATE_LANDSCAPE_RATIO = 1.15
 DEFAULT_AI_REQUEST_CONCURRENCY = 4
 MAX_AI_REQUEST_CONCURRENCY = 8
 LOGGER = logging.getLogger("reimbursement_helper")
@@ -957,6 +958,27 @@ def image_data_url(path: Path) -> str:
     return f"data:{image_mime_for_path(path)};base64,{base64.b64encode(raw).decode('ascii')}"
 
 
+def ai_receipt_image_variants(prepared_path: Path, label: str) -> List[Tuple[Path, str]]:
+    if Image is None:
+        return [(prepared_path, label)]
+    try:
+        with Image.open(prepared_path) as source:
+            width, height = source.size
+            if width <= max(1, int(height * AI_AUTO_ROTATE_LANDSCAPE_RATIO)):
+                return [(prepared_path, label)]
+            image = source.copy()
+    except Exception:
+        return [(prepared_path, label)]
+    target_dir = WORK_DIR / "prepared_images"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    variants: List[Tuple[Path, str]] = []
+    for degrees, suffix in ((90, "rotated left"), (-90, "rotated right")):
+        target = target_dir / f"{uuid.uuid4().hex}_ai_{suffix.replace(' ', '_')}.png"
+        image.rotate(degrees, expand=True).save(target, "PNG")
+        variants.append((target, f"{label} ({suffix})"))
+    return variants
+
+
 def receipt_ai_image_parts(image_path: Path, existing: ReceiptItem) -> List[Dict[str, Any]]:
     attachments = [attachment for attachment in (normalize_attachment(raw) for raw in existing.receipt_images) if attachment]
     if not attachments:
@@ -972,7 +994,9 @@ def receipt_ai_image_parts(image_path: Path, existing: ReceiptItem) -> List[Dict
             }
         ]
     parts: List[Dict[str, Any]] = []
-    for index, attachment in enumerate(attachments[:MAX_AI_RECEIPT_IMAGES], start=1):
+    for attachment in attachments:
+        if len(parts) >= MAX_AI_RECEIPT_IMAGES:
+            break
         path = Path(str(attachment.get("path") or ""))
         if not path.exists():
             continue
@@ -981,7 +1005,10 @@ def receipt_ai_image_parts(image_path: Path, existing: ReceiptItem) -> List[Dict
         source_page = str(attachment.get("source_page") or "").strip()
         if source_page and f"page {source_page}" not in label.lower():
             label = f"{label} (page {source_page})"
-        parts.append({"label": label, "path": prepared, "index": index})
+        for variant_path, variant_label in ai_receipt_image_variants(prepared, label):
+            if len(parts) >= MAX_AI_RECEIPT_IMAGES:
+                break
+            parts.append({"label": variant_label, "path": variant_path, "index": len(parts) + 1})
     if parts:
         return parts
     prepared_image = prepare_receipt_image_file(image_path, existing.crop_box, existing.rotation_degrees)
@@ -1040,10 +1067,15 @@ project_number, category, payment_method, receipt_label, document_type, confiden
 Rules:
 - date must be yyyy-mm-dd when visible, otherwise empty string.
 - amount should be the paid total. Preserve cents when visible.
+- If the receipt text is sideways or upside down, mentally rotate the image upright
+  before reading the fields.
 - Some uploads are multi-page PDFs. Review all {page_count_hint} attached image(s);
   the paid total may be on a later page, payment info panel, or receipt summary page.
   Use the page that contains the final Total/Payment info/Paid amount. Ignore page
   numbers, rewards points, ticket numbers, order IDs, and QR-code values.
+- If an image label says rotated left or rotated right, it is an orientation candidate
+  for the same page. Use the candidate where text is upright and readable; do not
+  treat orientation candidates as separate receipts.
 - For USA bank/card payment proof screenshots, date should be the Transaction date
   line and amount should be the Sale/charge amount. Ignore print/export time and
   use Posted date only when Transaction date is not present.
@@ -2074,6 +2106,18 @@ def build_usa_report_rows(
             }
         )
     return rows + proof_only_rows
+
+
+def sort_usa_support_rows_by_date(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    indexed = [
+        (
+            date_sort_value(str(row.get("date") or "")),
+            index,
+            row,
+        )
+        for index, row in enumerate(rows)
+    ]
+    return [entry[2] for entry in sorted(indexed, key=lambda entry: (entry[0], entry[1]))]
 
 
 def normalize_rotation(value: Any) -> int:
@@ -3295,10 +3339,11 @@ def export_usa(
     receipt_image_height = max(1, USA_RECEIPT_IMAGE_MAX_HEIGHT - image_padding * 2)
     proof_image_width = max(1, USA_PROOF_IMAGE_MAX_WIDTH - image_padding * 2)
     proof_image_height = max(1, USA_PROOF_IMAGE_MAX_HEIGHT - image_padding * 2)
+    support_rows = sort_usa_support_rows_by_date(report_rows)
     images_started = time.perf_counter()
     embedded_images = 0
     emit_export_progress(progress, 2, total_steps, "Preparing receipt and payment proof images...")
-    for index, row_data in enumerate(report_rows, start=1):
+    for index, row_data in enumerate(support_rows, start=1):
         row = index + 1
         receipts_ws[f"A{row}"] = index
         receipts_ws[f"B{row}"] = excel_date_formula_or_value(str(row_data.get("date") or ""))
@@ -3333,7 +3378,7 @@ def export_usa(
             progress,
             min(total_steps - 2, index + 2),
             total_steps,
-            f"Processing Excel images {index}/{len(report_rows)}...",
+            f"Processing Excel images {index}/{len(support_rows)}...",
         )
 
     save_started = time.perf_counter()
