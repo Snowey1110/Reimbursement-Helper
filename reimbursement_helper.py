@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import copy
+import hashlib
 import json
 import logging
 import math
@@ -76,6 +77,7 @@ USER_SETTINGS_FILE = CONFIG_DIR / "user_settings.json"
 USER_API_KEY_FILE = CONFIG_DIR / "api_key.txt"
 TEMPLATES_CONFIG_FILE = CONFIG_DIR / "templates.json"
 SESSION_FILE = CONFIG_DIR / "session_state.json"
+RECEIPT_MEMORY_FILE = CONFIG_DIR / "receipt_memory.json"
 SUPPORTED_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
 SUPPORTED_UPLOAD_SUFFIXES = SUPPORTED_IMAGE_SUFFIXES | {".pdf"}
 OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions"
@@ -570,6 +572,13 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "delete_screenshot": "Delete selected screenshot",
         "open_output_folder": "Open output folder",
         "ready": "Ready",
+        "clipboard_no_source": "Select a screenshot or receipt row to copy.",
+        "clipboard_copied": "Copied {count} screenshot(s).",
+        "clipboard_cut": "Cut {count} screenshot(s). Select a receipt row and press Ctrl+V to merge.",
+        "clipboard_empty": "No copied screenshot. Press Ctrl+C or Ctrl+X on a screenshot first.",
+        "clipboard_no_target": "Select a receipt row before pasting screenshots.",
+        "clipboard_needs_receipt_target": "Select a receipt row, not a payment proof row, before pasting.",
+        "clipboard_pasted": "Merged {count} screenshot(s).",
         "place_vendor": "Place / Vendor",
         "usd_amount": "USD amount",
         "original_amount": "Original amount",
@@ -646,6 +655,13 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "delete_screenshot": "\u5220\u9664\u9009\u4e2d\u622a\u56fe",
         "open_output_folder": "\u6253\u5f00\u8f93\u51fa\u6587\u4ef6\u5939",
         "ready": "\u5c31\u7eea",
+        "clipboard_no_source": "\u8bf7\u5148\u9009\u4e2d\u4e00\u5f20\u622a\u56fe\u6216\u4e00\u6761\u53d1\u7968\u8bb0\u5f55\u518d\u590d\u5236\u3002",
+        "clipboard_copied": "\u5df2\u590d\u5236 {count} \u5f20\u622a\u56fe\u3002",
+        "clipboard_cut": "\u5df2\u526a\u5207 {count} \u5f20\u622a\u56fe\u3002\u8bf7\u9009\u4e2d\u76ee\u6807\u53d1\u7968\u540e\u6309 Ctrl+V \u5408\u5e76\u3002",
+        "clipboard_empty": "\u6ca1\u6709\u5df2\u590d\u5236\u7684\u622a\u56fe\u3002\u8bf7\u5148\u5728\u622a\u56fe\u4e0a\u6309 Ctrl+C \u6216 Ctrl+X\u3002",
+        "clipboard_no_target": "\u7c98\u8d34\u524d\u8bf7\u5148\u9009\u4e2d\u4e00\u6761\u53d1\u7968\u8bb0\u5f55\u3002",
+        "clipboard_needs_receipt_target": "\u7c98\u8d34\u524d\u8bf7\u9009\u4e2d\u53d1\u7968\u8bb0\u5f55\uff0c\u4e0d\u8981\u9009\u4ed8\u6b3e\u51ed\u8bc1\u8bb0\u5f55\u3002",
+        "clipboard_pasted": "\u5df2\u5408\u5e76 {count} \u5f20\u622a\u56fe\u3002",
         "place_vendor": "\u5730\u70b9 / \u5546\u5bb6",
         "usd_amount": "\u7f8e\u5143\u91d1\u989d",
         "original_amount": "\u539f\u5e01\u91d1\u989d",
@@ -722,6 +738,13 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "delete_screenshot": "\uc120\ud0dd\ud55c \uc2a4\ud06c\ub9b0\uc0f7 \uc0ad\uc81c",
         "open_output_folder": "\ucd9c\ub825 \ud3f4\ub354 \uc5f4\uae30",
         "ready": "\uc900\ube44\ub428",
+        "clipboard_no_source": "\uc2a4\ud06c\ub9b0\uc0f7 \ub610\ub294 \uc601\uc218\uc99d \ud589\uc744 \uba3c\uc800 \uc120\ud0dd\ud558\uc138\uc694.",
+        "clipboard_copied": "\uc2a4\ud06c\ub9b0\uc0f7 {count}\uac1c\ub97c \ubcf5\uc0ac\ud588\uc2b5\ub2c8\ub2e4.",
+        "clipboard_cut": "\uc2a4\ud06c\ub9b0\uc0f7 {count}\uac1c\ub97c \uc798\ub790\uc2b5\ub2c8\ub2e4. \ub300\uc0c1 \uc601\uc218\uc99d \ud589\uc744 \uc120\ud0dd\ud55c \ub4a4 Ctrl+V\ub97c \ub204\ub974\uc138\uc694.",
+        "clipboard_empty": "\ubcf5\uc0ac\ub41c \uc2a4\ud06c\ub9b0\uc0f7\uc774 \uc5c6\uc2b5\ub2c8\ub2e4. \uba3c\uc800 \uc2a4\ud06c\ub9b0\uc0f7\uc5d0\uc11c Ctrl+C \ub610\ub294 Ctrl+X\ub97c \ub204\ub974\uc138\uc694.",
+        "clipboard_no_target": "\ubd99\uc5ec\ub123\uae30 \uc804\uc5d0 \uc601\uc218\uc99d \ud589\uc744 \uc120\ud0dd\ud558\uc138\uc694.",
+        "clipboard_needs_receipt_target": "\ubd99\uc5ec\ub123\uae30 \uc804\uc5d0 \uacb0\uc81c \uc99d\ube59 \ud589\uc774 \uc544\ub2cc \uc601\uc218\uc99d \ud589\uc744 \uc120\ud0dd\ud558\uc138\uc694.",
+        "clipboard_pasted": "\uc2a4\ud06c\ub9b0\uc0f7 {count}\uac1c\ub97c \ud569\ucce4\uc2b5\ub2c8\ub2e4.",
         "place_vendor": "\uc7a5\uc18c / \uc5c5\uccb4",
         "usd_amount": "USD \uae08\uc561",
         "original_amount": "\uc6d0\ud654 \uae08\uc561",
@@ -835,6 +858,36 @@ def normalize_attachment(raw: Any) -> Optional[Dict[str, Any]]:
         "crop_box": raw.get("crop_box") if isinstance(raw.get("crop_box"), list) else None,
         "rotation_degrees": normalize_rotation(raw.get("rotation_degrees", 0)),
     }
+
+
+def clone_attachment_for_manual_paste(raw: Any) -> Optional[Dict[str, Any]]:
+    attachment = normalize_attachment(raw)
+    if attachment is None:
+        return None
+    attachment["id"] = uuid.uuid4().hex
+    attachment["crop_box"] = copy.deepcopy(attachment.get("crop_box"))
+    return attachment
+
+
+def fill_blank_receipt_fields(target: ReceiptItem, source: Optional[ReceiptItem]) -> None:
+    if source is None:
+        return
+    for attr in (
+        "date",
+        "place",
+        "amount",
+        "krw_amount",
+        "rmb_amount",
+        "purpose",
+        "details",
+        "project_number",
+        "payment_method",
+        "receipt_label",
+    ):
+        current = str(getattr(target, attr, "") or "").strip()
+        incoming = str(getattr(source, attr, "") or "").strip()
+        if not current and incoming:
+            setattr(target, attr, incoming)
 
 
 def appdata_daily_logger_key_file() -> Optional[Path]:
@@ -1117,6 +1170,10 @@ Rules:
   authorization, terminal ID, total, or receipt number is still a receipt.
 - For Korea, use receipt unless the image is clearly not reimbursement support.
 - If a field is unclear, use an empty string rather than guessing.
+- Image labels or filenames may contain an app memory marker beginning with __RH1_.
+  Treat that marker as prior reimbursement memory. Prefer manual-reviewed marker values
+  for document_type, date, amount, currency, category, and vendor unless the visible
+  receipt clearly contradicts them.
 
 Current editable row values, to keep if they look more specific than the image:
 {json.dumps(asdict(existing), ensure_ascii=False)}
@@ -1457,6 +1514,241 @@ def normalized_category(category: str, form_version: str) -> str:
     if form_version == "USA" and raw in USA_CATEGORY_ROWS:
         return raw
     return "other"
+
+
+RECEIPT_MEMORY_MARKER_RE = re.compile(r"__RH1_[A-Za-z0-9._~-]+__")
+RECEIPT_MEMORY_SCHEMA_VERSION = 1
+
+
+def strip_receipt_memory_marker(value: str) -> str:
+    cleaned = RECEIPT_MEMORY_MARKER_RE.sub("", value or "")
+    cleaned = re.sub(r"[_\s-]+$", "", cleaned).strip()
+    return cleaned or "receipt"
+
+
+def filename_safe_token(value: Any, limit: int = 28) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"[^A-Za-z0-9]+", "-", text)
+    text = re.sub(r"-+", "-", text).strip("-")
+    return text[:limit].strip("-")
+
+
+def file_sha256_short(path: Path, length: int = 12) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()[:length]
+
+
+def receipt_memory_key_for_path(path: Path, source_page: str = "") -> str:
+    if not path.exists() or not path.is_file():
+        return ""
+    try:
+        digest = file_sha256_short(path, 24)
+    except Exception:
+        return ""
+    page = str(source_page or "").strip()
+    return f"sha256:{digest}:page:{page}"
+
+
+def receipt_source_path_for_memory(path: str, source_path: str) -> Path:
+    source = Path(str(source_path or "").strip()) if str(source_path or "").strip() else Path(str(path or ""))
+    return source
+
+
+def receipt_memory_keys_for_item(item: Any) -> List[str]:
+    keys: List[str] = []
+    source = receipt_source_path_for_memory(getattr(item, "path", ""), getattr(item, "source_path", ""))
+    key = receipt_memory_key_for_path(source, getattr(item, "source_page", ""))
+    if key:
+        keys.append(key)
+    for raw in getattr(item, "receipt_images", []) or []:
+        if not isinstance(raw, dict):
+            continue
+        attachment_source = receipt_source_path_for_memory(str(raw.get("path") or ""), str(raw.get("source_path") or ""))
+        attachment_key = receipt_memory_key_for_path(attachment_source, str(raw.get("source_page") or ""))
+        if attachment_key and attachment_key not in keys:
+            keys.append(attachment_key)
+    return keys
+
+
+def load_receipt_memory() -> Dict[str, Any]:
+    if not RECEIPT_MEMORY_FILE.exists():
+        return {"version": RECEIPT_MEMORY_SCHEMA_VERSION, "records": {}}
+    try:
+        data = json.loads(RECEIPT_MEMORY_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        log_exception("Could not read receipt memory")
+        return {"version": RECEIPT_MEMORY_SCHEMA_VERSION, "records": {}}
+    if not isinstance(data, dict):
+        return {"version": RECEIPT_MEMORY_SCHEMA_VERSION, "records": {}}
+    records = data.get("records")
+    if not isinstance(records, dict):
+        data["records"] = {}
+    data["version"] = RECEIPT_MEMORY_SCHEMA_VERSION
+    return data
+
+
+def save_receipt_memory(data: Dict[str, Any]) -> None:
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        RECEIPT_MEMORY_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        log_exception("Could not save receipt memory")
+
+
+def receipt_memory_record_from_item(item: Any, form_version: str, reviewed_source: str) -> Dict[str, Any]:
+    document_type = normalize_document_type(getattr(item, "document_type", "unknown"), "unknown")
+    currency = normalize_currency(getattr(item, "currency", ""), "USD" if normalized_form_version(form_version) == "USA" else "KRW")
+    return {
+        "version": RECEIPT_MEMORY_SCHEMA_VERSION,
+        "reviewed_source": "manual" if reviewed_source == "manual" else "ai",
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "form_version": normalized_form_version(form_version),
+        "document_type": document_type,
+        "date": str(getattr(item, "date", "") or "").strip(),
+        "place": str(getattr(item, "place", "") or "").strip(),
+        "amount": str(getattr(item, "amount", "") or "").strip(),
+        "currency": currency,
+        "krw_amount": str(getattr(item, "krw_amount", "") or "").strip(),
+        "rmb_amount": str(getattr(item, "rmb_amount", "") or "").strip(),
+        "purpose": str(getattr(item, "purpose", "") or "").strip(),
+        "details": str(getattr(item, "details", "") or "").strip(),
+        "project_number": str(getattr(item, "project_number", "") or "").strip(),
+        "category": normalized_category(str(getattr(item, "category", "") or ""), normalized_form_version(form_version)),
+        "payment_method": str(getattr(item, "payment_method", "") or "").strip(),
+        "receipt_label": str(getattr(item, "receipt_label", "") or "").strip(),
+    }
+
+
+def receipt_memory_record_has_values(record: Dict[str, Any]) -> bool:
+    for key in ("date", "amount", "krw_amount", "rmb_amount", "place", "purpose", "details", "receipt_label"):
+        if str(record.get(key) or "").strip():
+            return True
+    return normalize_document_type(record.get("document_type"), "unknown") != "unknown"
+
+
+def build_receipt_memory_marker(record: Dict[str, Any], fingerprint: str = "") -> str:
+    parts: List[str] = []
+    doc_type = normalize_document_type(record.get("document_type"), "unknown")
+    if doc_type != "unknown":
+        parts.append(f"t-{doc_type}")
+    date_text = filename_safe_token(record.get("date"), 10)
+    if date_text:
+        parts.append(f"d-{date_text}")
+    amount_number = re.sub(r"[^0-9.-]+", "", str(record.get("amount") or "").strip()).replace(".", "p")
+    amount_text = filename_safe_token(f"{amount_number}{record.get('currency', '')}", 18)
+    if amount_text:
+        parts.append(f"a-{amount_text}")
+    category = filename_safe_token(record.get("category"), 20)
+    if category:
+        parts.append(f"c-{category}")
+    vendor = filename_safe_token(record.get("place"), 24)
+    if vendor:
+        parts.append(f"v-{vendor}")
+    reviewed = filename_safe_token(record.get("reviewed_source"), 8)
+    if reviewed:
+        parts.append(f"r-{reviewed}")
+    if fingerprint:
+        parts.append(f"f-{filename_safe_token(fingerprint, 12)}")
+    return "__RH1_" + "_".join(parts[:7]) + "__"
+
+
+def parse_receipt_memory_marker(value: str) -> Dict[str, Any]:
+    match = RECEIPT_MEMORY_MARKER_RE.search(value or "")
+    if not match:
+        return {}
+    body = match.group(0)[len("__RH1_") : -2]
+    record: Dict[str, Any] = {"version": RECEIPT_MEMORY_SCHEMA_VERSION}
+    for piece in body.split("_"):
+        if "-" not in piece:
+            continue
+        key, raw_value = piece.split("-", 1)
+        value_text = raw_value.replace("-", " ").strip()
+        if key == "t":
+            record["document_type"] = normalize_document_type(raw_value, "unknown")
+        elif key == "d":
+            record["date"] = raw_value
+        elif key == "a":
+            amount_match = re.match(r"(-?\d+(?:[.p-]\d+)?)([A-Z]+)?", raw_value)
+            if amount_match:
+                amount_text = amount_match.group(1).replace("p", ".")
+                if "." not in amount_text and "-" in amount_text[1:]:
+                    sign = "-" if amount_text.startswith("-") else ""
+                    body = amount_text[1:] if sign else amount_text
+                    amount_text = sign + body.replace("-", ".", 1)
+                record["amount"] = amount_text
+                if amount_match.group(2):
+                    record["currency"] = normalize_currency(amount_match.group(2), "USD")
+        elif key == "c":
+            record["category"] = raw_value
+        elif key == "v":
+            record["place"] = value_text
+        elif key == "r":
+            record["reviewed_source"] = raw_value
+    return record
+
+
+def apply_receipt_memory_record_to_item(item: Any, record: Dict[str, Any], form_version: str, full_record: bool = True) -> bool:
+    if not isinstance(record, dict) or not record:
+        return False
+    changed = False
+    field_map = {
+        "date": "date",
+        "place": "place",
+        "amount": "amount",
+        "currency": "currency",
+        "krw_amount": "krw_amount",
+        "rmb_amount": "rmb_amount",
+        "purpose": "purpose",
+        "details": "details",
+        "project_number": "project_number",
+        "category": "category",
+        "payment_method": "payment_method",
+        "receipt_label": "receipt_label",
+        "document_type": "document_type",
+    }
+    for source, dest in field_map.items():
+        value = record.get(source)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if not text and dest not in {"project_number"}:
+            continue
+        if dest == "category":
+            text = normalized_category(text, normalized_form_version(form_version))
+        elif dest == "currency":
+            text = normalize_currency(text, "USD" if normalized_form_version(form_version) == "USA" else "KRW")
+        elif dest == "document_type":
+            text = normalize_document_type(text, "unknown")
+        if getattr(item, dest, "") != text:
+            setattr(item, dest, text)
+            changed = True
+    if full_record:
+        reviewed = str(record.get("reviewed_source") or "").strip()
+        item.status = "Manual remembered" if reviewed == "manual" else "Remembered"
+    return changed
+
+
+def receipt_item_signature(item: Any) -> Tuple[Any, ...]:
+    return (
+        getattr(item, "date", ""),
+        getattr(item, "place", ""),
+        getattr(item, "amount", ""),
+        getattr(item, "currency", ""),
+        getattr(item, "krw_amount", ""),
+        getattr(item, "rmb_amount", ""),
+        getattr(item, "purpose", ""),
+        getattr(item, "details", ""),
+        getattr(item, "project_number", ""),
+        getattr(item, "category", ""),
+        getattr(item, "payment_method", ""),
+        getattr(item, "receipt_label", ""),
+        getattr(item, "document_type", ""),
+    )
 
 
 USA_FUEL_VENDOR_PATTERN = re.compile(
@@ -1960,6 +2252,8 @@ def payment_proof_missing_status(item: Any) -> Optional[str]:
 
 def receipt_needs_ai(item: "ReceiptItem", form_version: str) -> bool:
     version = normalized_form_version(form_version)
+    if item.status in {"Remembered", "Manual remembered"}:
+        return False
     if item.status in {"Empty", "Failed", "Needs regen"}:
         return True
     if not item.date.strip():
@@ -4188,6 +4482,7 @@ class ReimbursementHelperApp:
         self.generate_excel_btn: Optional[Any] = None
         self.selected_attachment_kind = "receipt"
         self.selected_attachment_index = 0
+        self.image_clipboard: Optional[Dict[str, Any]] = None
         self._selection_anchor_index: Optional[int] = None
         self.preview_tiles: List[Dict[str, Any]] = []
         self.preview_photos: List[Any] = []
@@ -4249,6 +4544,7 @@ class ReimbursementHelperApp:
         self._excel_prewarm_keys: set = set()
         self._excel_prewarm_lock = threading.Lock()
         self._receipt_import_active = False
+        self._receipt_memory = load_receipt_memory()
         self.last_generated_output_path: Optional[Path] = None
         self._build_ui()
         self._attach_amount_traces()
@@ -4682,6 +4978,12 @@ class ReimbursementHelperApp:
         self.preview_canvas.bind("<B1-Motion>", self._on_crop_drag)
         self.preview_canvas.bind("<ButtonRelease-1>", self._on_crop_release)
         self.preview_canvas.bind("<MouseWheel>", self._on_preview_mousewheel)
+        for sequence in ("<Control-c>", "<Control-C>"):
+            self.root.bind_all(sequence, lambda event, mode="copy": self.copy_screenshot_shortcut(event, mode), add="+")
+        for sequence in ("<Control-x>", "<Control-X>"):
+            self.root.bind_all(sequence, lambda event, mode="cut": self.copy_screenshot_shortcut(event, mode), add="+")
+        for sequence in ("<Control-v>", "<Control-V>"):
+            self.root.bind_all(sequence, self.paste_screenshot_shortcut, add="+")
 
         footer = ttk.Frame(self.root, padding=(18, 0, 18, 12))
         footer.pack(fill="x")
@@ -5135,6 +5437,7 @@ class ReimbursementHelperApp:
         version = self.form_version.get()
         for index in self.selected_indices():
             item = self.items[index]
+            before = receipt_item_signature(item)
             if key == "category":
                 setattr(item, key, self.category_key_from_display(value))
             elif key == "document_type":
@@ -5145,6 +5448,8 @@ class ReimbursementHelperApp:
                 setattr(item, key, value)
             self.update_item_amount_fields(item, self._last_amount_source)
             self.clear_attention_status_if_ready(item)
+            if receipt_item_signature(item) != before:
+                self.remember_receipt_item(item, "manual")
         if refresh:
             self.refresh_tree()
         if key == "date":
@@ -5159,8 +5464,11 @@ class ReimbursementHelperApp:
         indices = range(len(self.items)) if source == "rate" else self.selected_indices()
         for index in indices:
             item = self.items[index]
+            before = receipt_item_signature(item)
             if source == "rate":
                 self.update_item_amount_fields(item, "amount")
+                if receipt_item_signature(item) != before:
+                    self.remember_receipt_item(item, "manual")
                 continue
             if source == "amount":
                 item.amount = amount_value
@@ -5177,6 +5485,8 @@ class ReimbursementHelperApp:
                 item.rmb_amount = rmb_value
                 self.update_item_amount_fields(item, "rmb_amount")
             self.clear_attention_status_if_ready(item)
+            if receipt_item_signature(item) != before:
+                self.remember_receipt_item(item, "manual")
         if refresh:
             self.refresh_tree()
 
@@ -5355,6 +5665,138 @@ class ReimbursementHelperApp:
         self._details_ready_for_export = False
         self.start_incremental_receipt_import(paths)
 
+    def receipt_memory_records_for_item(self, item: ReceiptItem) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        records = self._receipt_memory.get("records")
+        if not isinstance(records, dict):
+            records = {}
+            self._receipt_memory["records"] = records
+        for key in receipt_memory_keys_for_item(item):
+            record = records.get(key)
+            if isinstance(record, dict):
+                return record, None
+        marker_sources = [item.filename, item.source_path, item.path]
+        for attachment in item.receipt_images:
+            marker_sources.extend(
+                [
+                    str(attachment.get("filename") or ""),
+                    str(attachment.get("source_path") or ""),
+                    str(attachment.get("path") or ""),
+                ]
+            )
+        for value in marker_sources:
+            marker = parse_receipt_memory_marker(Path(str(value)).name)
+            if marker:
+                return None, marker
+        return None, None
+
+    def apply_stored_receipt_memory(self, item: ReceiptItem) -> bool:
+        full_record, marker_record = self.receipt_memory_records_for_item(item)
+        if full_record:
+            changed = apply_receipt_memory_record_to_item(item, full_record, self.form_version.get(), full_record=True)
+            self.update_item_amount_fields(item, "amount")
+            return changed
+        if marker_record:
+            changed = apply_receipt_memory_record_to_item(item, marker_record, self.form_version.get(), full_record=False)
+            self.update_item_amount_fields(item, "amount")
+            if item.status == "Empty":
+                item.status = "Filename hint"
+            return changed
+        return False
+
+    def source_paths_for_receipt_item(self, item: ReceiptItem) -> List[Path]:
+        paths: List[Path] = []
+        for raw_path in (item.source_path, item.path):
+            if raw_path:
+                paths.append(Path(raw_path))
+        for attachment in ensure_receipt_images(item):
+            for raw_path in (attachment.get("source_path"), attachment.get("path")):
+                if raw_path:
+                    paths.append(Path(str(raw_path)))
+        unique: List[Path] = []
+        seen: set = set()
+        for path in paths:
+            try:
+                resolved = str(path.resolve()).lower()
+            except Exception:
+                resolved = str(path).lower()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            try:
+                in_work_dir = path.resolve().is_relative_to(WORK_DIR.resolve())
+            except Exception:
+                in_work_dir = False
+            if path.exists() and path.is_file() and not in_work_dir:
+                unique.append(path)
+        return unique
+
+    def tagged_receipt_source_name(self, source: Path, record: Dict[str, Any], fingerprint: str) -> str:
+        marker = build_receipt_memory_marker(record, fingerprint)
+        base_stem = strip_receipt_memory_marker(source.stem)
+        max_stem_len = max(12, 180 - len(marker) - len(source.suffix))
+        base_stem = base_stem[:max_stem_len].rstrip(" ._-") or "receipt"
+        return f"{base_stem}{marker}{source.suffix}"
+
+    def apply_source_rename_to_item(self, item: ReceiptItem, old_path: Path, new_path: Path) -> None:
+        old_text = str(old_path)
+        new_text = str(new_path)
+
+        def same_path_text(value: Any) -> bool:
+            try:
+                return str(Path(str(value)).resolve()).lower() == str(old_path.resolve()).lower()
+            except Exception:
+                return str(value or "").lower() == old_text.lower()
+
+        if same_path_text(item.path):
+            item.path = new_text
+        if same_path_text(item.source_path):
+            item.source_path = new_text
+        for attachment in item.receipt_images:
+            if same_path_text(attachment.get("path")):
+                attachment["path"] = new_text
+            source_changed = same_path_text(attachment.get("source_path"))
+            if source_changed:
+                attachment["source_path"] = new_text
+            if same_path_text(attachment.get("path")) or source_changed:
+                page = str(attachment.get("source_page") or "").strip()
+                attachment["filename"] = f"{new_path.name} page {page}" if page else new_path.name
+        ensure_receipt_images(item)
+
+    def rename_receipt_sources_with_memory(self, item: ReceiptItem, record: Dict[str, Any]) -> None:
+        renamed_any = False
+        for source in self.source_paths_for_receipt_item(item):
+            try:
+                fingerprint = file_sha256_short(source, 12)
+                new_name = self.tagged_receipt_source_name(source, record, fingerprint)
+                if source.name == new_name:
+                    continue
+                destination = source.with_name(new_name)
+                if destination.exists() and str(destination.resolve()).lower() != str(source.resolve()).lower():
+                    destination = unique_path(source.parent, new_name)
+                source.rename(destination)
+                self.apply_source_rename_to_item(item, source, destination)
+                renamed_any = True
+            except Exception:
+                LOGGER.warning("Could not rename remembered receipt source: %s", source, exc_info=True)
+        if renamed_any:
+            ensure_receipt_images(item)
+
+    def remember_receipt_item(self, item: ReceiptItem, reviewed_source: str) -> None:
+        record = receipt_memory_record_from_item(item, self.form_version.get(), reviewed_source)
+        if not receipt_memory_record_has_values(record):
+            return
+        keys = receipt_memory_keys_for_item(item)
+        records = self._receipt_memory.setdefault("records", {})
+        if not isinstance(records, dict):
+            records = {}
+            self._receipt_memory["records"] = records
+        for key in keys:
+            records[key] = dict(record)
+        self.rename_receipt_sources_with_memory(item, record)
+        for key in receipt_memory_keys_for_item(item):
+            records[key] = dict(record)
+        save_receipt_memory(self._receipt_memory)
+
     def import_receipt_file(self, path: Path, existing: set) -> Tuple[bool, Optional[str]]:
         suffix = path.suffix.lower()
         if suffix not in SUPPORTED_UPLOAD_SUFFIXES:
@@ -5384,46 +5826,46 @@ class ReimbursementHelperApp:
                         "rotation_degrees": 0,
                     }
                 )
-            self.items.append(
-                ReceiptItem(
-                    item_id=uuid.uuid4().hex,
-                    path=str(page_paths[0]),
-                    filename=filename,
-                    source_path=str(path),
-                    source_page="1",
-                    currency="USD" if self.form_version.get() == "USA" else "KRW",
-                    category="transportation",
-                    document_type="unknown" if self.form_version.get() == "USA" else "receipt",
-                    receipt_images=receipt_images,
-                )
+            item = ReceiptItem(
+                item_id=uuid.uuid4().hex,
+                path=str(page_paths[0]),
+                filename=filename,
+                source_path=str(path),
+                source_page="1",
+                currency="USD" if self.form_version.get() == "USA" else "KRW",
+                category="transportation",
+                document_type="unknown" if self.form_version.get() == "USA" else "receipt",
+                receipt_images=receipt_images,
             )
+            self.apply_stored_receipt_memory(item)
+            self.items.append(item)
             existing.add(key)
             return True, None
         key = selected_file_key(path, str(path), "")
         if key in existing:
             return False, None
-        self.items.append(
-            ReceiptItem(
-                item_id=uuid.uuid4().hex,
-                path=str(path),
-                filename=path.name,
-                source_path=str(path),
-                currency="USD" if self.form_version.get() == "USA" else "KRW",
-                category="transportation",
-                document_type="unknown" if self.form_version.get() == "USA" else "receipt",
-                receipt_images=[
-                    {
-                        "id": uuid.uuid4().hex,
-                        "path": str(path),
-                        "filename": path.name,
-                        "source_path": str(path),
-                        "source_page": "",
-                        "crop_box": None,
-                        "rotation_degrees": 0,
-                    }
-                ],
-            )
+        item = ReceiptItem(
+            item_id=uuid.uuid4().hex,
+            path=str(path),
+            filename=path.name,
+            source_path=str(path),
+            currency="USD" if self.form_version.get() == "USA" else "KRW",
+            category="transportation",
+            document_type="unknown" if self.form_version.get() == "USA" else "receipt",
+            receipt_images=[
+                {
+                    "id": uuid.uuid4().hex,
+                    "path": str(path),
+                    "filename": path.name,
+                    "source_path": str(path),
+                    "source_page": "",
+                    "crop_box": None,
+                    "rotation_degrees": 0,
+                }
+            ],
         )
+        self.apply_stored_receipt_memory(item)
+        self.items.append(item)
         existing.add(key)
         return True, None
 
@@ -5891,6 +6333,220 @@ class ReimbursementHelperApp:
     def selected_items(self) -> List[ReceiptItem]:
         return [self.items[index] for index in self.selected_indices()]
 
+    def shortcut_focus_is_text_editor(self) -> bool:
+        try:
+            focus = self.root.focus_get()
+            widget_class = str(focus.winfo_class()) if focus is not None else ""
+        except Exception:
+            return False
+        return widget_class in {
+            "Entry",
+            "TEntry",
+            "Text",
+            "Combobox",
+            "TCombobox",
+            "Spinbox",
+            "TSpinbox",
+        }
+
+    def screenshot_clipboard_entries_from_tile(self) -> List[Dict[str, Any]]:
+        tile = self.selected_preview_tile()
+        receipt = self.selected_item()
+        if tile is None or receipt is None:
+            return []
+        kind = str(tile.get("kind") or "receipt")
+        if kind == "proof":
+            proof_item = tile.get("proof_item")
+            if not isinstance(proof_item, BankStatementItem):
+                return []
+            return [
+                {
+                    "kind": "proof",
+                    "attachment": attachment_from_item(proof_item),
+                    "source_proof_id": proof_item.item_id,
+                    "source_proof": copy.deepcopy(proof_item),
+                }
+            ]
+        images = ensure_receipt_images(receipt)
+        index = int(tile.get("index") or 0)
+        if index < 0 or index >= len(images):
+            return []
+        attachment = copy.deepcopy(images[index])
+        return [
+            {
+                "kind": "proof" if self.form_version.get() == "USA" and is_usa_payment_proof_item(receipt) else "receipt",
+                "attachment": attachment,
+                "source_item_id": receipt.item_id,
+                "source_image_id": str(attachment.get("id") or ""),
+                "source_item": copy.deepcopy(receipt),
+            }
+        ]
+
+    def screenshot_clipboard_entries_from_rows(self) -> List[Dict[str, Any]]:
+        entries: List[Dict[str, Any]] = []
+        for item in self.selected_items():
+            images = ensure_receipt_images(item)
+            kind = "proof" if self.form_version.get() == "USA" and is_usa_payment_proof_item(item) else "receipt"
+            for attachment in images:
+                entries.append(
+                    {
+                        "kind": kind,
+                        "attachment": copy.deepcopy(attachment),
+                        "source_item_id": item.item_id,
+                        "source_image_id": str(attachment.get("id") or ""),
+                        "source_item": copy.deepcopy(item),
+                    }
+                )
+        return entries
+
+    def copy_screenshot_shortcut(self, event: Any = None, mode: str = "copy") -> Optional[str]:
+        if self.shortcut_focus_is_text_editor():
+            return None
+        self.save_current_fields()
+        focus = None
+        try:
+            focus = self.root.focus_get()
+        except Exception:
+            pass
+        entries = (
+            self.screenshot_clipboard_entries_from_rows()
+            if focus is self.tree
+            else self.screenshot_clipboard_entries_from_tile()
+        )
+        if not entries and focus is not self.tree:
+            entries = self.screenshot_clipboard_entries_from_rows()
+        if not entries:
+            self.status_text.set(self.tr("clipboard_no_source"))
+            return "break"
+        clipboard_mode = "cut" if mode == "cut" else "copy"
+        self.image_clipboard = {"mode": clipboard_mode, "entries": entries}
+        self.status_text.set(self.tr("clipboard_cut" if clipboard_mode == "cut" else "clipboard_copied", count=len(entries)))
+        return "break"
+
+    def paste_screenshot_shortcut(self, event: Any = None) -> Optional[str]:
+        if self.shortcut_focus_is_text_editor():
+            return None
+        clipboard = self.image_clipboard if isinstance(self.image_clipboard, dict) else None
+        entries = list(clipboard.get("entries") or []) if clipboard else []
+        if not entries:
+            self.status_text.set(self.tr("clipboard_empty"))
+            return "break"
+        self.save_current_fields()
+        target = self.selected_item()
+        if target is None:
+            self.status_text.set(self.tr("clipboard_no_target"))
+            return "break"
+        if self.form_version.get() == "USA" and is_usa_payment_proof_item(target):
+            self.status_text.set(self.tr("clipboard_needs_receipt_target"))
+            return "break"
+
+        mode = "cut" if clipboard.get("mode") == "cut" else "copy"
+        target_id = target.item_id
+        pasted_receipt_ids: List[str] = []
+        pasted_proof_ids: List[str] = []
+        cut_source_images: Dict[str, set] = {}
+        cut_source_proofs: set = set()
+
+        target_images = ensure_receipt_images(target)
+        for entry in entries:
+            attachment = clone_attachment_for_manual_paste(entry.get("attachment"))
+            if attachment is None:
+                continue
+            paste_as_proof = self.form_version.get() == "USA" and str(entry.get("kind")) == "proof"
+            if paste_as_proof:
+                source_proof = entry.get("source_proof")
+                source_item = entry.get("source_item")
+                proof_item = BankStatementItem(
+                    item_id=uuid.uuid4().hex,
+                    path=str(attachment.get("path") or ""),
+                    filename=str(attachment.get("filename") or Path(str(attachment.get("path") or "")).name),
+                    source_path=str(attachment.get("source_path") or ""),
+                    source_page=str(attachment.get("source_page") or ""),
+                    date=str(getattr(source_proof, "date", "") or getattr(source_item, "date", "") or target.date),
+                    amount=str(getattr(source_proof, "amount", "") or getattr(source_item, "amount", "") or target.amount),
+                    place=str(getattr(source_proof, "place", "") or getattr(source_item, "place", "") or target.place),
+                    matched_receipt_id=target_id,
+                    status="Matched manually",
+                    crop_box=copy.deepcopy(attachment.get("crop_box")),
+                    rotation_degrees=normalize_rotation(attachment.get("rotation_degrees", 0)),
+                )
+                self.bank_items.append(proof_item)
+                pasted_proof_ids.append(proof_item.item_id)
+            else:
+                target_images.append(attachment)
+                pasted_receipt_ids.append(str(attachment.get("id") or ""))
+                source_item = entry.get("source_item")
+                fill_blank_receipt_fields(target, source_item if isinstance(source_item, ReceiptItem) else None)
+
+            if mode == "cut":
+                source_item_id = str(entry.get("source_item_id") or "")
+                source_image_id = str(entry.get("source_image_id") or "")
+                if source_item_id and source_image_id:
+                    cut_source_images.setdefault(source_item_id, set()).add(source_image_id)
+                source_proof_id = str(entry.get("source_proof_id") or "")
+                if source_proof_id:
+                    cut_source_proofs.add(source_proof_id)
+
+        if not pasted_receipt_ids and not pasted_proof_ids:
+            self.status_text.set(self.tr("clipboard_no_source"))
+            return "break"
+
+        if pasted_receipt_ids:
+            target.receipt_images = target_images
+            ensure_receipt_images(target)
+            self.clear_attention_status_if_ready(target)
+
+        if mode == "cut":
+            remove_item_ids: set = set()
+            for item in self.items:
+                image_ids = cut_source_images.get(item.item_id)
+                if not image_ids:
+                    continue
+                remaining = [image for image in ensure_receipt_images(item) if str(image.get("id") or "") not in image_ids]
+                item.receipt_images = remaining
+                if remaining:
+                    ensure_receipt_images(item)
+                else:
+                    item.path = ""
+                    remove_item_ids.add(item.item_id)
+            if remove_item_ids:
+                self.items = [item for item in self.items if item.item_id not in remove_item_ids]
+            if cut_source_proofs:
+                self.bank_items = [item for item in self.bank_items if item.item_id not in cut_source_proofs]
+            self.image_clipboard = None
+
+        id_to_index = {item.item_id: index for index, item in enumerate(self.items)}
+        self.selected_index = id_to_index.get(target_id, 0 if self.items else None)
+        if pasted_receipt_ids and self.selected_index is not None and 0 <= self.selected_index < len(self.items):
+            images = ensure_receipt_images(self.items[self.selected_index])
+            self.selected_attachment_kind = "receipt"
+            self.selected_attachment_index = next(
+                (index for index, image in enumerate(images) if str(image.get("id") or "") == pasted_receipt_ids[0]),
+                max(0, len(images) - 1),
+            )
+        elif pasted_proof_ids and self.selected_index is not None:
+            proofs = self.payment_proofs_for_receipt(self.items[self.selected_index])
+            self.selected_attachment_kind = "proof"
+            self.selected_attachment_index = next(
+                (index for index, proof in enumerate(proofs) if proof.item_id == pasted_proof_ids[0]),
+                max(0, len(proofs) - 1),
+            )
+
+        self.refresh_tree()
+        self.refresh_bank_tree()
+        if self.selected_index is not None and 0 <= self.selected_index < len(self.items):
+            self.tree.selection_set(str(self.selected_index))
+            self.tree.focus(str(self.selected_index))
+        self.load_selected_into_fields()
+        self.update_preview()
+        if self.selected_index is not None and 0 <= self.selected_index < len(self.items):
+            self.remember_receipt_item(self.items[self.selected_index], "manual")
+        self.save_session()
+        self._details_ready_for_export = False
+        self.update_toolbar_recommendation()
+        self.status_text.set(self.tr("clipboard_pasted", count=len(entries)))
+        return "break"
+
     def sort_items_for_current_report(self) -> None:
         if not self.items:
             return
@@ -5962,6 +6618,7 @@ class ReimbursementHelperApp:
         item = self.selected_item()
         if item is None:
             return
+        before = receipt_item_signature(item)
         for key, var in self.field_vars.items():
             value = var.get()
             if key == "category":
@@ -5975,6 +6632,8 @@ class ReimbursementHelperApp:
             setattr(item, key, value)
         self.update_item_amount_fields(item, self._last_amount_source)
         self.clear_attention_status_if_ready(item)
+        if receipt_item_signature(item) != before:
+            self.remember_receipt_item(item, "manual")
 
     def load_selected_into_fields(self) -> None:
         item = self.selected_item()
@@ -7249,6 +7908,7 @@ class ReimbursementHelperApp:
                         )
                         return cancelled_result
                     self.apply_ai_data_to_item(item, data)
+                    self.remember_receipt_item(item, "ai")
                     self.queue_excel_image_prewarm_for_item(item, form_version)
                     self.move_item_to_processed(item)
                     done = next_done()
@@ -7512,8 +8172,9 @@ class ReimbursementHelperApp:
             ensure_runtime_folders()
             destination = unique_path(PROCESSED_DIR, source.name)
             shutil.move(str(source), str(destination))
+            self.apply_source_rename_to_item(item, source, destination)
             item.path = str(destination)
-            item.filename = destination.name
+            item.filename = destination.name if len(ensure_receipt_images(item)) <= 1 else item.filename
             LOGGER.info("Moved processed receipt to %s", destination)
             return True
         except Exception:

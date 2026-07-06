@@ -29,6 +29,7 @@ export interface ImageAttachment {
   dataUrl: string;
   width: number;
   height: number;
+  fingerprint?: string;
   cropPoints?: CropPoint[];
   rotationDegrees: number;
   sourcePage?: number;

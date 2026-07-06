@@ -27,6 +27,7 @@ import {
 import { exportKoreaWorkbook, exportUsaWorkbook } from "./excelExport";
 import { defaultCropPoints, fileToAttachments, orientedImageDataUrl, orientedImageSize, rotateCropPoints } from "./imageUtils";
 import { CATEGORY_LABELS, LANGUAGE_OPTIONS, normalizeLanguage, text, type AppLanguage } from "./i18n";
+import { applyStoredReceiptMemory, rememberReceiptItem } from "./receiptMemory";
 import { loadTrackerConfig, loadTrackerStats, trackReportGenerated, type ReportTrackerConfig, type ReportTrackerStats } from "./tracker";
 import type { Category, CropPoint, Currency, DocumentType, ExchangeRates, ImageAttachment, PaymentProof, ReceiptExtraction, ReceiptItem, SelectedTile } from "./types";
 import {
@@ -53,6 +54,62 @@ const DEFAULT_AI_REQUEST_CONCURRENCY = 4;
 const AI_REQUEST_CONCURRENCY_WARNING_THRESHOLD = 12;
 type SuggestedAction = "selectFiles" | "selectExchangeRate" | "generateEmpty" | "generateAll" | "generateExcel";
 type FormVersion = "USA" | "Korea";
+type ClipboardMode = "copy" | "cut";
+
+interface ScreenshotClipboardEntry {
+  kind: "receipt" | "proof";
+  attachment: ImageAttachment;
+  sourceReceipt?: ReceiptItem;
+  sourceReceiptId?: string;
+  sourceImageId?: string;
+  sourceProof?: PaymentProof;
+  sourceProofId?: string;
+}
+
+interface ScreenshotClipboard {
+  mode: ClipboardMode;
+  entries: ScreenshotClipboardEntry[];
+}
+
+const BLANK_MERGE_FIELDS: Array<keyof Pick<ReceiptItem, "date" | "place" | "amount" | "krwAmount" | "rmbAmount" | "purpose" | "details" | "projectNumber" | "paymentMethod" | "receiptLabel">> = [
+  "date",
+  "place",
+  "amount",
+  "krwAmount",
+  "rmbAmount",
+  "purpose",
+  "details",
+  "projectNumber",
+  "paymentMethod",
+  "receiptLabel"
+];
+
+function cloneImageAttachment(attachment: ImageAttachment): ImageAttachment {
+  return {
+    ...attachment,
+    id: uid("image"),
+    cropPoints: attachment.cropPoints?.map((point) => ({ ...point }))
+  };
+}
+
+function mergeBlankReceiptFields(target: ReceiptItem, source?: ReceiptItem): ReceiptItem {
+  if (!source) return target;
+  const next = { ...target };
+  for (const key of BLANK_MERGE_FIELDS) {
+    const current = String(next[key] ?? "").trim();
+    const incoming = String(source[key] ?? "").trim();
+    if (!current && incoming) {
+      next[key] = source[key] as never;
+    }
+  }
+  return next;
+}
+
+function isTextEditingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName.toLowerCase();
+  return tag === "input" || tag === "textarea" || tag === "select" || target.isContentEditable;
+}
 
 function clampAiConcurrency(value: unknown): number {
   const parsed = Number(value);
@@ -118,7 +175,6 @@ function readStoredLanguage(): AppLanguage {
 export default function App() {
   const initialUrlSettings = readUrlSettings();
   const initialLanguage = initialUrlSettings.language ?? readStoredLanguage();
-  const excelDebugMode = useMemo(() => new URLSearchParams(window.location.search).get("debug") === "1", []);
   const [language, setLanguage] = useState<AppLanguage>(initialLanguage);
   const [formVersion, setFormVersion] = useState<FormVersion>(() => initialUrlSettings.formVersion ?? readStoredFormVersion());
   const [items, setItems] = useState<ReceiptItem[]>([]);
@@ -126,6 +182,7 @@ export default function App() {
   const [exchangeRateImages, setExchangeRateImages] = useState<ImageAttachment[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectedTile, setSelectedTile] = useState<SelectedTile | null>(null);
+  const [imageClipboard, setImageClipboard] = useState<ScreenshotClipboard | null>(null);
   const [apiKey, setApiKey] = useState(() => sessionStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(STORAGE_KEY) ?? "");
   const [rememberKey, setRememberKey] = useState(() => Boolean(localStorage.getItem(STORAGE_KEY)));
   const [showApiKey, setShowApiKey] = useState(false);
@@ -232,7 +289,7 @@ export default function App() {
     setItems((current) =>
       current.map((item) => {
         if (!selectedIds.includes(item.id) && item.id !== id) return item;
-        const updated = updateAmounts({ ...item, ...patch }, rates, amountSource);
+        const updated = rememberReceiptItem(updateAmounts({ ...item, ...patch }, rates, amountSource), formVersion, "manual");
         if (!receiptAttentionReason(updated, formVersion) && ["Empty", "Failed", "Missing date/amount"].includes(updated.status)) {
           return { ...updated, status: updated.documentType === "payment_proof" ? "Payment proof" : "Manual filled" };
         }
@@ -249,11 +306,11 @@ export default function App() {
       const groups = await Promise.all(Array.from(files).map(fileToAttachments));
       const next = groups.map((attachments) => {
         const receipt = blankReceipt(formVersion, attachments[0]);
-        return {
+        return applyStoredReceiptMemory({
           ...receipt,
           filename: attachments.length > 1 ? `${attachments[0].sourceName} (${attachments.length} pages)` : attachments[0].filename,
           images: attachments
-        };
+        }, formVersion);
       });
       setItems((current) => [...current, ...next]);
       if (!selectedIds.length && next.length) {
@@ -388,7 +445,7 @@ export default function App() {
           successes += 1;
           setItems((current) =>
             current.map((candidate) =>
-              candidate.id === item.id ? updateAmounts(applyExtraction(candidate, extraction, formVersion), rates, "amount") : candidate
+              candidate.id === item.id ? rememberReceiptItem(updateAmounts(applyExtraction(candidate, extraction, formVersion), rates, "amount"), formVersion, "ai") : candidate
             )
           );
         } catch (error) {
@@ -401,7 +458,7 @@ export default function App() {
       });
       workingItems = items.map((candidate) => {
         const extraction = receiptResults.get(candidate.id);
-        if (extraction) return updateAmounts(applyExtraction(candidate, extraction, formVersion), rates, "amount");
+        if (extraction) return rememberReceiptItem(updateAmounts(applyExtraction(candidate, extraction, formVersion), rates, "amount"), formVersion, "ai");
         if (failedReceiptIds.has(candidate.id)) return { ...candidate, status: "Failed" };
         return candidate;
       });
@@ -573,6 +630,153 @@ export default function App() {
     setSelectedTile({ kind: "proof", receiptId, proofId: newProof.id });
   }
 
+  function clipboardEntryFromTile(): ScreenshotClipboardEntry[] {
+    if (!selectedTile) return [];
+    if (selectedTile.kind === "proof" && selectedTile.proofId) {
+      const proof = proofs.find((candidate) => candidate.id === selectedTile.proofId);
+      return proof ? [{ kind: "proof", attachment: proof.image, sourceProof: proof, sourceProofId: proof.id }] : [];
+    }
+    if (!selectedTile.imageId) return [];
+    const receipt = items.find((candidate) => candidate.id === selectedTile.receiptId);
+    const image = receipt?.images.find((candidate) => candidate.id === selectedTile.imageId);
+    if (!receipt || !image) return [];
+    return [
+      {
+        kind: formVersion === "USA" && receipt.documentType === "payment_proof" ? "proof" : "receipt",
+        attachment: image,
+        sourceReceipt: receipt,
+        sourceReceiptId: receipt.id,
+        sourceImageId: image.id
+      }
+    ];
+  }
+
+  function clipboardEntriesFromRows(): ScreenshotClipboardEntry[] {
+    const selected = new Set(selectedIds);
+    return items
+      .filter((item) => selected.has(item.id))
+      .flatMap((item) =>
+        item.images.map((image) => ({
+          kind: formVersion === "USA" && item.documentType === "payment_proof" ? "proof" : "receipt",
+          attachment: image,
+          sourceReceipt: item,
+          sourceReceiptId: item.id,
+          sourceImageId: image.id
+        }))
+      );
+  }
+
+  function copyScreenshots(mode: ClipboardMode, source: "rows" | "preview") {
+    const entries = source === "rows" ? clipboardEntriesFromRows() : clipboardEntryFromTile();
+    if (!entries.length) {
+      setStatus(t("clipboardNoSource"));
+      return;
+    }
+    setImageClipboard({ mode, entries });
+    setStatus(t(mode === "copy" ? "clipboardCopied" : "clipboardCut", { count: entries.length }));
+  }
+
+  function pasteScreenshots() {
+    if (!imageClipboard?.entries.length) {
+      setStatus(t("clipboardEmpty"));
+      return;
+    }
+    if (!selectedItem) {
+      setStatus(t("clipboardNoTarget"));
+      return;
+    }
+    if (formVersion === "USA" && selectedItem.documentType === "payment_proof") {
+      setStatus(t("clipboardNeedsReceiptTarget"));
+      return;
+    }
+
+    const shouldPasteAsProof = (entry: ScreenshotClipboardEntry) => formVersion === "USA" && entry.kind === "proof";
+    const receiptEntries = imageClipboard.entries.filter((entry) => !shouldPasteAsProof(entry));
+    const proofEntries = imageClipboard.entries.filter(shouldPasteAsProof);
+    const pastedReceiptImages = receiptEntries.map((entry) => cloneImageAttachment(entry.attachment));
+    const newProofs = proofEntries.map<PaymentProof>((entry) => {
+      const proof = entry.sourceProof;
+      const source = entry.sourceReceipt;
+      return {
+        id: uid("proof"),
+        filename: entry.attachment.filename,
+        status: "Matched manually",
+        date: proof?.date || source?.date || selectedItem.date,
+        amount: proof?.amount || source?.amount || selectedItem.amount,
+        place: proof?.place || source?.place || selectedItem.place,
+        matchedReceiptId: selectedItem.id,
+        image: cloneImageAttachment(entry.attachment)
+      };
+    });
+
+    const cutReceiptImages = new Map<string, Set<string>>();
+    const cutProofIds = new Set<string>();
+    if (imageClipboard.mode === "cut") {
+      for (const entry of imageClipboard.entries) {
+        if (entry.sourceReceiptId && entry.sourceImageId) {
+          const imageIds = cutReceiptImages.get(entry.sourceReceiptId) ?? new Set<string>();
+          imageIds.add(entry.sourceImageId);
+          cutReceiptImages.set(entry.sourceReceiptId, imageIds);
+        }
+        if (entry.sourceProofId) {
+          cutProofIds.add(entry.sourceProofId);
+        }
+      }
+    }
+
+    const firstReceiptImageId = pastedReceiptImages[0]?.id;
+    const firstProofId = newProofs[0]?.id;
+    const targetId = selectedItem.id;
+
+    setItems((current) =>
+      current.flatMap((item) => {
+        let updated = item;
+        if (item.id === targetId && pastedReceiptImages.length) {
+          updated = {
+            ...updated,
+            images: [...updated.images, ...pastedReceiptImages],
+            status: updated.status === "Empty" ? "Manual filled" : updated.status
+          };
+          for (const entry of receiptEntries) {
+            updated = mergeBlankReceiptFields(updated, entry.sourceReceipt);
+          }
+        }
+        const sourceImageIds = cutReceiptImages.get(updated.id);
+        if (sourceImageIds?.size) {
+          updated = { ...updated, images: updated.images.filter((image) => !sourceImageIds.has(image.id)) };
+        }
+        return updated.images.length ? [updated] : [];
+      })
+    );
+    setProofs((current) => [...current.filter((proof) => !cutProofIds.has(proof.id)), ...newProofs]);
+    setSelectedIds([targetId]);
+    selectionAnchorIdRef.current = targetId;
+    setSelectedTile(
+      firstReceiptImageId
+        ? { kind: "receipt", receiptId: targetId, imageId: firstReceiptImageId }
+        : firstProofId
+          ? { kind: "proof", receiptId: targetId, proofId: firstProofId }
+          : selectedTile
+    );
+    if (imageClipboard.mode === "cut") {
+      setImageClipboard(null);
+    }
+    setReadyForExport(false);
+    setStatus(t("clipboardPasted", { count: imageClipboard.entries.length }));
+  }
+
+  function handleScreenshotClipboardKeyDown(event: React.KeyboardEvent, source: "rows" | "preview") {
+    if (!event.ctrlKey || event.altKey || event.metaKey || isTextEditingTarget(event.target)) return;
+    const key = event.key.toLowerCase();
+    if (key === "c" || key === "x") {
+      event.preventDefault();
+      copyScreenshots(key === "c" ? "copy" : "cut", source);
+    } else if (key === "v") {
+      event.preventDefault();
+      pasteScreenshots();
+    }
+  }
+
   async function generateExcel() {
     if (!items.length) {
       setStatus(t("uploadReceiptsFirst"));
@@ -648,6 +852,10 @@ export default function App() {
   }
 
   function handleRowKeyDown(event: React.KeyboardEvent) {
+    if (["c", "v", "x"].includes(event.key.toLowerCase())) {
+      handleScreenshotClipboardKeyDown(event, "rows");
+      return;
+    }
     if (event.key === "a" && event.ctrlKey) {
       event.preventDefault();
       setSelectedIds(items.map((item) => item.id));
@@ -842,7 +1050,7 @@ export default function App() {
           )}
         </section>
 
-        <section className="panel preview-panel">
+        <section className="panel preview-panel" tabIndex={0} onKeyDown={(event) => handleScreenshotClipboardKeyDown(event, "preview")}>
           <div className="preview-header">
             <h2>{t("receiptPreview")}</h2>
             <div className="icon-row">
@@ -920,12 +1128,10 @@ export default function App() {
           <a href={KOREA_TEMPLATE_URL} download>
             Korea
           </a>
-          {excelDebugMode && (
-            <button type="button" onClick={generateExcelDebugBundle} disabled={busy || !items.length} title={t("debugExcel")}>
-              <FileSpreadsheet size={14} />
-              {t("debugExcel")}
-            </button>
-          )}
+          <button type="button" onClick={generateExcelDebugBundle} disabled={busy || !items.length} title={t("debugExcel")}>
+            <FileSpreadsheet size={14} />
+            {t("debugExcel")}
+          </button>
         </div>
       </footer>
     </div>
@@ -1163,6 +1369,7 @@ function CropEditor({
     <div className="crop-editor">
       <div
         className="crop-stage"
+        tabIndex={0}
         draggable={Boolean(dragData)}
         onDragStart={(event) => {
           if (!dragData) return;

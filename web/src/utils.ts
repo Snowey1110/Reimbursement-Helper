@@ -335,6 +335,7 @@ export function receiptAttentionReason(item: ReceiptItem, formVersion: "USA" | "
 }
 
 export function receiptNeedsAi(item: ReceiptItem, formVersion: "USA" | "Korea"): boolean {
+  if (item.status === "Remembered" || item.status === "Manual remembered") return false;
   if (item.status === "Empty" || item.status === "Failed") return true;
   if (!item.date.trim() || !item.amount.trim()) return true;
   if (formVersion === "USA") {

@@ -19,6 +19,7 @@ tracker-worker/wrangler.toml
 .env.local
 config/user_settings.json
 config/session_state.json
+config/receipt_memory.json
 config/api_key.txt
 outputs/
 work/

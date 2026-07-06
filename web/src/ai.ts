@@ -93,7 +93,21 @@ export async function extractReceiptWithOpenAI(apiKey: string, model: string, fo
     "A merchant receipt paid by credit card is still document_type receipt, not payment_proof.",
     "Parking, parking lots and garages, toll, bridge, fuel, gas, rideshare, taxi, airfare, airline, car rental, and baggage fees are transportation, never meals.",
     "For Korea uploads, document_type should normally be receipt unless the image is clearly not reimbursement support.",
-    "Keep applicant/personal identity fields blank."
+    "Keep applicant/personal identity fields blank.",
+    "Filenames may contain an app memory marker beginning with __RH1_. Treat it as prior reimbursement memory, especially when it says r-manual.",
+    `Current editable row values: ${JSON.stringify({
+      filename: item.filename,
+      date: item.date,
+      place: item.place,
+      amount: item.amount,
+      currency: item.currency,
+      category: item.category,
+      purpose: item.purpose,
+      details: item.details,
+      paymentMethod: item.paymentMethod,
+      receiptLabel: item.receiptLabel,
+      documentType: item.documentType
+    })}`
   ].join("\n");
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",

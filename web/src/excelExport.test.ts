@@ -83,11 +83,15 @@ describe("Excel row mapping", () => {
     const sanitized = await sanitizeUsaWorkbookBuffer(raw, arrayBufferFromBuffer(template));
     const zip = await JSZip.loadAsync(sanitized);
     const sheet2 = await zip.file("xl/worksheets/sheet2.xml")!.async("string");
+    const sheet2Rels = await zip.file("xl/worksheets/_rels/sheet2.xml.rels")!.async("string");
     const drawingRels = await zip.file("xl/drawings/_rels/drawing1.xml.rels")!.async("string");
+    const contentTypes = await zip.file("[Content_Types].xml")!.async("string");
 
     expect(sheet2.indexOf("<pageSetup")).toBeGreaterThan(-1);
     expect(sheet2.indexOf("<drawing")).toBeGreaterThan(sheet2.indexOf("<pageSetup"));
-    expect(drawingRels).toContain('Target="/xl/media/image1.png"');
+    expect(sheet2Rels).toContain('Target="../drawings/drawing1.xml"');
+    expect(drawingRels).toContain('Target="../media/image1.png"');
+    expect(contentTypes.match(/Extension="png"/g)).toHaveLength(1);
     expect(zip.file("xl/sharedStrings.xml")).toBeNull();
     expect(zip.file("xl/media/image1.png")).toBeDefined();
   });

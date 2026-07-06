@@ -9,6 +9,7 @@ export function image(overrides: Partial<ImageAttachment> = {}): ImageAttachment
     dataUrl: overrides.dataUrl ?? `data:image/png;base64,${id}`,
     width: overrides.width ?? 100,
     height: overrides.height ?? 200,
+    fingerprint: overrides.fingerprint,
     rotationDegrees: overrides.rotationDegrees ?? 0,
     cropPoints: overrides.cropPoints,
     sourcePage: overrides.sourcePage,

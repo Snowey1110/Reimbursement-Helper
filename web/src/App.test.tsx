@@ -184,6 +184,7 @@ describe("Reimbursement Helper web app", () => {
 
     expect(screen.getByRole("link", { name: "USA" })).toHaveAttribute("href", "./templates/usa_expense_report_template.xlsx");
     expect(screen.getByRole("link", { name: "Korea" })).toHaveAttribute("href", "./templates/korea_reimbursement_template.xlsx");
+    expect(screen.getByRole("button", { name: /Debug Excel from template/i })).toBeInTheDocument();
   });
 
   it("shows uploaded receipts in one large editable crop page", async () => {
@@ -239,5 +240,78 @@ describe("Reimbursement Helper web app", () => {
       expect(topRight).toHaveStyle({ left: "100%", top: "0%" });
     });
     rectSpy.mockRestore();
+  });
+
+  it("copies a selected receipt row screenshot and pastes it into another receipt", async () => {
+    render(<App />);
+
+    const receiptInput = document.querySelector('input[type="file"][accept="image/*,.pdf"]') as HTMLInputElement;
+    fireEvent.change(receiptInput, {
+      target: {
+        files: [new File(["one"], "1.png", { type: "image/png" }), new File(["two"], "2.png", { type: "image/png" })]
+      }
+    });
+
+    await screen.findAllByText("2.png");
+    const rows = Array.from(document.querySelectorAll(".receipt-row:not(.receipt-heading)")) as HTMLButtonElement[];
+    const receiptTable = document.querySelector(".receipt-table") as HTMLElement;
+
+    fireEvent.click(rows[1]);
+    fireEvent.keyDown(receiptTable, { key: "c", code: "KeyC", ctrlKey: true });
+    fireEvent.click(rows[0]);
+    fireEvent.keyDown(receiptTable, { key: "v", code: "KeyV", ctrlKey: true });
+
+    await waitFor(() => expect(screen.getByText("Merged 1 screenshot(s).")).toBeInTheDocument());
+    expect(document.querySelectorAll(".image-stack:not(.proof-stack) .thumbnail-button")).toHaveLength(2);
+  });
+
+  it("cuts a selected receipt row screenshot only after pasting it into another receipt", async () => {
+    render(<App />);
+
+    const receiptInput = document.querySelector('input[type="file"][accept="image/*,.pdf"]') as HTMLInputElement;
+    fireEvent.change(receiptInput, {
+      target: {
+        files: [new File(["one"], "1.png", { type: "image/png" }), new File(["two"], "2.png", { type: "image/png" })]
+      }
+    });
+
+    await screen.findAllByText("2.png");
+    let rows = Array.from(document.querySelectorAll(".receipt-row:not(.receipt-heading)")) as HTMLButtonElement[];
+    const receiptTable = document.querySelector(".receipt-table") as HTMLElement;
+
+    fireEvent.click(rows[1]);
+    fireEvent.keyDown(receiptTable, { key: "x", code: "KeyX", ctrlKey: true });
+    fireEvent.click(rows[0]);
+    fireEvent.keyDown(receiptTable, { key: "v", code: "KeyV", ctrlKey: true });
+
+    await waitFor(() => expect(screen.getByText("Merged 1 screenshot(s).")).toBeInTheDocument());
+    rows = Array.from(document.querySelectorAll(".receipt-row:not(.receipt-heading)")) as HTMLButtonElement[];
+    expect(rows).toHaveLength(1);
+    expect(document.querySelectorAll(".image-stack:not(.proof-stack) .thumbnail-button")).toHaveLength(2);
+  });
+
+  it("pastes USA payment proof rows as matched proof items instead of receipt screenshots", async () => {
+    render(<App />);
+
+    const receiptInput = document.querySelector('input[type="file"][accept="image/*,.pdf"]') as HTMLInputElement;
+    fireEvent.change(receiptInput, {
+      target: {
+        files: [new File(["receipt"], "receipt.png", { type: "image/png" }), new File(["proof"], "proof.png", { type: "image/png" })]
+      }
+    });
+
+    await screen.findAllByText("proof.png");
+    const rows = Array.from(document.querySelectorAll(".receipt-row:not(.receipt-heading)")) as HTMLButtonElement[];
+    const receiptTable = document.querySelector(".receipt-table") as HTMLElement;
+
+    fireEvent.click(rows[1]);
+    fireEvent.change(screen.getByLabelText("Document type"), { target: { value: "payment_proof" } });
+    fireEvent.keyDown(receiptTable, { key: "c", code: "KeyC", ctrlKey: true });
+    fireEvent.click(rows[0]);
+    fireEvent.keyDown(receiptTable, { key: "v", code: "KeyV", ctrlKey: true });
+
+    await waitFor(() => expect(screen.getByText("Merged 1 screenshot(s).")).toBeInTheDocument());
+    expect(document.querySelectorAll(".image-stack:not(.proof-stack) .thumbnail-button")).toHaveLength(1);
+    expect(document.querySelectorAll(".proof-stack .thumbnail-button")).toHaveLength(1);
   });
 });

@@ -47,7 +47,14 @@ export interface PreparedImageData {
   displayHeight?: number;
 }
 
-type ImageAttachmentMetadata = Partial<Pick<ImageAttachment, "sourcePage" | "pageCount" | "isPdfPage">>;
+type ImageAttachmentMetadata = Partial<Pick<ImageAttachment, "fingerprint" | "sourcePage" | "pageCount" | "isPdfPage">>;
+
+async function sha256Hex(buffer: ArrayBuffer): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", buffer);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
 
 export function stackedPageLayout(
   pages: Array<{ width: number; height: number }>,
@@ -99,8 +106,10 @@ export async function fileToAttachment(file: File): Promise<ImageAttachment> {
   if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
     return renderPdfToMergedAttachment(file);
   }
+  const buffer = await file.arrayBuffer();
+  const fingerprint = await sha256Hex(buffer);
   const dataUrl = await fileToDataUrl(file);
-  return imageAttachmentFromDataUrl(file.name, file.name, dataUrl);
+  return { ...(await imageAttachmentFromDataUrl(file.name, file.name, dataUrl)), fingerprint };
 }
 
 export async function fileToAttachments(file: File): Promise<ImageAttachment[]> {
@@ -112,6 +121,7 @@ export async function fileToAttachments(file: File): Promise<ImageAttachment[]> 
 
 export async function renderPdfToPageAttachments(file: File): Promise<ImageAttachment[]> {
   const buffer = await file.arrayBuffer();
+  const fingerprint = await sha256Hex(buffer);
   const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
   const attachments: ImageAttachment[] = [];
   for (let pageIndex = 1; pageIndex <= pdf.numPages; pageIndex += 1) {
@@ -127,6 +137,7 @@ export async function renderPdfToPageAttachments(file: File): Promise<ImageAttac
     await page.render({ canvasContext: context, viewport }).promise;
     attachments.push(
       await imageAttachmentFromDataUrl(`${file.name} page ${pageIndex}`, file.name, canvasToDataUrl(canvas), {
+        fingerprint,
         sourcePage: pageIndex,
         pageCount: pdf.numPages,
         isPdfPage: true
@@ -141,6 +152,7 @@ export async function renderPdfToPageAttachments(file: File): Promise<ImageAttac
 
 export async function renderPdfToMergedAttachment(file: File): Promise<ImageAttachment> {
   const buffer = await file.arrayBuffer();
+  const fingerprint = await sha256Hex(buffer);
   const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
   const pageCanvases: HTMLCanvasElement[] = [];
   for (let pageIndex = 1; pageIndex <= pdf.numPages; pageIndex += 1) {
@@ -169,7 +181,7 @@ export async function renderPdfToMergedAttachment(file: File): Promise<ImageAtta
     const placement = layout.placements[index];
     context.drawImage(pageCanvases[index], placement.x, placement.y);
   }
-  return imageAttachmentFromDataUrl(`${file.name} (all pages)`, file.name, canvasToDataUrl(merged));
+  return { ...(await imageAttachmentFromDataUrl(`${file.name} (all pages)`, file.name, canvasToDataUrl(merged))), fingerprint };
 }
 
 export function rotateCropPoints(points: CropPoint[] | undefined, width: number, height: number, delta: number): CropPoint[] | undefined {

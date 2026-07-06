@@ -383,7 +383,7 @@ async function buildCleanDrawingPackage(generatedZip: JSZip): Promise<CleanDrawi
     })
     .join("");
   const relsXml = `<Relationships xmlns="${PACKAGE_REL_NS}">${Array.from(usedMedia.entries())
-    .map(([relId, media]) => `<Relationship Type="${OFFICE_REL_NS}/image" Target="/${media}" Id="${relId}" />`)
+    .map(([relId, media]) => `<Relationship Type="${OFFICE_REL_NS}/image" Target="../media/${media.split("/").pop()}" Id="${relId}" />`)
     .join("")}</Relationships>`;
   return {
     drawingXml: `<wsDr xmlns:a="${DRAWING_MAIN_NS}" xmlns:r="${OFFICE_REL_NS}" xmlns="${DRAWING_NS}">${anchorXml}</wsDr>`,
@@ -395,14 +395,24 @@ async function buildCleanDrawingPackage(generatedZip: JSZip): Promise<CleanDrawi
 function patchContentTypes(xml: string, mediaNames: string[], hasDrawing: boolean): string {
   const doc = parseXml(xml);
   const root = doc.documentElement;
-  const defaults = Array.from(doc.getElementsByTagNameNS(CONTENT_TYPES_NS, "Default"));
   const firstOverride = Array.from(doc.getElementsByTagNameNS(CONTENT_TYPES_NS, "Override"))[0] ?? null;
+  const seenDefaults = new Set<string>();
+  for (const node of Array.from(doc.getElementsByTagNameNS(CONTENT_TYPES_NS, "Default"))) {
+    const extension = node.getAttribute("Extension")?.toLowerCase();
+    if (!extension) continue;
+    if (seenDefaults.has(extension)) {
+      node.parentNode?.removeChild(node);
+      continue;
+    }
+    seenDefaults.add(extension);
+  }
   const ensureDefault = (extension: string, contentType: string) => {
-    if (defaults.some((item) => item.getAttribute("Extension")?.toLowerCase() === extension)) return;
+    if (seenDefaults.has(extension)) return;
     const node = doc.createElementNS(CONTENT_TYPES_NS, "Default");
     node.setAttribute("Extension", extension);
     node.setAttribute("ContentType", contentType);
     root.insertBefore(node, firstOverride);
+    seenDefaults.add(extension);
   };
   for (const mediaName of mediaNames) {
     const extension = mediaName.split(".").pop()?.toLowerCase();
@@ -450,7 +460,7 @@ export async function sanitizeUsaWorkbookBuffer(buffer: ExcelJS.Buffer, template
   );
 
   if (drawing) {
-    outputZip.file("xl/worksheets/_rels/sheet2.xml.rels", `<Relationships xmlns="${PACKAGE_REL_NS}"><Relationship Type="${OFFICE_REL_NS}/drawing" Target="/xl/drawings/drawing1.xml" Id="rId1" /></Relationships>`);
+    outputZip.file("xl/worksheets/_rels/sheet2.xml.rels", `<Relationships xmlns="${PACKAGE_REL_NS}"><Relationship Type="${OFFICE_REL_NS}/drawing" Target="../drawings/drawing1.xml" Id="rId1" /></Relationships>`);
     outputZip.file("xl/drawings/drawing1.xml", drawing.drawingXml);
     outputZip.file("xl/drawings/_rels/drawing1.xml.rels", drawing.relsXml);
     for (const mediaName of drawing.mediaNames) {
