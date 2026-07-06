@@ -57,6 +57,12 @@ select {
   min-width: 0;
 }
 
+select:focus,
+select option {
+  background: #f1f5f9;
+  color: #17202a;
+}
+
 .app-shell {
   min-height: 100vh;
   padding: 14px;
