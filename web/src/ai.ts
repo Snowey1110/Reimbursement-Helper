@@ -30,7 +30,8 @@ const RECEIPT_SCHEMA = {
     receipt_label: { type: "string" },
     document_type: { type: "string" },
     receipt_image_indexes: { type: "string" },
-    payment_proof_image_indexes: { type: "string" }
+    payment_proof_image_indexes: { type: "string" },
+    image_roles: { type: "string" }
   },
   required: [
     "date",
@@ -48,8 +49,18 @@ const RECEIPT_SCHEMA = {
     "receipt_label",
     "document_type",
     "receipt_image_indexes",
-    "payment_proof_image_indexes"
+    "payment_proof_image_indexes",
+    "image_roles"
   ]
+};
+
+const IMAGE_ROLE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    image_roles: { type: "string" }
+  },
+  required: ["image_roles"]
 };
 
 const EXCHANGE_RATE_SCHEMA = {
@@ -115,6 +126,42 @@ function parseImageIndexes(value: unknown, max: number): Set<number> {
   return result;
 }
 
+type ImageSupportRole = NonNullable<ImageAttachment["supportRole"]>;
+
+function normalizeImageRole(value: unknown): ImageSupportRole | undefined {
+  const raw = String(value ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (!raw) return undefined;
+  if (raw.includes("payment_proof") || raw.includes("bank_proof") || raw.includes("card_proof") || raw === "proof") return "payment_proof";
+  if (raw.includes("receipt") || raw.includes("invoice") || raw.includes("ticket")) return "receipt";
+  if (raw.includes("unknown") || raw.includes("ignore") || raw.includes("unclear")) return "unknown";
+  return undefined;
+}
+
+function parseImageRoleMap(value: unknown, max: number): Map<number, ImageSupportRole> {
+  const result = new Map<number, ImageSupportRole>();
+  const text = String(value ?? "");
+  const indexedRolePattern = /(?:image|page|img)?\s*(\d+)\s*[:=\-)]+\s*([a-zA-Z_ -]+)/g;
+  for (const match of text.matchAll(indexedRolePattern)) {
+    const index = Number(match[1]) - 1;
+    const role = normalizeImageRole(match[2]);
+    if (Number.isInteger(index) && index >= 0 && index < max && role) {
+      result.set(index, role);
+    }
+  }
+  const roleListPattern = /\b(payment[_\s-]*proof|bank[_\s-]*proof|card[_\s-]*proof|proof|receipt|invoice|ticket|unknown|ignore)\b\s*[:=]\s*([0-9,\s]+)/gi;
+  for (const match of text.matchAll(roleListPattern)) {
+    const role = normalizeImageRole(match[1]);
+    if (!role) continue;
+    for (const numberMatch of match[2].matchAll(/\d+/g)) {
+      const index = Number(numberMatch[0]) - 1;
+      if (Number.isInteger(index) && index >= 0 && index < max) {
+        result.set(index, role);
+      }
+    }
+  }
+  return result;
+}
+
 function parseRate(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   const text = String(value ?? "").replace(/,/g, "");
@@ -122,6 +169,64 @@ function parseRate(value: unknown): number | undefined {
   if (!match) return undefined;
   const parsed = Number(match[0]);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+async function readJsonText(response: Response): Promise<string> {
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`OpenAI request failed (${response.status}): ${text.slice(0, 300)}`);
+  }
+  const data = await response.json();
+  const text = data.output_text ?? data.output?.flatMap((part: any) => part.content ?? []).find((part: any) => part.type === "output_text")?.text;
+  if (!text) {
+    throw new Error("OpenAI response did not include JSON text.");
+  }
+  return text;
+}
+
+async function extractImageRolesWithOpenAI(apiKey: string, model: string, item: ReceiptItem): Promise<string> {
+  const prompt = [
+    "Classify each attached USA reimbursement image/page.",
+    "Return every image number exactly once in image_roles, like: 1:payment_proof, 2:receipt, 3:ignore.",
+    "Use only these roles: receipt, payment_proof, ignore.",
+    "payment_proof means a bank, credit-card, or card transaction screenshot/statement such as Chase/JPMorgan transaction details.",
+    "receipt means a merchant receipt, ticket, invoice, QR entry ticket, parking receipt, toll receipt, fuel receipt, hotel invoice, airline receipt, or any seller-provided purchase document.",
+    "A merchant receipt that says paid by credit card, Visa, Mastercard, card, or authorization is still receipt, not payment_proof.",
+    "If a PDF has a Chase/card transaction page and a merchant receipt page, mark the Chase/card page payment_proof and the merchant receipt page receipt.",
+    `Entry filename: ${item.filename}`
+  ].join("\n");
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model,
+      input: [
+        {
+          role: "user",
+          content: [
+            { type: "input_text", text: prompt },
+            ...item.images.flatMap((entry, index) => [
+              { type: "input_text", text: `Image ${index + 1}: ${entry.filename || entry.sourceName || item.filename}` },
+              { type: "input_image", image_url: entry.dataUrl }
+            ])
+          ]
+        }
+      ],
+      text: {
+        format: {
+          type: "json_schema",
+          name: "image_role_extraction",
+          schema: IMAGE_ROLE_SCHEMA,
+          strict: true
+        }
+      }
+    })
+  });
+  const text = await readJsonText(response);
+  return String((JSON.parse(text) as { image_roles?: string }).image_roles ?? "");
 }
 
 export async function extractReceiptWithOpenAI(apiKey: string, model: string, formVersion: FormVersion, item: ReceiptItem): Promise<ReceiptExtraction> {
@@ -137,6 +242,7 @@ export async function extractReceiptWithOpenAI(apiKey: string, model: string, fo
     "If an entry includes both a merchant receipt/ticket and a bank/card transaction screenshot, classify it as receipt and extract the merchant receipt/ticket details.",
     "Return receipt_image_indexes as comma-separated 1-based image numbers for merchant receipt/ticket pages.",
     "Return payment_proof_image_indexes as comma-separated 1-based image numbers for bank/card transaction proof pages.",
+    "Also return image_roles for every attached image/page exactly once using this format: 1:receipt, 2:payment_proof. Use receipt, payment_proof, or ignore.",
     "If all attached images are proof pages, document_type should be payment_proof and payment_proof_image_indexes should include all proof images.",
     "Parking, parking lots and garages, toll, bridge, fuel, gas, rideshare, taxi, airfare, airline, car rental, and baggage fees are transportation, never meals.",
     "For Korea uploads, document_type should normally be receipt unless the image is clearly not reimbursement support.",
@@ -186,16 +292,21 @@ export async function extractReceiptWithOpenAI(apiKey: string, model: string, fo
       }
     })
   });
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`OpenAI request failed (${response.status}): ${text.slice(0, 300)}`);
+  const text = await readJsonText(response);
+  const parsed = JSON.parse(text) as ReceiptExtraction;
+  if (formVersion === "USA" && item.images.length > 1) {
+    const paymentProofIndexes = parseImageIndexes(parsed.payment_proof_image_indexes, item.images.length);
+    const roleMap = parseImageRoleMap(parsed.image_roles, item.images.length);
+    const hasProofRole = paymentProofIndexes.size > 0 || [...roleMap.values()].includes("payment_proof");
+    if (!hasProofRole) {
+      try {
+        parsed.image_roles = await extractImageRolesWithOpenAI(apiKey, model, item);
+      } catch {
+        // Keep the main extraction if the focused role pass fails.
+      }
+    }
   }
-  const data = await response.json();
-  const text = data.output_text ?? data.output?.flatMap((part: any) => part.content ?? []).find((part: any) => part.type === "output_text")?.text;
-  if (!text) {
-    throw new Error("OpenAI response did not include JSON text.");
-  }
-  return JSON.parse(text) as ReceiptExtraction;
+  return parsed;
 }
 
 export interface KoreaExchangeRateExtraction {
@@ -247,15 +358,7 @@ export async function extractKoreaExchangeRatesWithOpenAI(
       }
     })
   });
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`OpenAI request failed (${response.status}): ${text.slice(0, 300)}`);
-  }
-  const data = await response.json();
-  const text = data.output_text ?? data.output?.flatMap((part: any) => part.content ?? []).find((part: any) => part.type === "output_text")?.text;
-  if (!text) {
-    throw new Error("OpenAI response did not include JSON text.");
-  }
+  const text = await readJsonText(response);
   const parsed = JSON.parse(text);
   const result: KoreaExchangeRateExtraction = {};
   const usdToKrw = parseRate(parsed.usd_to_krw_rate);
@@ -300,9 +403,22 @@ export function applyExtraction(item: ReceiptItem, extraction: ReceiptExtraction
   if (formVersion === "USA" && documentType === "payment_proof" && strongReceipt) {
     documentType = "receipt";
   }
+  const roleMap = parseImageRoleMap(extraction.image_roles, item.images.length);
   const receiptImageIndexes = parseImageIndexes(extraction.receipt_image_indexes, item.images.length);
   const paymentProofImageIndexes = parseImageIndexes(extraction.payment_proof_image_indexes, item.images.length);
-  if (!receiptImageIndexes.size && !paymentProofImageIndexes.size && formVersion === "USA") {
+  for (const [index, role] of roleMap) {
+    if (role === "payment_proof") {
+      paymentProofImageIndexes.add(index);
+      receiptImageIndexes.delete(index);
+    } else if (role === "receipt") {
+      receiptImageIndexes.add(index);
+      paymentProofImageIndexes.delete(index);
+    } else {
+      receiptImageIndexes.delete(index);
+      paymentProofImageIndexes.delete(index);
+    }
+  }
+  if (!receiptImageIndexes.size && !paymentProofImageIndexes.size && !roleMap.size && formVersion === "USA") {
     if (documentType === "payment_proof") {
       item.images.forEach((_, index) => paymentProofImageIndexes.add(index));
     } else if (documentType === "receipt") {
@@ -320,7 +436,11 @@ export function applyExtraction(item: ReceiptItem, extraction: ReceiptExtraction
       formVersion === "USA"
         ? item.images.map((image, index) => ({
             ...image,
-            supportRole: paymentProofImageIndexes.has(index) ? "payment_proof" : receiptImageIndexes.has(index) ? "receipt" : image.supportRole ?? "unknown"
+            supportRole: paymentProofImageIndexes.has(index)
+              ? "payment_proof"
+              : receiptImageIndexes.has(index)
+                ? "receipt"
+                : roleMap.get(index) ?? image.supportRole ?? "unknown"
           }))
         : item.images,
     date: String(extraction.date ?? item.date ?? ""),
@@ -338,13 +458,17 @@ export function applyExtraction(item: ReceiptItem, extraction: ReceiptExtraction
     documentType,
     status: "AI filled"
   };
-  if (
+  const paymentProofShouldBeReceipt =
     formVersion === "USA" &&
     next.documentType === "payment_proof" &&
     !strongProof &&
-    (looksLikeMerchantReceipt(classificationValues) || looksLikeUsaParkingReceipt(next) || looksLikeUsaTollReceipt(next) || looksLikeUsaFuelReceipt(next))
-  ) {
-    next = { ...next, documentType: "receipt" };
+    (looksLikeMerchantReceipt(classificationValues) || looksLikeUsaParkingReceipt(next) || looksLikeUsaTollReceipt(next) || looksLikeUsaFuelReceipt(next));
+  if (paymentProofShouldBeReceipt) {
+    next = {
+      ...next,
+      documentType: "receipt",
+      images: next.images.map((image) => (image.supportRole === "payment_proof" ? { ...image, supportRole: "receipt" } : image))
+    };
   }
   if (formVersion === "USA") {
     next = normalizeUsaTransportationFields(next);

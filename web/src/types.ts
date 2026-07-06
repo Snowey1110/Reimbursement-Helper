@@ -93,6 +93,7 @@ export interface ReceiptExtraction {
   document_type?: string;
   receipt_image_indexes?: string;
   payment_proof_image_indexes?: string;
+  image_roles?: string;
 }
 
 export interface SelectedTile {

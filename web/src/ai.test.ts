@@ -87,6 +87,61 @@ describe("OpenAI extraction", () => {
     expect(body.input[0].content.filter((part: any) => part.type === "input_image")).toHaveLength(2);
   });
 
+  it("runs a focused page-role pass when a mixed USA entry has no proof pages marked", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            output_text: JSON.stringify({
+              date: "2026-06-26",
+              place: "Delta Air Lines",
+              vendor: "Delta Air Lines",
+              amount: "458.40",
+              currency: "USD",
+              krw_amount: "",
+              rmb_amount: "",
+              purpose: "Flight",
+              details: "Airline receipt and card transaction.",
+              project_number: "",
+              category: "transportation",
+              payment_method: "Visa",
+              receipt_label: "Flight receipt",
+              document_type: "receipt",
+              receipt_image_indexes: "1,2",
+              payment_proof_image_indexes: "",
+              image_roles: "1:receipt,2:receipt"
+            })
+          }),
+          { status: 200 }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            output_text: JSON.stringify({
+              image_roles: "1:payment_proof, 2:receipt"
+            })
+          }),
+          { status: 200 }
+        )
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await extractReceiptWithOpenAI(
+      "test-user-key",
+      "gpt-test",
+      "USA",
+      receipt({
+        filename: "mixed.pdf",
+        images: [image({ id: "proof-page", filename: "mixed.pdf page 1" }), image({ id: "receipt-page", filename: "mixed.pdf page 2" })]
+      })
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.image_roles).toBe("1:payment_proof, 2:receipt");
+  });
+
   it("extracts KRW to RMB rate from multiple exchange-rate screenshots", async () => {
     const fetchMock = vi.fn(async () =>
       new Response(
@@ -134,6 +189,33 @@ describe("OpenAI extraction", () => {
     expect(result.documentType).toBe("receipt");
     expect(result.category).toBe("transportation");
     expect(result.purpose).toBe("Toll");
+  });
+
+  it("resets image roles when a merchant receipt was mislabeled as proof", () => {
+    const result = applyExtraction(
+      receipt({
+        filename: "toll_250_receipt.png",
+        images: [image({ id: "toll-receipt", filename: "toll_250_receipt.png" })]
+      }),
+      {
+        date: "2026-06-26",
+        place: "Indiana Toll Road",
+        vendor: "Indiana Toll Road",
+        amount: "2.50",
+        currency: "USD",
+        purpose: "Toll",
+        details: "Toll charge from Portage to LaPorte.",
+        category: "transportation",
+        payment_method: "CARD",
+        receipt_label: "Toll receipt",
+        document_type: "payment_proof",
+        image_roles: "1:payment_proof"
+      },
+      "USA"
+    );
+
+    expect(result.documentType).toBe("receipt");
+    expect(result.images[0].supportRole).toBe("receipt");
   });
 
   it("corrects Chase transaction screenshots to payment proof even if AI says receipt", () => {
@@ -189,6 +271,40 @@ describe("OpenAI extraction", () => {
     );
 
     expect(result.documentType).toBe("receipt");
+    expect(result.images.map((entry) => [entry.id, entry.supportRole])).toEqual([
+      ["proof-page", "payment_proof"],
+      ["receipt-page", "receipt"]
+    ]);
+  });
+
+  it("lets explicit image roles override broad receipt indexes", () => {
+    const result = applyExtraction(
+      receipt({
+        filename: "mixed.pdf",
+        images: [image({ id: "proof-page", filename: "mixed.pdf page 1" }), image({ id: "receipt-page", filename: "mixed.pdf page 2" })]
+      }),
+      {
+        date: "2026-06-26",
+        place: "Delta Air Lines",
+        vendor: "Delta Air Lines",
+        amount: "458.40",
+        currency: "USD",
+        purpose: "Flight",
+        details: "Airline receipt and Chase proof for the same payment.",
+        category: "transportation",
+        payment_method: "Visa",
+        receipt_label: "Flight receipt",
+        krw_amount: "",
+        rmb_amount: "",
+        project_number: "",
+        document_type: "receipt",
+        payment_proof_image_indexes: "",
+        receipt_image_indexes: "1,2",
+        image_roles: "1:payment_proof, 2:receipt"
+      },
+      "USA"
+    );
+
     expect(result.images.map((entry) => [entry.id, entry.supportRole])).toEqual([
       ["proof-page", "payment_proof"],
       ["receipt-page", "receipt"]

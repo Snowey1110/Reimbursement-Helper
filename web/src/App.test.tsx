@@ -184,6 +184,14 @@ describe("Reimbursement Helper web app", () => {
 
     expect(screen.getByRole("link", { name: "USA" })).toHaveAttribute("href", "./templates/usa_expense_report_template.xlsx");
     expect(screen.getByRole("link", { name: "Korea" })).toHaveAttribute("href", "./templates/korea_reimbursement_template.xlsx");
+    expect(screen.queryByRole("button", { name: /Debug Excel from template/i })).not.toBeInTheDocument();
+  });
+
+  it("shows the debug Excel tool only on the debug URL", () => {
+    window.history.pushState({}, "", "/debug");
+
+    render(<App />);
+
     expect(screen.getByRole("button", { name: /Debug Excel from template/i })).toBeInTheDocument();
   });
 

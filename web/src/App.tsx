@@ -172,9 +172,20 @@ function readStoredLanguage(): AppLanguage {
   }
 }
 
+function readExcelDebugMode(): boolean {
+  try {
+    const url = new URL(window.location.href);
+    const pathname = url.pathname.replace(/\/+$/, "");
+    return url.searchParams.get("debug") === "1" || pathname.endsWith("/debug");
+  } catch {
+    return false;
+  }
+}
+
 export default function App() {
   const initialUrlSettings = readUrlSettings();
   const initialLanguage = initialUrlSettings.language ?? readStoredLanguage();
+  const excelDebugMode = useMemo(() => readExcelDebugMode(), []);
   const [language, setLanguage] = useState<AppLanguage>(initialLanguage);
   const [formVersion, setFormVersion] = useState<FormVersion>(() => initialUrlSettings.formVersion ?? readStoredFormVersion());
   const [items, setItems] = useState<ReceiptItem[]>([]);
@@ -1128,10 +1139,12 @@ export default function App() {
           <a href={KOREA_TEMPLATE_URL} download>
             Korea
           </a>
-          <button type="button" onClick={generateExcelDebugBundle} disabled={busy || !items.length} title={t("debugExcel")}>
-            <FileSpreadsheet size={14} />
-            {t("debugExcel")}
-          </button>
+          {excelDebugMode && (
+            <button type="button" onClick={generateExcelDebugBundle} disabled={busy || !items.length} title={t("debugExcel")}>
+              <FileSpreadsheet size={14} />
+              {t("debugExcel")}
+            </button>
+          )}
         </div>
       </footer>
     </div>
