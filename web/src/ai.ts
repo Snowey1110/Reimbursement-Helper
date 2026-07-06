@@ -60,11 +60,40 @@ const EXCHANGE_RATE_SCHEMA = {
   required: ["krw_to_rmb_rate", "usd_to_krw_rate", "krw_to_usd_rate", "confidence_notes"]
 };
 
+function joinedText(values: unknown[]): string {
+  return values.join(" ").toLowerCase();
+}
+
+function usaPaymentProofScore(values: unknown[]): number {
+  const text = joinedText(values);
+  let score = 0;
+  if (/\b(chase|jpmorgan|sapphire reserve|freedom)\b/.test(text)) score += 2;
+  if (/\b(transaction details|transaction date|posted date|printed from chase personal online)\b/.test(text)) score += 2;
+  if (/\b(merchant type|card number|account activity|card statement|bank statement|proof of payment|payment proof)\b/.test(text)) score += 2;
+  if (/\b(rewards earned|ultimate rewards|sale)\b/.test(text)) score += 1;
+  return score;
+}
+
+function merchantReceiptScore(values: unknown[]): number {
+  const text = joinedText(values);
+  let score = 0;
+  if (/\b(credit card receipt|merchant receipt|sales receipt|receipt|invoice)\b/.test(text)) score += 2;
+  if (/\b(ticket|entry|exit|qr code|barcode)\b/.test(text)) score += 1;
+  if (/\b(total|subtotal|tax|amount due|paid|payment method|card type|authorization|terminal|receipt number|cashier|thank you)\b/.test(text)) score += 2;
+  if (/\b(indiana toll road|itr concession|metropolis|iparkit|parking charges|visit details)\b/.test(text)) score += 2;
+  return score;
+}
+
 function looksLikeUsaPaymentProof(values: unknown[]): boolean {
-  const text = values.join(" ").toLowerCase();
-  return /\b(chase|bank|statement|transaction details|posted date|sapphire|freedom|proof of payment|payment proof|merchant type|rewards earned|printed from chase personal online)\b/.test(
-    text
-  );
+  return usaPaymentProofScore(values) >= 3 && merchantReceiptScore(values) < 3;
+}
+
+function looksLikeStrongMerchantReceipt(values: unknown[]): boolean {
+  return merchantReceiptScore(values) >= 3;
+}
+
+function looksLikeStrongPaymentProof(values: unknown[]): boolean {
+  return usaPaymentProofScore(values) >= 4 && merchantReceiptScore(values) < 3;
 }
 
 function looksLikeMerchantReceipt(values: unknown[]): boolean {
@@ -82,7 +111,6 @@ function parseRate(value: unknown): number | undefined {
 }
 
 export async function extractReceiptWithOpenAI(apiKey: string, model: string, formVersion: FormVersion, item: ReceiptItem): Promise<ReceiptExtraction> {
-  const image = item.images[0];
   const prompt = [
     `Extract reimbursement details for the ${formVersion} form.`,
     "Return dates as YYYY-MM-DD when possible.",
@@ -91,6 +119,8 @@ export async function extractReceiptWithOpenAI(apiKey: string, model: string, fo
     "Choose category from transportation, lodging, meals, advertising, office, entertainment, materials, consumables, physical_exam, nucleic_test, courier, welfare, other.",
     "For USA uploads, classify document_type as receipt, payment_proof, or unknown. Payment proof means a bank/card transaction screenshot or statement, not the merchant receipt.",
     "A merchant receipt paid by credit card is still document_type receipt, not payment_proof.",
+    "If the attached entry has multiple pages/images, review every image before choosing document_type.",
+    "If an entry includes both a merchant receipt/ticket and a bank/card transaction screenshot, classify it as receipt and extract the merchant receipt/ticket details.",
     "Parking, parking lots and garages, toll, bridge, fuel, gas, rideshare, taxi, airfare, airline, car rental, and baggage fees are transportation, never meals.",
     "For Korea uploads, document_type should normally be receipt unless the image is clearly not reimbursement support.",
     "Keep applicant/personal identity fields blank.",
@@ -122,7 +152,10 @@ export async function extractReceiptWithOpenAI(apiKey: string, model: string, fo
           role: "user",
           content: [
             { type: "input_text", text: prompt },
-            { type: "input_image", image_url: image.dataUrl }
+            ...item.images.flatMap((entry, index) => [
+              { type: "input_text", text: `Image ${index + 1}: ${entry.filename || entry.sourceName || item.filename}` },
+              { type: "input_image", image_url: entry.dataUrl }
+            ])
           ]
         }
       ],
@@ -224,14 +257,31 @@ export async function extractKoreaExchangeRatesWithOpenAI(
 export function applyExtraction(item: ReceiptItem, extraction: ReceiptExtraction, formVersion: FormVersion): ReceiptItem {
   const currency = normalizeCurrency(extraction.currency, formVersion === "USA" ? "USD" : item.currency);
   let documentType = formVersion === "USA" ? normalizeDocumentType(extraction.document_type, item.documentType) : item.documentType;
-  const classificationValues = [item.filename, extraction.place, extraction.vendor, extraction.details, extraction.payment_method, extraction.receipt_label, extraction.category];
+  const classificationValues = [
+    item.filename,
+    ...item.images.flatMap((image) => [image.filename, image.sourceName]),
+    extraction.place,
+    extraction.vendor,
+    extraction.details,
+    extraction.payment_method,
+    extraction.receipt_label,
+    extraction.category
+  ];
   const bankProof = looksLikeUsaPaymentProof(classificationValues);
+  const strongProof = looksLikeStrongPaymentProof(classificationValues);
+  const strongReceipt = looksLikeStrongMerchantReceipt(classificationValues);
   if (
     formVersion === "USA" &&
     documentType === "unknown" &&
     bankProof
   ) {
     documentType = "payment_proof";
+  }
+  if (formVersion === "USA" && documentType === "receipt" && strongProof) {
+    documentType = "payment_proof";
+  }
+  if (formVersion === "USA" && documentType === "payment_proof" && strongReceipt) {
+    documentType = "receipt";
   }
   let next: ReceiptItem = {
     ...item,
@@ -253,7 +303,7 @@ export function applyExtraction(item: ReceiptItem, extraction: ReceiptExtraction
   if (
     formVersion === "USA" &&
     next.documentType === "payment_proof" &&
-    !bankProof &&
+    !strongProof &&
     (looksLikeMerchantReceipt(classificationValues) || looksLikeUsaParkingReceipt(next) || looksLikeUsaTollReceipt(next) || looksLikeUsaFuelReceipt(next))
   ) {
     next = { ...next, documentType: "receipt" };

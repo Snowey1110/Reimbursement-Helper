@@ -1168,6 +1168,9 @@ Rules:
   only for bank/card transaction screenshots or statements, not merchant receipts.
   A merchant receipt that says Credit Card Receipt, Payment Method, Card Type,
   authorization, terminal ID, total, or receipt number is still a receipt.
+  If the attached images include both a merchant receipt/ticket and a bank/card
+  transaction screenshot, classify the entry as receipt and extract the merchant
+  receipt/ticket details.
 - For Korea, use receipt unless the image is clearly not reimbursement support.
 - If a field is unclear, use an empty string rather than guessing.
 - Image labels or filenames may contain an app memory marker beginning with __RH1_.
@@ -2086,16 +2089,24 @@ def looks_like_usa_merchant_receipt_text(*values: Any) -> bool:
     return False
 
 
-def looks_like_usa_payment_proof_text(*values: Any) -> bool:
+def usa_payment_proof_text_score(*values: Any) -> int:
     text = " ".join(str(value or "") for value in values).lower()
-    if looks_like_usa_merchant_receipt_text(text):
+    score = 0
+    if re.search(r"\b(chase|jpmorgan|sapphire reserve|freedom)\b", text):
+        score += 2
+    if re.search(r"\b(transaction details|transaction date|posted date|printed from chase personal online)\b", text):
+        score += 2
+    if re.search(r"\b(merchant type|card number|account activity|card statement|bank statement|proof of payment|payment proof)\b", text):
+        score += 2
+    if re.search(r"\b(rewards earned|ultimate rewards|sale)\b", text):
+        score += 1
+    return score
+
+
+def looks_like_usa_payment_proof_text(*values: Any) -> bool:
+    if looks_like_usa_merchant_receipt_text(*values):
         return False
-    return bool(
-        re.search(
-            r"\b(chase|jpmorgan|bank statement|card statement|account activity|transaction details|posted date|sapphire reserve|freedom|proof of payment|payment proof|merchant type|rewards earned|ultimate rewards|printed from chase personal online)\b",
-            text,
-        )
-    )
+    return usa_payment_proof_text_score(*values) >= 3
 
 
 def looks_like_usa_workbook_proof_name(*values: Any) -> bool:
@@ -2199,11 +2210,10 @@ def auto_classify_usa_document_type(item: "ReceiptItem", *extra_values: Any) -> 
     if looks_like_usa_merchant_receipt_text(*values):
         item.document_type = "receipt"
         return
-    if current != "unknown":
-        item.document_type = current
-        return
     if looks_like_usa_payment_proof_text(*values):
         item.document_type = "payment_proof"
+    elif current != "unknown":
+        item.document_type = current
     elif looks_like_usa_receipt_support_text(*values):
         item.document_type = "receipt"
     else:

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyExtraction, extractKoreaExchangeRatesWithOpenAI, extractReceiptWithOpenAI } from "./ai";
-import { receipt } from "./test/factories";
+import { image, receipt } from "./test/factories";
 
 describe("OpenAI extraction", () => {
   afterEach(() => {
@@ -44,10 +44,47 @@ describe("OpenAI extraction", () => {
     });
     const body = JSON.parse(String((options as RequestInit).body));
     expect(body.model).toBe("gpt-test");
-    expect(body.input[0].content[1]).toMatchObject({
+    expect(body.input[0].content[2]).toMatchObject({
       type: "input_image",
       image_url: receipt().images[0].dataUrl
     });
+  });
+
+  it("sends every uploaded page/image for a receipt entry", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          output_text: JSON.stringify({
+            date: "",
+            place: "",
+            vendor: "",
+            amount: "",
+            currency: "USD",
+            krw_amount: "",
+            rmb_amount: "",
+            purpose: "",
+            details: "",
+            project_number: "",
+            category: "transportation",
+            payment_method: "",
+            receipt_label: "",
+            document_type: "unknown"
+          })
+        }),
+        { status: 200 }
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await extractReceiptWithOpenAI(
+      "test-user-key",
+      "gpt-test",
+      "USA",
+      receipt({ images: [image({ id: "page-1", filename: "file.pdf page 1" }), image({ id: "page-2", filename: "file.pdf page 2" })] })
+    );
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body));
+    expect(body.input[0].content.filter((part: any) => part.type === "input_image")).toHaveLength(2);
   });
 
   it("extracts KRW to RMB rate from multiple exchange-rate screenshots", async () => {
@@ -97,5 +134,30 @@ describe("OpenAI extraction", () => {
     expect(result.documentType).toBe("receipt");
     expect(result.category).toBe("transportation");
     expect(result.purpose).toBe("Toll");
+  });
+
+  it("corrects Chase transaction screenshots to payment proof even if AI says receipt", () => {
+    const result = applyExtraction(
+      receipt({ filename: "chase_transaction.png" }),
+      {
+        date: "2026-06-17",
+        place: "CH WABASH RANDOLPH",
+        vendor: "CH WABASH RANDOLPH",
+        amount: "30.00",
+        currency: "USD",
+        purpose: "Parking",
+        details: "CHASE transaction details. Printed from Chase Personal Online. Merchant type Parking lots and garages. Posted date Jun 18, 2026. Rewards earned.",
+        category: "transportation",
+        payment_method: "Sapphire Reserve",
+        receipt_label: "Chase transaction details",
+        krw_amount: "",
+        rmb_amount: "",
+        project_number: "",
+        document_type: "receipt"
+      },
+      "USA"
+    );
+
+    expect(result.documentType).toBe("payment_proof");
   });
 });
