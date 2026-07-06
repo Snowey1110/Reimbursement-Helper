@@ -545,6 +545,10 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "select_files": "Select Files",
         "select_receipts": "Select Receipts",
         "select_payment_proof": "Select Payment Proof",
+        "upload_mode": "Import as",
+        "upload_mode_auto": "Auto detect",
+        "upload_mode_receipt": "Receipts only",
+        "upload_mode_payment_proof": "Payment proof only",
         "select_exchange_rate": "Select Exchange Rate Images",
         "generate_details": "Generate Details",
         "generate_empty": "Generate Empty",
@@ -628,6 +632,10 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "select_files": "\u9009\u62e9\u6587\u4ef6",
         "select_receipts": "\u9009\u62e9\u53d1\u7968",
         "select_payment_proof": "\u9009\u62e9\u4ed8\u6b3e\u51ed\u8bc1",
+        "upload_mode": "\u5bfc\u5165\u4e3a",
+        "upload_mode_auto": "\u81ea\u52a8\u8bc6\u522b",
+        "upload_mode_receipt": "\u4ec5\u53d1\u7968",
+        "upload_mode_payment_proof": "\u4ec5\u4ed8\u6b3e\u51ed\u8bc1",
         "select_exchange_rate": "\u9009\u62e9\u6c47\u7387\u56fe\u7247",
         "generate_details": "\u751f\u6210\u660e\u7ec6",
         "generate_empty": "\u7a7a\u767d\u586b\u7a7a",
@@ -711,6 +719,10 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "select_files": "\ud30c\uc77c \uc120\ud0dd",
         "select_receipts": "\uc601\uc218\uc99d \uc120\ud0dd",
         "select_payment_proof": "\uacb0\uc81c \uc99d\ube59 \uc120\ud0dd",
+        "upload_mode": "\uac00\uc838\uc624\uae30 \uc720\ud615",
+        "upload_mode_auto": "\uc790\ub3d9 \uac10\uc9c0",
+        "upload_mode_receipt": "\uc601\uc218\uc99d\ub9cc",
+        "upload_mode_payment_proof": "\uacb0\uc81c \uc99d\ube59\ub9cc",
         "select_exchange_rate": "\ud658\uc728 \uc774\ubbf8\uc9c0 \uc120\ud0dd",
         "generate_details": "\uc138\ubd80 \uc815\ubcf4 \uc0dd\uc131",
         "generate_empty": "\ube48 \ud56d\ubaa9 \uc0dd\uc131",
@@ -808,6 +820,7 @@ class ReceiptItem:
     payment_method: str = ""
     receipt_label: str = ""
     document_type: str = "receipt"
+    locked_document_type: str = ""
     matched_receipt_id: str = ""
     status: str = "Empty"
     crop_box: Optional[List[float]] = None
@@ -940,6 +953,11 @@ def normalize_document_type(value: Any, default: str = "unknown") -> str:
     if text in {"unknown", "unclear", "manual_review", "needs_review"}:
         return "unknown"
     return default if default in DOCUMENT_TYPE_VALUES else "unknown"
+
+
+def normalize_usa_upload_mode(value: Any) -> str:
+    text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    return text if text in {"receipt", "payment_proof"} else "auto"
 
 
 def normalize_language(value: Any) -> str:
@@ -4514,6 +4532,8 @@ class ReimbursementHelperApp:
         self.usd_to_krw_rate = tk.StringVar(value=str(self.settings.get("usd_to_krw_rate", DEFAULT_USD_TO_KRW_RATE)))
         self.krw_to_rmb_rate = tk.StringVar(value=str(self.settings.get("krw_to_rmb_rate", DEFAULT_KRW_TO_RMB_RATE)))
         self.ai_concurrency = tk.StringVar(value=str(clamp_ai_concurrency(self.settings.get("ai_concurrency", DEFAULT_AI_REQUEST_CONCURRENCY))))
+        self.usa_upload_mode = tk.StringVar(value=normalize_usa_upload_mode(self.settings.get("usa_upload_mode", "auto")))
+        self.usa_upload_mode_display = tk.StringVar(value="")
         self.preview_zoom = tk.DoubleVar(value=1.0)
         self.status_text = tk.StringVar(value=self.tr("ready"))
         self.progress_text = tk.StringVar(value="")
@@ -4530,6 +4550,8 @@ class ReimbursementHelperApp:
         self.language_label: Optional[Any] = None
         self.ai_concurrency_label: Optional[Any] = None
         self.ai_concurrency_entry: Optional[Any] = None
+        self.upload_mode_label: Optional[Any] = None
+        self.upload_mode_combo: Optional[Any] = None
         self.manager_label: Optional[Any] = None
         self.details_label: Optional[Any] = None
         self.preview_label: Optional[Any] = None
@@ -4777,6 +4799,18 @@ class ReimbursementHelperApp:
         self.ai_concurrency_entry.pack(side="left", padx=(0, 12))
         self.ai_concurrency_entry.bind("<FocusOut>", lambda _event: self.ai_concurrency.set(str(self.ai_concurrency_value())))
         self.ai_concurrency_entry.bind("<Return>", lambda _event: self.ai_concurrency.set(str(self.ai_concurrency_value())))
+        self.upload_mode_label = ttk.Label(controls, text=self.tr("upload_mode"))
+        self.upload_mode_label.pack(side="left", padx=(0, 6))
+        self.upload_mode_combo = ttk.Combobox(
+            controls,
+            textvariable=self.usa_upload_mode_display,
+            values=self.upload_mode_values(),
+            state="readonly",
+            width=16,
+        )
+        self.upload_mode_combo.pack(side="left", padx=(0, 12))
+        self.upload_mode_combo.bind("<<ComboboxSelected>>", self._on_upload_mode_changed)
+        self.update_upload_mode_options()
         self.upload_folder_btn = ttk.Button(controls, text=self.tr("select_files"), command=self.select_files)
         self.upload_folder_btn.pack(side="left", padx=4)
         self.select_payment_proof_btn = ttk.Button(
@@ -5067,6 +5101,38 @@ class ReimbursementHelperApp:
     def document_type_values(self) -> List[str]:
         return [self.document_type_display_label(key) for key in ("unknown", "receipt", "payment_proof")]
 
+    def upload_mode_display_label(self, mode: str) -> str:
+        key = normalize_usa_upload_mode(mode)
+        text_key = {
+            "auto": "upload_mode_auto",
+            "receipt": "upload_mode_receipt",
+            "payment_proof": "upload_mode_payment_proof",
+        }.get(key, "upload_mode_auto")
+        return self.tr(text_key)
+
+    def upload_mode_key_from_display(self, value: str) -> str:
+        text = str(value or "").strip()
+        for key in ("auto", "receipt", "payment_proof"):
+            if text == self.upload_mode_display_label(key):
+                return key
+        return normalize_usa_upload_mode(text)
+
+    def upload_mode_values(self) -> List[str]:
+        return [self.upload_mode_display_label(key) for key in ("auto", "receipt", "payment_proof")]
+
+    def update_upload_mode_options(self) -> None:
+        if self.upload_mode_combo is None:
+            return
+        current = normalize_usa_upload_mode(self.usa_upload_mode.get())
+        self.upload_mode_combo.configure(values=self.upload_mode_values())
+        self.usa_upload_mode_display.set(self.upload_mode_display_label(current))
+
+    def _on_upload_mode_changed(self, _event: Any = None) -> None:
+        self.usa_upload_mode.set(self.upload_mode_key_from_display(self.usa_upload_mode_display.get()))
+        self.settings["usa_upload_mode"] = self.usa_upload_mode.get()
+        save_user_settings(self.settings)
+        self.update_upload_mode_options()
+
     def attention_reason_label(self, reason: Optional[str]) -> str:
         mapping = {
             "AI failed": "attention_ai_failed",
@@ -5121,6 +5187,7 @@ class ReimbursementHelperApp:
             (self.form_label, "form"),
             (self.language_label, "language"),
             (self.ai_concurrency_label, "ai_batch"),
+            (self.upload_mode_label, "upload_mode"),
             (self.upload_folder_btn, "select_files"),
             (self.generate_details_btn, "generate_empty"),
             (self.generate_all_btn, "generate_all"),
@@ -5165,6 +5232,7 @@ class ReimbursementHelperApp:
             if label is not None:
                 label.configure(text=self.tr(text_key))
         self.update_document_type_options()
+        self.update_upload_mode_options()
         self._update_field_visibility()
         self._on_form_version_changed(refresh_language_only=True)
         if self.status_text.get() in {ui_text(code, "ready") for code in UI_TEXT}:
@@ -5452,6 +5520,7 @@ class ReimbursementHelperApp:
                 setattr(item, key, self.category_key_from_display(value))
             elif key == "document_type":
                 item.document_type = normalize_document_type(self.document_type_key_from_display(value), "unknown")
+                item.locked_document_type = "" if item.document_type == "unknown" else item.document_type
                 if item.document_type != "payment_proof":
                     item.matched_receipt_id = ""
             else:
@@ -5519,6 +5588,16 @@ class ReimbursementHelperApp:
         if version == "USA":
             if self.upload_folder_btn is not None:
                 self.upload_folder_btn.configure(text=self.tr("select_receipts"))
+            if self.upload_mode_label is not None:
+                try:
+                    self.upload_mode_label.pack(side="left", padx=(0, 6), before=self.upload_folder_btn)
+                except Exception:
+                    self.upload_mode_label.pack(side="left", padx=(0, 6))
+            if self.upload_mode_combo is not None:
+                try:
+                    self.upload_mode_combo.pack(side="left", padx=(0, 12), before=self.upload_folder_btn)
+                except Exception:
+                    self.upload_mode_combo.pack(side="left", padx=(0, 12))
             self.field_labels["amount"].configure(text=self.tr("usd_amount"))
             self.field_labels["rmb_amount"].configure(text=self.tr("rmb_amount"))
             self.field_vars["currency"].set("USD")
@@ -5544,6 +5623,10 @@ class ReimbursementHelperApp:
         else:
             if self.upload_folder_btn is not None:
                 self.upload_folder_btn.configure(text=self.tr("select_files"))
+            if self.upload_mode_label is not None:
+                self.upload_mode_label.pack_forget()
+            if self.upload_mode_combo is not None:
+                self.upload_mode_combo.pack_forget()
             self.field_labels["amount"].configure(text=self.tr("original_amount"))
             self.field_labels["rmb_amount"].configure(text=self.tr("rmb_amount"))
             self._set_field_visible("currency", True)
@@ -5634,9 +5717,12 @@ class ReimbursementHelperApp:
             if version == "USA":
                 item.currency = "USD"
                 item.document_type = normalize_document_type(item.document_type, "receipt")
+                locked = normalize_document_type(item.locked_document_type, "unknown")
+                item.locked_document_type = locked if locked != "unknown" else ""
             else:
                 item.currency = normalize_currency(item.currency, "KRW")
                 item.document_type = "receipt"
+                item.locked_document_type = ""
                 item.matched_receipt_id = ""
             self.update_item_amount_fields(item, "amount")
             if form_changed and item.status == "AI filled":
@@ -5673,7 +5759,23 @@ class ReimbursementHelperApp:
         self.remember_file_dialog_dir(paths)
         self.save_current_fields()
         self._details_ready_for_export = False
-        self.start_incremental_receipt_import(paths)
+        upload_mode = normalize_usa_upload_mode(self.usa_upload_mode.get())
+        self.settings["usa_upload_mode"] = upload_mode
+        save_user_settings(self.settings)
+        self.start_incremental_receipt_import(paths, upload_mode)
+
+    def apply_usa_upload_mode_to_item(self, item: ReceiptItem, upload_mode: str) -> None:
+        if self.form_version.get() != "USA":
+            return
+        mode = normalize_usa_upload_mode(upload_mode)
+        if mode == "auto":
+            return
+        item.document_type = mode
+        item.locked_document_type = mode
+        if mode == "payment_proof":
+            item.status = "Payment proof"
+        else:
+            item.matched_receipt_id = ""
 
     def receipt_memory_records_for_item(self, item: ReceiptItem) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
         records = self._receipt_memory.get("records")
@@ -5807,7 +5909,7 @@ class ReimbursementHelperApp:
             records[key] = dict(record)
         save_receipt_memory(self._receipt_memory)
 
-    def import_receipt_file(self, path: Path, existing: set) -> Tuple[bool, Optional[str]]:
+    def import_receipt_file(self, path: Path, existing: set, upload_mode: str = "auto") -> Tuple[bool, Optional[str]]:
         suffix = path.suffix.lower()
         if suffix not in SUPPORTED_UPLOAD_SUFFIXES:
             return False, None
@@ -5848,6 +5950,7 @@ class ReimbursementHelperApp:
                 receipt_images=receipt_images,
             )
             self.apply_stored_receipt_memory(item)
+            self.apply_usa_upload_mode_to_item(item, upload_mode)
             self.items.append(item)
             existing.add(key)
             return True, None
@@ -5875,11 +5978,12 @@ class ReimbursementHelperApp:
             ],
         )
         self.apply_stored_receipt_memory(item)
+        self.apply_usa_upload_mode_to_item(item, upload_mode)
         self.items.append(item)
         existing.add(key)
         return True, None
 
-    def start_incremental_receipt_import(self, paths: List[Path]) -> None:
+    def start_incremental_receipt_import(self, paths: List[Path], upload_mode: str = "auto") -> None:
         existing = {
             selected_file_key(Path(item.path), item.source_path, item.source_page)
             for item in [*self.items, *self.bank_items]
@@ -5901,7 +6005,7 @@ class ReimbursementHelperApp:
             while state["index"] < total and processed < 4 and time.perf_counter() - started < 0.08:
                 path = paths[state["index"]]
                 state["index"] += 1
-                added, error_text = self.import_receipt_file(path, existing)
+                added, error_text = self.import_receipt_file(path, existing, upload_mode)
                 if added:
                     state["added"] += 1
                 if error_text:
@@ -7586,12 +7690,16 @@ class ReimbursementHelperApp:
             item.currency = "USD"
             item.document_type = normalize_document_type(item.document_type, "unknown")
             apply_primary_receipt_rotation_hint(item, data.get("rotation_degrees"))
-            auto_classify_usa_document_type(
-                item,
-                data.get("vendor"),
-                data.get("confidence_notes"),
-                data.get("document_type"),
-            )
+            locked_document_type = normalize_document_type(item.locked_document_type, "unknown")
+            if locked_document_type != "unknown":
+                item.document_type = locked_document_type
+            else:
+                auto_classify_usa_document_type(
+                    item,
+                    data.get("vendor"),
+                    data.get("confidence_notes"),
+                    data.get("document_type"),
+                )
             if item.document_type == "unknown" and looks_like_usa_payment_proof_text(
                 item.filename,
                 item.place,
@@ -7602,6 +7710,8 @@ class ReimbursementHelperApp:
                 data.get("confidence_notes"),
             ):
                 item.document_type = "payment_proof"
+            if locked_document_type != "unknown":
+                item.document_type = locked_document_type
             if item.document_type == "receipt":
                 normalize_usa_fuel_receipt_fields(item, data.get("vendor"), data.get("confidence_notes"))
                 normalize_usa_parking_receipt_fields(item, data.get("vendor"), data.get("confidence_notes"))
@@ -8430,6 +8540,8 @@ class ReimbursementHelperApp:
                 values["receipt_images"] = []
             values["rotation_degrees"] = normalize_rotation(values.get("rotation_degrees", 0))
             values["document_type"] = normalize_document_type(values.get("document_type"), "receipt")
+            locked = normalize_document_type(values.get("locked_document_type"), "unknown")
+            values["locked_document_type"] = locked if locked != "unknown" else ""
             values["matched_receipt_id"] = str(values.get("matched_receipt_id") or "")
             item = ReceiptItem(**values)
             ensure_receipt_images(item)
@@ -8486,6 +8598,7 @@ class ReimbursementHelperApp:
         self.settings["ai_concurrency"] = self.ai_concurrency_value()
         self.settings["last_form_version"] = normalized_form_version(self.form_version.get())
         self.settings["language"] = normalize_language(self.language.get())
+        self.settings["usa_upload_mode"] = normalize_usa_upload_mode(self.usa_upload_mode.get())
         save_user_settings(self.settings)
         self.save_session()
         try:

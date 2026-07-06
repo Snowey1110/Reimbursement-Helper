@@ -377,6 +377,7 @@ export async function extractKoreaExchangeRatesWithOpenAI(
 export function applyExtraction(item: ReceiptItem, extraction: ReceiptExtraction, formVersion: FormVersion): ReceiptItem {
   const currency = normalizeCurrency(extraction.currency, formVersion === "USA" ? "USD" : item.currency);
   let documentType = formVersion === "USA" ? normalizeDocumentType(extraction.document_type, item.documentType) : item.documentType;
+  const lockedDocumentType = formVersion === "USA" ? normalizeDocumentType(item.lockedDocumentType, "unknown") : "unknown";
   const classificationValues = [
     item.filename,
     ...item.images.flatMap((image) => [image.filename, image.sourceName]),
@@ -418,6 +419,15 @@ export function applyExtraction(item: ReceiptItem, extraction: ReceiptExtraction
       paymentProofImageIndexes.delete(index);
     }
   }
+  if (lockedDocumentType === "payment_proof") {
+    receiptImageIndexes.clear();
+    item.images.forEach((_, index) => paymentProofImageIndexes.add(index));
+    documentType = "payment_proof";
+  } else if (lockedDocumentType === "receipt") {
+    paymentProofImageIndexes.clear();
+    item.images.forEach((_, index) => receiptImageIndexes.add(index));
+    documentType = "receipt";
+  }
   if (!receiptImageIndexes.size && !paymentProofImageIndexes.size && !roleMap.size && formVersion === "USA") {
     if (documentType === "payment_proof") {
       item.images.forEach((_, index) => paymentProofImageIndexes.add(index));
@@ -456,11 +466,13 @@ export function applyExtraction(item: ReceiptItem, extraction: ReceiptExtraction
     paymentMethod: String(extraction.payment_method ?? item.paymentMethod ?? ""),
     receiptLabel: String(extraction.receipt_label ?? item.receiptLabel ?? item.filename),
     documentType,
+    lockedDocumentType: item.lockedDocumentType,
     status: "AI filled"
   };
   const paymentProofShouldBeReceipt =
     formVersion === "USA" &&
     next.documentType === "payment_proof" &&
+    lockedDocumentType !== "payment_proof" &&
     !strongProof &&
     (looksLikeMerchantReceipt(classificationValues) || looksLikeUsaParkingReceipt(next) || looksLikeUsaTollReceipt(next) || looksLikeUsaFuelReceipt(next));
   if (paymentProofShouldBeReceipt) {

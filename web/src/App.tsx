@@ -22,6 +22,7 @@ import {
   FORM_VERSION_STORAGE_KEY,
   LANGUAGE_STORAGE_KEY,
   KOREA_TEMPLATE_URL,
+  USA_UPLOAD_MODE_STORAGE_KEY,
   USA_TEMPLATE_URL,
 } from "./constants";
 import { exportKoreaWorkbook, exportUsaWorkbook } from "./excelExport";
@@ -55,6 +56,7 @@ const AI_REQUEST_CONCURRENCY_WARNING_THRESHOLD = 12;
 type SuggestedAction = "selectFiles" | "selectExchangeRate" | "generateEmpty" | "generateAll" | "generateExcel";
 type FormVersion = "USA" | "Korea";
 type ClipboardMode = "copy" | "cut";
+type UsaUploadMode = "auto" | "receipt" | "payment_proof";
 
 interface ScreenshotClipboardEntry {
   kind: "receipt" | "proof";
@@ -115,6 +117,24 @@ function clampAiConcurrency(value: unknown): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return DEFAULT_AI_REQUEST_CONCURRENCY;
   return Math.max(1, Math.round(parsed));
+}
+
+function normalizeUsaUploadMode(value: unknown): UsaUploadMode {
+  return value === "receipt" || value === "payment_proof" ? value : "auto";
+}
+
+function applyUsaUploadMode(item: ReceiptItem, mode: UsaUploadMode, formVersion: FormVersion): ReceiptItem {
+  if (formVersion !== "USA" || mode === "auto") return item;
+  return {
+    ...item,
+    documentType: mode,
+    lockedDocumentType: mode,
+    status: mode === "payment_proof" ? "Payment proof" : item.status,
+    images: item.images.map((image) => ({
+      ...image,
+      supportRole: mode
+    }))
+  };
 }
 
 async function runWithConcurrency<T>(
@@ -182,12 +202,21 @@ function readExcelDebugMode(): boolean {
   }
 }
 
+function readStoredUsaUploadMode(): UsaUploadMode {
+  try {
+    return normalizeUsaUploadMode(localStorage.getItem(USA_UPLOAD_MODE_STORAGE_KEY));
+  } catch {
+    return "auto";
+  }
+}
+
 export default function App() {
   const initialUrlSettings = readUrlSettings();
   const initialLanguage = initialUrlSettings.language ?? readStoredLanguage();
   const excelDebugMode = useMemo(() => readExcelDebugMode(), []);
   const [language, setLanguage] = useState<AppLanguage>(initialLanguage);
   const [formVersion, setFormVersion] = useState<FormVersion>(() => initialUrlSettings.formVersion ?? readStoredFormVersion());
+  const [usaUploadMode, setUsaUploadMode] = useState<UsaUploadMode>(() => readStoredUsaUploadMode());
   const [items, setItems] = useState<ReceiptItem[]>([]);
   const [proofs, setProofs] = useState<PaymentProof[]>([]);
   const [exchangeRateImages, setExchangeRateImages] = useState<ImageAttachment[]>([]);
@@ -256,6 +285,14 @@ export default function App() {
 
   useEffect(() => {
     try {
+      localStorage.setItem(USA_UPLOAD_MODE_STORAGE_KEY, usaUploadMode);
+    } catch {
+      // Ignore private browsing or storage-disabled environments.
+    }
+  }, [usaUploadMode]);
+
+  useEffect(() => {
+    try {
       localStorage.setItem(AI_CONCURRENCY_STORAGE_KEY, String(aiConcurrency));
     } catch {
       // Ignore private browsing or storage-disabled environments.
@@ -317,11 +354,12 @@ export default function App() {
       const groups = await Promise.all(Array.from(files).map(fileToAttachments));
       const next = groups.map((attachments) => {
         const receipt = blankReceipt(formVersion, attachments[0]);
-        return applyStoredReceiptMemory({
+        const remembered = applyStoredReceiptMemory({
           ...receipt,
           filename: attachments.length > 1 ? `${attachments[0].sourceName} (${attachments.length} pages)` : attachments[0].filename,
           images: attachments
         }, formVersion);
+        return applyUsaUploadMode(remembered, usaUploadMode, formVersion);
       });
       setItems((current) => [...current, ...next]);
       if (!selectedIds.length && next.length) {
@@ -961,6 +999,16 @@ export default function App() {
             onChange={(event) => setAiConcurrency(clampAiConcurrency(event.target.value))}
           />
         </label>
+        {formVersion === "USA" && (
+          <label className="toolbar-control upload-mode-control">
+            {t("uploadMode")}
+            <select value={usaUploadMode} onChange={(event) => setUsaUploadMode(normalizeUsaUploadMode(event.target.value))} disabled={busy}>
+              <option value="auto">{t("uploadModeAuto")}</option>
+              <option value="receipt">{t("uploadModeReceipt")}</option>
+              <option value="payment_proof">{t("uploadModePaymentProof")}</option>
+            </select>
+          </label>
+        )}
         <button type="button" className={suggestedAction === "selectFiles" ? "recommended" : ""} onClick={() => receiptInputRef.current?.click()} disabled={busy}>
           <Upload size={17} /> {formVersion === "USA" ? t("selectReceipts") : t("selectFiles")}
         </button>
@@ -1201,7 +1249,20 @@ function DetailsForm({
       {formVersion === "USA" && (
         <label>
           {t("documentType")}
-          <select value={item.documentType} onChange={(event) => onChange({ documentType: event.target.value as DocumentType })}>
+          <select
+            value={item.documentType}
+            onChange={(event) => {
+              const documentType = event.target.value as DocumentType;
+              onChange({
+                documentType,
+                lockedDocumentType: documentType === "unknown" ? undefined : documentType,
+                images: item.images.map((image) => ({
+                  ...image,
+                  supportRole: documentType === "unknown" ? image.supportRole ?? "unknown" : documentType
+                }))
+              });
+            }}
+          >
             <option value="unknown">{t("documentTypeUnknown")}</option>
             <option value="receipt">{t("documentTypeReceipt")}</option>
             <option value="payment_proof">{t("documentTypePaymentProof")}</option>

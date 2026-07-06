@@ -152,6 +152,10 @@ label {
   width: 64px;
 }
 
+.toolbar-control.upload-mode-control select {
+  width: 155px;
+}
+
 .workspace {
   display: grid;
   grid-template-columns: minmax(360px, 1.15fr) minmax(300px, 0.8fr) minmax(360px, 1fr);

@@ -243,6 +243,37 @@ describe("OpenAI extraction", () => {
     expect(result.documentType).toBe("payment_proof");
   });
 
+  it("keeps manually forced payment proof rows as payment proof after AI extraction", () => {
+    const result = applyExtraction(
+      receipt({
+        filename: "bank-proof.png",
+        documentType: "payment_proof",
+        lockedDocumentType: "payment_proof",
+        images: [image({ id: "proof-image", filename: "bank-proof.png", supportRole: "payment_proof" })]
+      }),
+      {
+        date: "2026-06-26",
+        place: "Indiana Toll Road",
+        vendor: "Indiana Toll Road",
+        amount: "2.50",
+        currency: "USD",
+        purpose: "Toll",
+        details: "AI thought this was a receipt.",
+        category: "transportation",
+        payment_method: "Card",
+        receipt_label: "Bank proof",
+        document_type: "receipt",
+        receipt_image_indexes: "1",
+        payment_proof_image_indexes: "",
+        image_roles: "1:receipt"
+      },
+      "USA"
+    );
+
+    expect(result.documentType).toBe("payment_proof");
+    expect(result.images[0].supportRole).toBe("payment_proof");
+  });
+
   it("marks mixed receipt and payment proof image pages from AI page indexes", () => {
     const result = applyExtraction(
       receipt({

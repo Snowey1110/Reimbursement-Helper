@@ -55,6 +55,7 @@ export interface ReceiptItem {
   paymentMethod: string;
   receiptLabel: string;
   documentType: DocumentType;
+  lockedDocumentType?: DocumentType;
   matchedReceiptId: string;
   images: ImageAttachment[];
 }

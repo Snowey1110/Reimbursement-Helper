@@ -74,8 +74,26 @@ describe("Reimbursement Helper web app", () => {
     render(<App />);
 
     expect(screen.getByRole("button", { name: /Select Receipts/ })).toBeInTheDocument();
+    expect(screen.getByLabelText("Import as")).toHaveValue("auto");
     expect(screen.getByRole("button", { name: /Generate Empty/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Select Payment Proof/ })).not.toBeInTheDocument();
+  });
+
+  it("can force selected USA uploads to payment proof rows", async () => {
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("Import as"), { target: { value: "payment_proof" } });
+    const receiptInput = document.querySelector('input[type="file"][accept="image/*,.pdf"]') as HTMLInputElement;
+    fireEvent.change(receiptInput, {
+      target: {
+        files: [new File(["bank"], "bank-proof.png", { type: "image/png" })]
+      }
+    });
+
+    await screen.findAllByText("bank-proof.png");
+
+    expect(screen.getByLabelText("Document type")).toHaveValue("payment_proof");
+    expect(screen.getAllByText("Payment proof").length).toBeGreaterThan(0);
   });
 
   it("recommends Generate All after USA receipt files are selected", async () => {
