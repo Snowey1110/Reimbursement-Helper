@@ -28,7 +28,9 @@ const RECEIPT_SCHEMA = {
     category: { type: "string" },
     payment_method: { type: "string" },
     receipt_label: { type: "string" },
-    document_type: { type: "string" }
+    document_type: { type: "string" },
+    receipt_image_indexes: { type: "string" },
+    payment_proof_image_indexes: { type: "string" }
   },
   required: [
     "date",
@@ -44,7 +46,9 @@ const RECEIPT_SCHEMA = {
     "category",
     "payment_method",
     "receipt_label",
-    "document_type"
+    "document_type",
+    "receipt_image_indexes",
+    "payment_proof_image_indexes"
   ]
 };
 
@@ -101,6 +105,16 @@ function looksLikeMerchantReceipt(values: unknown[]): boolean {
   return /\b(receipt|ticket|invoice|total|subtotal|tax|authorization|terminal|thank you|cashier|merchant copy)\b/.test(text);
 }
 
+function parseImageIndexes(value: unknown, max: number): Set<number> {
+  const result = new Set<number>();
+  const text = String(value ?? "");
+  for (const match of text.matchAll(/\d+/g)) {
+    const index = Number(match[0]) - 1;
+    if (Number.isInteger(index) && index >= 0 && index < max) result.add(index);
+  }
+  return result;
+}
+
 function parseRate(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   const text = String(value ?? "").replace(/,/g, "");
@@ -121,6 +135,9 @@ export async function extractReceiptWithOpenAI(apiKey: string, model: string, fo
     "A merchant receipt paid by credit card is still document_type receipt, not payment_proof.",
     "If the attached entry has multiple pages/images, review every image before choosing document_type.",
     "If an entry includes both a merchant receipt/ticket and a bank/card transaction screenshot, classify it as receipt and extract the merchant receipt/ticket details.",
+    "Return receipt_image_indexes as comma-separated 1-based image numbers for merchant receipt/ticket pages.",
+    "Return payment_proof_image_indexes as comma-separated 1-based image numbers for bank/card transaction proof pages.",
+    "If all attached images are proof pages, document_type should be payment_proof and payment_proof_image_indexes should include all proof images.",
     "Parking, parking lots and garages, toll, bridge, fuel, gas, rideshare, taxi, airfare, airline, car rental, and baggage fees are transportation, never meals.",
     "For Korea uploads, document_type should normally be receipt unless the image is clearly not reimbursement support.",
     "Keep applicant/personal identity fields blank.",
@@ -283,8 +300,29 @@ export function applyExtraction(item: ReceiptItem, extraction: ReceiptExtraction
   if (formVersion === "USA" && documentType === "payment_proof" && strongReceipt) {
     documentType = "receipt";
   }
+  const receiptImageIndexes = parseImageIndexes(extraction.receipt_image_indexes, item.images.length);
+  const paymentProofImageIndexes = parseImageIndexes(extraction.payment_proof_image_indexes, item.images.length);
+  if (!receiptImageIndexes.size && !paymentProofImageIndexes.size && formVersion === "USA") {
+    if (documentType === "payment_proof") {
+      item.images.forEach((_, index) => paymentProofImageIndexes.add(index));
+    } else if (documentType === "receipt") {
+      item.images.forEach((_, index) => receiptImageIndexes.add(index));
+    }
+  }
+  if (receiptImageIndexes.size) {
+    documentType = "receipt";
+  } else if (paymentProofImageIndexes.size === item.images.length && item.images.length > 0) {
+    documentType = "payment_proof";
+  }
   let next: ReceiptItem = {
     ...item,
+    images:
+      formVersion === "USA"
+        ? item.images.map((image, index) => ({
+            ...image,
+            supportRole: paymentProofImageIndexes.has(index) ? "payment_proof" : receiptImageIndexes.has(index) ? "receipt" : image.supportRole ?? "unknown"
+          }))
+        : item.images,
     date: String(extraction.date ?? item.date ?? ""),
     place: String(extraction.place ?? extraction.vendor ?? item.place ?? ""),
     amount: String(extraction.amount ?? item.amount ?? ""),

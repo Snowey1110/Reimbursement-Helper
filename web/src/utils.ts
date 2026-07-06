@@ -325,6 +325,17 @@ export function isUsaPaymentProofItem(item: ReceiptItem): boolean {
   return item.documentType === "payment_proof";
 }
 
+function receiptSideImages(item: ReceiptItem): ImageAttachment[] {
+  if (item.documentType === "payment_proof") return [];
+  const receiptImages = item.images.filter((image) => image.supportRole !== "payment_proof");
+  return receiptImages.length ? receiptImages : [...item.images];
+}
+
+function proofSideImages(item: ReceiptItem): ImageAttachment[] {
+  if (item.documentType === "payment_proof") return [...item.images];
+  return item.images.filter((image) => image.supportRole === "payment_proof");
+}
+
 export function receiptAttentionReason(item: ReceiptItem, formVersion: "USA" | "Korea"): string | undefined {
   if (item.status === "Failed") return "AI failed";
   if (formVersion === "USA" && item.documentType === "unknown") return "Unknown document type";
@@ -499,8 +510,8 @@ export function buildUsaReportRows(items: ReceiptItem[], proofs: PaymentProof[] 
     expenseItem: item,
     date: item.date,
     amount: item.amount,
-    receiptImages: [...item.images],
-    proofImages: []
+    receiptImages: receiptSideImages(item),
+    proofImages: proofSideImages(item)
   }));
   const rowByReceiptId = new Map(rows.map((row) => [row.id, row]));
   const proofCandidates = [
@@ -510,7 +521,7 @@ export function buildUsaReportRows(items: ReceiptItem[], proofs: PaymentProof[] 
       amount: item.amount,
       matchedReceiptId: item.matchedReceiptId,
       expenseItem: item,
-      images: item.images
+      images: proofSideImages(item)
     })),
     ...proofs.map((proof) => ({
       id: proof.id,

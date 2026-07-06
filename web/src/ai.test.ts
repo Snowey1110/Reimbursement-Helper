@@ -160,4 +160,38 @@ describe("OpenAI extraction", () => {
 
     expect(result.documentType).toBe("payment_proof");
   });
+
+  it("marks mixed receipt and payment proof image pages from AI page indexes", () => {
+    const result = applyExtraction(
+      receipt({
+        filename: "mixed.pdf",
+        images: [image({ id: "proof-page", filename: "mixed.pdf page 1" }), image({ id: "receipt-page", filename: "mixed.pdf page 2" })]
+      }),
+      {
+        date: "2026-06-19",
+        place: "McCormick Place",
+        vendor: "McCormick Place",
+        amount: "27.00",
+        currency: "USD",
+        purpose: "Parking",
+        details: "Merchant receipt and Chase proof for the same payment.",
+        category: "transportation",
+        payment_method: "Visa",
+        receipt_label: "Parking receipt",
+        krw_amount: "",
+        rmb_amount: "",
+        project_number: "",
+        document_type: "receipt",
+        payment_proof_image_indexes: "1",
+        receipt_image_indexes: "2"
+      },
+      "USA"
+    );
+
+    expect(result.documentType).toBe("receipt");
+    expect(result.images.map((entry) => [entry.id, entry.supportRole])).toEqual([
+      ["proof-page", "payment_proof"],
+      ["receipt-page", "receipt"]
+    ]);
+  });
 });

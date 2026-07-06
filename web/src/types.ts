@@ -30,6 +30,7 @@ export interface ImageAttachment {
   width: number;
   height: number;
   fingerprint?: string;
+  supportRole?: "receipt" | "payment_proof" | "unknown";
   cropPoints?: CropPoint[];
   rotationDegrees: number;
   sourcePage?: number;
@@ -90,6 +91,8 @@ export interface ReceiptExtraction {
   payment_method?: string;
   receipt_label?: string;
   document_type?: string;
+  receipt_image_indexes?: string;
+  payment_proof_image_indexes?: string;
 }
 
 export interface SelectedTile {

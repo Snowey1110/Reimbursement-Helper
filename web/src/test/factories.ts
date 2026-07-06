@@ -10,6 +10,7 @@ export function image(overrides: Partial<ImageAttachment> = {}): ImageAttachment
     width: overrides.width ?? 100,
     height: overrides.height ?? 200,
     fingerprint: overrides.fingerprint,
+    supportRole: overrides.supportRole,
     rotationDegrees: overrides.rotationDegrees ?? 0,
     cropPoints: overrides.cropPoints,
     sourcePage: overrides.sourcePage,

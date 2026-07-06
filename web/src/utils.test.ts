@@ -121,6 +121,25 @@ describe("payment proof matching", () => {
     expect(rows[0].proofImages.map((entry) => entry.id)).toEqual(["proof-img"]);
   });
 
+  it("splits mixed receipt entries into receipt and proof columns by page role", () => {
+    const rows = buildUsaReportRows([
+      receipt({
+        id: "mixed",
+        date: "2026-06-19",
+        amount: "27",
+        documentType: "receipt",
+        images: [
+          image({ id: "chase-page", supportRole: "payment_proof" }),
+          image({ id: "receipt-page", supportRole: "receipt" })
+        ]
+      })
+    ]);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].receiptImages.map((entry) => entry.id)).toEqual(["receipt-page"]);
+    expect(rows[0].proofImages.map((entry) => entry.id)).toEqual(["chase-page"]);
+  });
+
   it("forces parking and toll text back to transportation even if AI says meals", () => {
     const item = receipt({
       id: "wabash",
