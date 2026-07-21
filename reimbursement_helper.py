@@ -97,6 +97,8 @@ LOGGER = logging.getLogger("reimbursement_helper")
 ExportProgressCallback = Callable[[int, int, str], None]
 EXCEL_CONTACT_SHEET_CACHE: Dict[Tuple[Any, ...], Path] = {}
 EXCEL_CONTACT_SHEET_CACHE_LOCK = threading.Lock()
+IMAGE_PERCEPTUAL_HASH_CACHE: Dict[Tuple[str, int, int], int] = {}
+IMAGE_PERCEPTUAL_HASH_CACHE_LOCK = threading.Lock()
 
 
 USA_TEMPLATE_NAME = "usa_expense_report_template.xlsx"
@@ -573,6 +575,7 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "rotate_left": "Rotate left",
         "rotate_right": "Rotate right",
         "revert": "Revert",
+        "separate_screenshot": "Separate",
         "delete_screenshot": "Delete selected screenshot",
         "open_output_folder": "Open output folder",
         "ready": "Ready",
@@ -660,6 +663,7 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "rotate_left": "\u5411\u5de6\u65cb\u8f6c",
         "rotate_right": "\u5411\u53f3\u65cb\u8f6c",
         "revert": "\u8fd8\u539f",
+        "separate_screenshot": "\u62c6\u5206",
         "delete_screenshot": "\u5220\u9664\u9009\u4e2d\u622a\u56fe",
         "open_output_folder": "\u6253\u5f00\u8f93\u51fa\u6587\u4ef6\u5939",
         "ready": "\u5c31\u7eea",
@@ -747,6 +751,7 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "rotate_left": "\uc67c\ucabd \ud68c\uc804",
         "rotate_right": "\uc624\ub978\ucabd \ud68c\uc804",
         "revert": "\ub418\ub3cc\ub9ac\uae30",
+        "separate_screenshot": "\ubd84\ub9ac",
         "delete_screenshot": "\uc120\ud0dd\ud55c \uc2a4\ud06c\ub9b0\uc0f7 \uc0ad\uc81c",
         "open_output_folder": "\ucd9c\ub825 \ud3f4\ub354 \uc5f4\uae30",
         "ready": "\uc900\ube44\ub428",
@@ -825,6 +830,7 @@ class ReceiptItem:
     status: str = "Empty"
     crop_box: Optional[List[float]] = None
     rotation_degrees: int = 0
+    rotation_locked: bool = False
     receipt_images: List[Dict[str, Any]] = field(default_factory=list)
 
 
@@ -842,6 +848,7 @@ class BankStatementItem:
     status: str = "Needs AI"
     crop_box: Optional[List[float]] = None
     rotation_degrees: int = 0
+    rotation_locked: bool = False
 
 
 def attachment_from_item(item: Any) -> Dict[str, Any]:
@@ -853,6 +860,7 @@ def attachment_from_item(item: Any) -> Dict[str, Any]:
         "source_page": getattr(item, "source_page", ""),
         "crop_box": copy.deepcopy(getattr(item, "crop_box", None)),
         "rotation_degrees": normalize_rotation(getattr(item, "rotation_degrees", 0)),
+        "rotation_locked": bool(getattr(item, "rotation_locked", False)),
     }
 
 
@@ -870,6 +878,7 @@ def normalize_attachment(raw: Any) -> Optional[Dict[str, Any]]:
         "source_page": str(raw.get("source_page") or ""),
         "crop_box": raw.get("crop_box") if isinstance(raw.get("crop_box"), list) else None,
         "rotation_degrees": normalize_rotation(raw.get("rotation_degrees", 0)),
+        "rotation_locked": bool(raw.get("rotation_locked", False)),
     }
 
 
@@ -2057,6 +2066,20 @@ def same_month_day_values(left: Any, right: Any) -> bool:
     return bool(left and right and str(left).strip() == str(right).strip())
 
 
+def report_date_day_distance(left: Any, right: Any) -> Optional[int]:
+    left_value = parse_date_value(left)
+    right_value = parse_date_value(right)
+    if not isinstance(left_value, date) or not isinstance(right_value, date):
+        return None
+    year = expected_report_year()
+    try:
+        normalized_left = left_value.replace(year=year)
+        normalized_right = right_value.replace(year=year)
+    except ValueError:
+        return None
+    return abs((normalized_left - normalized_right).days)
+
+
 def sort_receipt_list_for_review(items: List[Any]) -> List[Any]:
     indexed = [
         (
@@ -2309,6 +2332,76 @@ def usa_receipt_merge_key(item: "ReceiptItem") -> Optional[Tuple[str, float]]:
     return date_key, round(amount, 2)
 
 
+def normalized_usa_vendor(value: Any) -> str:
+    text = re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+    tokens = [token for token in text.split() if token not in USA_MATCH_STOP_WORDS]
+    return " ".join(tokens)
+
+
+def attachment_perceptual_hash(attachment: Dict[str, Any]) -> Optional[int]:
+    if Image is None:
+        return None
+    path = Path(str(attachment.get("path") or ""))
+    if not path.exists():
+        return None
+    try:
+        stat = path.stat()
+        cache_key = (str(path.resolve()).lower(), int(stat.st_mtime_ns), int(stat.st_size))
+    except Exception:
+        cache_key = (str(path).lower(), 0, 0)
+    with IMAGE_PERCEPTUAL_HASH_CACHE_LOCK:
+        cached = IMAGE_PERCEPTUAL_HASH_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    try:
+        with Image.open(path) as source:
+            image = ImageOps.exif_transpose(source) if ImageOps is not None else source.copy()
+            image = image.convert("L")
+            resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
+            image = image.resize((17, 16), resampling)
+            pixel_data = image.get_flattened_data() if hasattr(image, "get_flattened_data") else image.getdata()
+            pixels = list(pixel_data)
+        value = 0
+        for row in range(16):
+            offset = row * 17
+            for column in range(16):
+                value = (value << 1) | int(pixels[offset + column] > pixels[offset + column + 1])
+    except Exception:
+        return None
+    with IMAGE_PERCEPTUAL_HASH_CACHE_LOCK:
+        IMAGE_PERCEPTUAL_HASH_CACHE[cache_key] = value
+    return value
+
+
+def perceptual_hash_distance(left: Optional[int], right: Optional[int]) -> Optional[int]:
+    if left is None or right is None:
+        return None
+    return int((left ^ right).bit_count())
+
+
+def usa_receipts_are_same_transaction(left: "ReceiptItem", right: "ReceiptItem") -> bool:
+    if usa_receipt_merge_key(left) != usa_receipt_merge_key(right):
+        return False
+    left_sources = {
+        str(attachment.get("source_path") or "").strip().lower()
+        for attachment in ensure_receipt_images(left)
+        if str(attachment.get("source_path") or "").strip()
+    }
+    right_sources = {
+        str(attachment.get("source_path") or "").strip().lower()
+        for attachment in ensure_receipt_images(right)
+        if str(attachment.get("source_path") or "").strip()
+    }
+    if left_sources & right_sources:
+        return True
+    if usa_identifier_tokens(left) & usa_identifier_tokens(right):
+        return True
+    left_vendor = normalized_usa_vendor(left.place)
+    right_vendor = normalized_usa_vendor(right.place)
+    shared_tokens = usa_match_tokens(left) & usa_match_tokens(right)
+    return bool(left_vendor and left_vendor == right_vendor and len(shared_tokens) >= 2)
+
+
 def usa_receipt_date_score(item: "ReceiptItem") -> int:
     parsed = parse_date_value(item.date)
     if isinstance(parsed, date):
@@ -2502,7 +2595,20 @@ def attachment_looks_like_usa_payment_proof(attachment: Dict[str, Any]) -> bool:
         attachment.get("source_path", ""),
         attachment.get("source_page", ""),
     )
+    for value in values:
+        marker = parse_receipt_memory_marker(str(value or ""))
+        if normalize_document_type(marker.get("document_type"), "unknown") == "payment_proof":
+            return True
     return looks_like_usa_workbook_proof_name(*values) or looks_like_usa_payment_proof_text(*values)
+
+
+def attachment_memory_document_type(attachment: Dict[str, Any]) -> str:
+    for key in ("filename", "path", "source_path", "source_page"):
+        marker = parse_receipt_memory_marker(str(attachment.get(key) or ""))
+        document_type = normalize_document_type(marker.get("document_type"), "unknown")
+        if document_type != "unknown":
+            return document_type
+    return "unknown"
 
 
 def receipt_item_from_payment_proof_attachment(
@@ -2515,6 +2621,13 @@ def receipt_item_from_payment_proof_attachment(
         attachment.get("source_path", ""),
         attachment.get("source_page", ""),
     )
+    marker_record: Dict[str, Any] = {}
+    for key in ("filename", "path", "source_path"):
+        marker_record = parse_receipt_memory_marker(str(attachment.get(key) or ""))
+        if marker_record:
+            break
+    parsed_date = str(marker_record.get("date") or parsed_date or parent.date).strip()
+    parsed_amount = str(marker_record.get("amount") or parsed_amount or parent.amount).strip()
     path = str(attachment.get("path") or "")
     filename = str(attachment.get("filename") or Path(path).name or parent.filename)
     proof = ReceiptItem(
@@ -2524,7 +2637,7 @@ def receipt_item_from_payment_proof_attachment(
         source_path=str(attachment.get("source_path") or path),
         source_page=str(attachment.get("source_page") or ""),
         date=parsed_date,
-        place="",
+        place=str(marker_record.get("place") or parent.place or ""),
         amount=parsed_amount,
         currency="USD",
         purpose="",
@@ -2534,9 +2647,12 @@ def receipt_item_from_payment_proof_attachment(
         payment_method=getattr(parent, "payment_method", ""),
         receipt_label=filename,
         document_type="payment_proof",
-        status="Payment proof",
+        locked_document_type="payment_proof",
+        matched_receipt_id=parent.item_id,
+        status="Matched",
         crop_box=copy.deepcopy(attachment.get("crop_box")),
         rotation_degrees=normalize_rotation(attachment.get("rotation_degrees", 0)),
+        rotation_locked=bool(attachment.get("rotation_locked", False)),
         receipt_images=[copy.deepcopy(attachment)],
     )
     return proof
@@ -2581,15 +2697,22 @@ def split_embedded_usa_payment_proofs(items: List["ReceiptItem"]) -> List["Recei
             item.status = payment_proof_missing_status(item) or "Payment proof"
             split_items.append(item)
             continue
+        grouped_proofs: Dict[str, List[Dict[str, Any]]] = {}
         for attachment in proof_images:
-            split_items.append(receipt_item_from_payment_proof_attachment(attachment, item))
+            source = str(attachment.get("source_path") or attachment.get("path") or attachment.get("id") or "")
+            grouped_proofs.setdefault(source.lower(), []).append(attachment)
+        for attachments in grouped_proofs.values():
+            proof_item = receipt_item_from_payment_proof_attachment(attachments[0], item)
+            proof_item.receipt_images = [copy.deepcopy(attachment) for attachment in attachments]
+            ensure_receipt_images(proof_item)
+            split_items.append(proof_item)
     return split_items
 
 
 def merge_same_usa_receipt_items(items: List["ReceiptItem"]) -> Tuple[List["ReceiptItem"], Dict[str, str], int]:
     merged_count = 0
     merged_items: List[ReceiptItem] = []
-    seen: Dict[Tuple[str, float], ReceiptItem] = {}
+    seen: Dict[Tuple[str, float], List[ReceiptItem]] = {}
     removed_to_target: Dict[str, str] = {}
     for item in items:
         auto_classify_usa_document_type(item)
@@ -2598,15 +2721,15 @@ def merge_same_usa_receipt_items(items: List["ReceiptItem"]) -> Tuple[List["Rece
         if not is_usa_receipt_item(item):
             merged_items.append(item)
             continue
-        auto_rotate_landscape_receipt_images(item)
         ensure_receipt_images(item)
         key = usa_receipt_merge_key(item)
-        if key is None or key not in seen:
+        candidates = seen.get(key, []) if key is not None else []
+        target = next((candidate for candidate in candidates if usa_receipts_are_same_transaction(candidate, item)), None)
+        if target is None:
             if key is not None:
-                seen[key] = item
+                seen.setdefault(key, []).append(item)
             merged_items.append(item)
             continue
-        target = seen[key]
         merge_usa_receipt_item_into(target, item)
         removed_to_target[item.item_id] = target.item_id
         merged_count += 1
@@ -2663,6 +2786,44 @@ def merge_same_usa_receipt_items(items: List["ReceiptItem"]) -> Tuple[List["Rece
     return merged_items, removed_to_target, merged_count
 
 
+def usa_payment_proofs_are_duplicates(left: "ReceiptItem", right: "ReceiptItem") -> bool:
+    left_amount = safe_float(left.amount)
+    right_amount = safe_float(right.amount)
+    if left_amount is None or right_amount is None or abs(left_amount - right_amount) > 0.01:
+        return False
+    if not same_expense_date_values(left.date, right.date):
+        return False
+    left_images = ensure_receipt_images(left)
+    right_images = ensure_receipt_images(right)
+    if not left_images or not right_images:
+        return False
+    distance = perceptual_hash_distance(
+        attachment_perceptual_hash(left_images[0]),
+        attachment_perceptual_hash(right_images[0]),
+    )
+    if distance is None or distance > 24:
+        return False
+    left_vendor = normalized_usa_vendor(left.place)
+    right_vendor = normalized_usa_vendor(right.place)
+    if left_vendor and right_vendor and left_vendor != right_vendor:
+        return False
+    return True
+
+
+def mark_duplicate_usa_payment_proofs(items: List["ReceiptItem"]) -> int:
+    keepers: List[ReceiptItem] = []
+    duplicate_count = 0
+    for proof in [item for item in items if is_usa_payment_proof_item(item)]:
+        keeper = next((candidate for candidate in keepers if usa_payment_proofs_are_duplicates(candidate, proof)), None)
+        if keeper is None:
+            keepers.append(proof)
+            continue
+        proof.matched_receipt_id = keeper.matched_receipt_id
+        proof.status = "Duplicate proof"
+        duplicate_count += 1
+    return duplicate_count
+
+
 def match_usa_payment_proof_items(items: List["ReceiptItem"]) -> None:
     receipts = [item for item in items if is_usa_receipt_item(item)]
     for proof_item in items:
@@ -2674,22 +2835,32 @@ def match_usa_payment_proof_items(items: List["ReceiptItem"]) -> None:
             proof_item.matched_receipt_id = ""
             proof_item.status = missing_status
             continue
-        matches: List[ReceiptItem] = []
+        scored_matches: List[Tuple[int, ReceiptItem]] = []
         for receipt in receipts:
             receipt_amount = safe_float(receipt.amount)
             if receipt_amount is None:
                 continue
             if abs(receipt_amount - proof_amount) > 0.01:
                 continue
-            if not same_expense_date_values(receipt.date, proof_item.date):
+            day_distance = report_date_day_distance(receipt.date, proof_item.date)
+            if day_distance is None or day_distance > 1:
                 continue
-            matches.append(receipt)
-        if len(matches) == 1:
-            proof_item.matched_receipt_id = matches[0].item_id
+            overlap = len(usa_match_tokens(receipt) & usa_match_tokens(proof_item))
+            score = (100 if day_distance == 0 else 70) + min(overlap, 5) * 5
+            scored_matches.append((score, receipt))
+        scored_matches.sort(key=lambda entry: entry[0], reverse=True)
+        best_matches = [
+            receipt
+            for score, receipt in scored_matches
+            if scored_matches and score == scored_matches[0][0]
+        ]
+        if len(best_matches) == 1:
+            proof_item.matched_receipt_id = best_matches[0].item_id
             proof_item.status = "Matched"
         else:
             proof_item.matched_receipt_id = ""
-            proof_item.status = "Multiple possible matches" if len(matches) > 1 else "Payment proof"
+            proof_item.status = "Multiple possible matches" if len(best_matches) > 1 else "Payment proof"
+    mark_duplicate_usa_payment_proofs(items)
 
 
 def match_bank_statement_to_receipt(bank_item: "BankStatementItem", receipts: List["ReceiptItem"]) -> None:
@@ -2699,22 +2870,36 @@ def match_bank_statement_to_receipt(bank_item: "BankStatementItem", receipts: Li
         bank_item.matched_receipt_id = ""
         bank_item.status = missing_status
         return
-    matches: List[ReceiptItem] = []
+    scored_matches: List[Tuple[int, ReceiptItem]] = []
     for receipt in receipts:
         receipt_amount = safe_float(receipt.amount)
         if receipt_amount is None:
             continue
         if abs(receipt_amount - bank_amount) > 0.01:
             continue
-        if not same_expense_date_values(receipt.date, bank_item.date):
+        day_distance = report_date_day_distance(receipt.date, bank_item.date)
+        if day_distance is None or day_distance > 1:
             continue
-        matches.append(receipt)
-    if len(matches) == 1:
-        bank_item.matched_receipt_id = matches[0].item_id
+        receipt_tokens = usa_match_tokens(receipt)
+        bank_tokens = {
+            token
+            for token in re.findall(r"[a-z0-9]+", f"{bank_item.place} {bank_item.filename}".lower())
+            if len(token) >= 3 and token not in USA_MATCH_STOP_WORDS and not token.isdigit()
+        }
+        score = (100 if day_distance == 0 else 70) + min(len(receipt_tokens & bank_tokens), 5) * 5
+        scored_matches.append((score, receipt))
+    scored_matches.sort(key=lambda entry: entry[0], reverse=True)
+    best_matches = [
+        receipt
+        for score, receipt in scored_matches
+        if scored_matches and score == scored_matches[0][0]
+    ]
+    if len(best_matches) == 1:
+        bank_item.matched_receipt_id = best_matches[0].item_id
         bank_item.status = "Matched"
     else:
         bank_item.matched_receipt_id = ""
-        bank_item.status = "Multiple possible matches" if len(matches) > 1 else "Payment proof"
+        bank_item.status = "Multiple possible matches" if len(best_matches) > 1 else "Payment proof"
 
 
 def build_usa_report_rows(
@@ -2748,7 +2933,7 @@ def build_usa_report_rows(
     row_by_receipt_id = {str(row["id"]): row for row in rows}
     proof_candidates: List[Dict[str, Any]] = []
     for item in working_items:
-        if is_usa_payment_proof_item(item):
+        if is_usa_payment_proof_item(item) and item.status != "Duplicate proof":
             proof_candidates.append(
                 {
                     "id": item.item_id,
@@ -2859,25 +3044,28 @@ def normalize_rotation(value: Any) -> int:
 
 
 def apply_primary_receipt_rotation_hint(item: "ReceiptItem", value: Any) -> bool:
-    rotation = normalize_rotation(value)
-    if not rotation:
+    if value is None or str(value).strip() == "":
         return False
+    rotation = normalize_rotation(value)
     images = ensure_receipt_images(item)
     if not images:
         return False
     primary = images[0]
-    if normalize_rotation(primary.get("rotation_degrees", 0)):
+    if bool(primary.get("rotation_locked", False)) or bool(getattr(item, "rotation_locked", False)):
         return False
+    changed = normalize_rotation(primary.get("rotation_degrees", 0)) != rotation
     primary["rotation_degrees"] = rotation
     item.rotation_degrees = rotation
     item.crop_box = primary.get("crop_box")
-    return True
+    return changed
 
 
 def attachment_needs_landscape_rotation(attachment: Dict[str, Any]) -> bool:
     if Image is None:
         return False
     if normalize_rotation(attachment.get("rotation_degrees", 0)):
+        return False
+    if bool(attachment.get("rotation_locked", False)):
         return False
     if attachment.get("crop_box"):
         return False
@@ -2891,6 +3079,29 @@ def attachment_needs_landscape_rotation(attachment: Dict[str, Any]) -> bool:
     except Exception:
         return False
     return width > max(1, int(height * EXPORT_AUTO_ROTATE_LANDSCAPE_RATIO))
+
+
+def reset_legacy_landscape_auto_rotation(attachment: Dict[str, Any]) -> bool:
+    if "rotation_locked" in attachment:
+        return False
+    if normalize_rotation(attachment.get("rotation_degrees", 0)) not in {90, 270}:
+        return False
+    if attachment_memory_document_type(attachment) != "receipt":
+        return False
+    path = Path(str(attachment.get("path") or ""))
+    if Image is None or not path.exists():
+        return False
+    try:
+        with Image.open(path) as source:
+            image = ImageOps.exif_transpose(source) if ImageOps is not None else source
+            width, height = image.size
+    except Exception:
+        return False
+    if width <= max(1, int(height * EXPORT_AUTO_ROTATE_LANDSCAPE_RATIO)):
+        return False
+    attachment["rotation_degrees"] = 0
+    attachment["rotation_locked"] = False
+    return True
 
 
 def auto_rotate_landscape_receipt_images(item: "ReceiptItem") -> bool:
@@ -3144,6 +3355,7 @@ def ensure_receipt_images(item: ReceiptItem) -> List[Dict[str, Any]]:
         item.source_page = primary.get("source_page", "")
         item.crop_box = primary.get("crop_box")
         item.rotation_degrees = normalize_rotation(primary.get("rotation_degrees", 0))
+        item.rotation_locked = bool(primary.get("rotation_locked", False))
     return item.receipt_images
 
 
@@ -4500,6 +4712,7 @@ class ReimbursementHelperApp:
         self.zoom_label: Optional[Any] = None
         self.rotate_left_btn: Optional[Any] = None
         self.rotate_right_btn: Optional[Any] = None
+        self.separate_screenshot_btn: Optional[Any] = None
         self.delete_screenshot_btn: Optional[Any] = None
         self.swap_proof_btn: Optional[Any] = None
         self.unlink_proof_btn: Optional[Any] = None
@@ -4989,6 +5202,14 @@ class ReimbursementHelperApp:
         )
         self.revert_crop_btn.grid(row=0, column=6, sticky="e")
         ToolTip(self.revert_crop_btn, self.tr("revert"))
+        self.separate_screenshot_btn = ttk.Button(
+            preview_header,
+            text=self.tr("separate_screenshot"),
+            command=self.separate_selected_screenshot,
+            state="disabled",
+        )
+        self.separate_screenshot_btn.grid(row=0, column=7, sticky="e", padx=(6, 0))
+        ToolTip(self.separate_screenshot_btn, self.tr("separate_screenshot"))
         self.delete_screenshot_btn = ttk.Button(
             preview_header,
             text="\u2715",
@@ -4996,7 +5217,7 @@ class ReimbursementHelperApp:
             state="disabled",
             style="Icon.TButton",
         )
-        self.delete_screenshot_btn.grid(row=0, column=7, sticky="e", padx=(6, 0))
+        self.delete_screenshot_btn.grid(row=0, column=8, sticky="e", padx=(6, 0))
         ToolTip(self.delete_screenshot_btn, self.tr("delete_screenshot"))
         preview_frame = ttk.Frame(right, style="Panel.TFrame")
         preview_frame.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
@@ -5200,6 +5421,7 @@ class ReimbursementHelperApp:
             (self.remove_btn, "remove"),
             (self.clear_btn, "clear"),
             (self.revert_crop_btn, "revert"),
+            (self.separate_screenshot_btn, "separate_screenshot"),
             (self.open_output_btn, "open_output_folder"),
         ):
             if widget is not None:
@@ -6811,6 +7033,8 @@ class ReimbursementHelperApp:
             self.rotate_right_btn.configure(state="disabled")
         if self.delete_screenshot_btn is not None:
             self.delete_screenshot_btn.configure(state="disabled")
+        if self.separate_screenshot_btn is not None:
+            self.separate_screenshot_btn.configure(state="disabled")
         if self.zoom_out_btn is not None:
             self.zoom_out_btn.configure(state="disabled")
         if self.zoom_in_btn is not None:
@@ -6883,6 +7107,7 @@ class ReimbursementHelperApp:
             proof_item.crop_box = copy.deepcopy(crop_box)
             if rotation_degrees is not None:
                 proof_item.rotation_degrees = normalize_rotation(rotation_degrees)
+                proof_item.rotation_locked = True
             return
         if attachment is None:
             return
@@ -6895,6 +7120,7 @@ class ReimbursementHelperApp:
         attachment["crop_box"] = copy.deepcopy(crop_box)
         if rotation_degrees is not None:
             attachment["rotation_degrees"] = normalize_rotation(rotation_degrees)
+            attachment["rotation_locked"] = True
         if receipt is not None:
             ensure_receipt_images(receipt)
 
@@ -7191,6 +7417,12 @@ class ReimbursementHelperApp:
         if self.delete_screenshot_btn is not None:
             self.delete_screenshot_btn.configure(state=state)
         receipt = self.selected_item()
+        can_separate = False
+        tile = self.selected_preview_tile()
+        if receipt is not None and tile is not None and str(tile.get("kind") or "receipt") == "receipt":
+            can_separate = len(ensure_receipt_images(receipt)) > 1
+        if self.separate_screenshot_btn is not None:
+            self.separate_screenshot_btn.configure(state="normal" if can_separate else "disabled")
         has_proofs = bool(receipt and self.payment_proofs_for_receipt(receipt))
         can_use_proofs = self.form_version.get() == "USA" and receipt is not None and bool(self.bank_items)
         if self.swap_proof_btn is not None:
@@ -7439,6 +7671,7 @@ class ReimbursementHelperApp:
             status="Payment proof" if removing_row else "Matched manually",
             crop_box=copy.deepcopy(attachment.get("crop_box")),
             rotation_degrees=normalize_rotation(attachment.get("rotation_degrees", 0)),
+            rotation_locked=bool(attachment.get("rotation_locked", False)),
         )
         self.bank_items.append(proof_item)
         del images[index]
@@ -7471,6 +7704,65 @@ class ReimbursementHelperApp:
             self.update_preview()
         self.save_session()
         self.status_text.set("Moved screenshot to Payment proof.")
+        self._details_ready_for_export = False
+        self.update_toolbar_recommendation()
+
+    def separate_selected_screenshot(self) -> None:
+        tile = self.selected_preview_tile()
+        receipt = self.selected_item()
+        if tile is None or receipt is None or str(tile.get("kind") or "receipt") != "receipt":
+            return
+        images = ensure_receipt_images(receipt)
+        index = int(tile.get("index") or 0)
+        if len(images) <= 1 or index < 0 or index >= len(images):
+            self.status_text.set("Select a screenshot from a row containing more than one image.")
+            return
+        attachment = copy.deepcopy(images[index])
+        filename = str(attachment.get("filename") or Path(str(attachment.get("path") or "")).name)
+        if messagebox and not messagebox.askyesno(
+            self.tr("separate_screenshot"),
+            f"Separate this screenshot into its own row?\n\n{filename}",
+        ):
+            return
+        document_type = attachment_memory_document_type(attachment)
+        if document_type == "unknown" and attachment_looks_like_usa_payment_proof(attachment):
+            document_type = "payment_proof"
+        if self.form_version.get() != "USA":
+            document_type = "receipt"
+        separated = ReceiptItem(
+            item_id=uuid.uuid4().hex,
+            path=str(attachment.get("path") or ""),
+            filename=filename,
+            source_path=str(attachment.get("source_path") or ""),
+            source_page=str(attachment.get("source_page") or ""),
+            date=receipt.date if document_type == "payment_proof" else "",
+            place=receipt.place if document_type == "payment_proof" else "",
+            amount=receipt.amount if document_type == "payment_proof" else "",
+            currency="USD" if self.form_version.get() == "USA" else receipt.currency,
+            project_number=receipt.project_number,
+            category=receipt.category,
+            payment_method=receipt.payment_method if document_type == "payment_proof" else "",
+            receipt_label=filename,
+            document_type=document_type,
+            locked_document_type=document_type if document_type != "unknown" else "",
+            matched_receipt_id=receipt.item_id if document_type == "payment_proof" else "",
+            status="Matched manually" if document_type == "payment_proof" else "Needs regen",
+            crop_box=copy.deepcopy(attachment.get("crop_box")),
+            rotation_degrees=normalize_rotation(attachment.get("rotation_degrees", 0)),
+            rotation_locked=bool(attachment.get("rotation_locked", False)),
+            receipt_images=[attachment],
+        )
+        del images[index]
+        receipt.receipt_images = images
+        ensure_receipt_images(receipt)
+        insert_at = (self.selected_index or 0) + 1
+        self.items.insert(insert_at, separated)
+        self.selected_attachment_kind = "receipt"
+        self.selected_attachment_index = 0
+        self.refresh_tree()
+        self.select_index(insert_at)
+        self.save_session()
+        self.status_text.set(f"Separated {filename} into its own row.")
         self._details_ready_for_export = False
         self.update_toolbar_recommendation()
 
@@ -7778,16 +8070,24 @@ class ReimbursementHelperApp:
     def merge_same_usa_receipts(self) -> int:
         if self.form_version.get() != "USA":
             return 0
-        merged_items, removed_to_target, merged_count = merge_same_usa_receipt_items(self.items)
-        if not merged_count:
+        selected_id = self.selected_item().item_id if self.selected_item() is not None else ""
+        split_items = split_embedded_usa_payment_proofs(self.items)
+        split_count = max(0, len(split_items) - len(self.items))
+        merged_items, removed_to_target, merged_count = merge_same_usa_receipt_items(split_items)
+        if not merged_count and not split_count:
             return 0
         self.items = merged_items
         for proof_item in self.bank_items:
             if proof_item.matched_receipt_id in removed_to_target:
                 proof_item.matched_receipt_id = removed_to_target[proof_item.matched_receipt_id]
+        if selected_id:
+            self.selected_index = next(
+                (index for index, item in enumerate(self.items) if item.item_id == selected_id),
+                self.selected_index,
+            )
         if self.selected_index is not None and self.selected_index >= len(self.items):
             self.selected_index = max(0, len(self.items) - 1) if self.items else None
-        return merged_count
+        return merged_count + split_count
 
     def _submit_excel_image_prewarm(
         self,
@@ -8074,7 +8374,7 @@ class ReimbursementHelperApp:
                 match_usa_payment_proof_items(self.items)
                 if merged_count:
                     self.root.after(0, self.refresh_tree)
-                    self.set_status(f"Merged {merged_count} duplicate receipt screenshot(s).")
+                    self.set_status(f"Organized {merged_count} receipt or payment-proof screenshot(s).")
                 self.queue_excel_export_prewarm(form_version)
             elif form_version == "Korea" and not cancel_event.is_set():
                 self.queue_excel_export_prewarm(form_version)
@@ -8540,7 +8840,13 @@ class ReimbursementHelperApp:
                 values["crop_box"] = None
             if not isinstance(values.get("receipt_images"), list):
                 values["receipt_images"] = []
+            else:
+                values["receipt_images"] = copy.deepcopy(values["receipt_images"])
+                for attachment in values["receipt_images"]:
+                    if isinstance(attachment, dict):
+                        reset_legacy_landscape_auto_rotation(attachment)
             values["rotation_degrees"] = normalize_rotation(values.get("rotation_degrees", 0))
+            values["rotation_locked"] = bool(values.get("rotation_locked", False))
             values["document_type"] = normalize_document_type(values.get("document_type"), "receipt")
             locked = normalize_document_type(values.get("locked_document_type"), "unknown")
             values["locked_document_type"] = locked if locked != "unknown" else ""
@@ -8561,6 +8867,7 @@ class ReimbursementHelperApp:
             if not isinstance(values.get("crop_box"), list):
                 values["crop_box"] = None
             values["rotation_degrees"] = normalize_rotation(values.get("rotation_degrees", 0))
+            values["rotation_locked"] = bool(values.get("rotation_locked", False))
             restored_bank.append(BankStatementItem(**values))
         restored_exchange: List[BankStatementItem] = []
         for raw in raw_exchange_rate_items:
@@ -8572,6 +8879,7 @@ class ReimbursementHelperApp:
             if not isinstance(values.get("crop_box"), list):
                 values["crop_box"] = None
             values["rotation_degrees"] = normalize_rotation(values.get("rotation_degrees", 0))
+            values["rotation_locked"] = bool(values.get("rotation_locked", False))
             restored_exchange.append(BankStatementItem(**values))
         self.form_version.set(normalized_form_version(data.get("form_version") or self.form_version.get()))
         self.exchange_rate.set(str(data.get("usa_exchange_rate") or DEFAULT_USD_TO_RMB_RATE))
