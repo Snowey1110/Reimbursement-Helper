@@ -46,7 +46,8 @@ import {
   sortReceiptsForReport,
   swapProofForReceipt,
   updateAmounts,
-  uid
+  uid,
+  usaExportAuditIssues
 } from "./utils";
 
 const STORAGE_KEY = "reimbursement-helper-web-api-key";
@@ -132,7 +133,8 @@ function applyUsaUploadMode(item: ReceiptItem, mode: UsaUploadMode, formVersion:
     status: mode === "payment_proof" ? "Payment proof" : item.status,
     images: item.images.map((image) => ({
       ...image,
-      supportRole: mode
+      supportRole: mode,
+      roleSource: "manual"
     }))
   };
 }
@@ -644,14 +646,20 @@ export default function App() {
       return {
         ...attachment,
         cropPoints: rotateCropPoints(attachment.cropPoints, size.width, size.height, delta),
-        rotationDegrees: (attachment.rotationDegrees + delta + 360) % 360
+        rotationDegrees: (attachment.rotationDegrees + delta + 360) % 360,
+        rotationLocked: true
       };
     });
   }
 
   function revertSelected() {
     if (!selectedTile) return;
-    updateAttachment(selectedTile, (attachment) => ({ ...attachment, cropPoints: undefined, rotationDegrees: 0 }));
+    updateAttachment(selectedTile, (attachment) => ({
+      ...attachment,
+      cropPoints: undefined,
+      rotationDegrees: 0,
+      rotationLocked: true
+    }));
   }
 
   function moveImageToProof(receiptId: string, imageId: string) {
@@ -666,7 +674,7 @@ export default function App() {
       amount: receipt.amount,
       place: receipt.place,
       matchedReceiptId: receipt.images.length > 1 ? receipt.id : "",
-      image
+      image: { ...image, supportRole: "payment_proof", roleSource: "manual" }
     };
     setProofs((current) => [...current, newProof]);
     setItems((current) =>
@@ -845,6 +853,9 @@ export default function App() {
         if (unknownItems.length) {
           setStatus(t("unknownDocumentType", { count: unknownItems.length, files: unknownItems.slice(0, 5).map((item) => item.filename).join(", ") }));
           return;
+        }
+        for (const issue of usaExportAuditIssues(items)) {
+          blockingFiles.set(issue.item.filename, issue.reason);
         }
         for (const row of buildUsaReportRows(items, proofs)) {
           const item = row.expenseItem ?? row.item;
@@ -1258,7 +1269,8 @@ function DetailsForm({
                 lockedDocumentType: documentType === "unknown" ? undefined : documentType,
                 images: item.images.map((image) => ({
                   ...image,
-                  supportRole: documentType === "unknown" ? image.supportRole ?? "unknown" : documentType
+                  supportRole: documentType === "unknown" ? image.supportRole ?? "unknown" : documentType,
+                  roleSource: documentType === "unknown" ? image.roleSource ?? "" : "manual"
                 }))
               });
             }}

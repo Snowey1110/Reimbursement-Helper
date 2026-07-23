@@ -625,6 +625,7 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "attention_missing_details": "Missing details",
         "attention_missing_date_amount": "Missing date/amount",
         "attention_wrong_year": "Check year",
+        "attention_multiple_matches": "Multiple possible matches",
     },
     "zh": {
         "app_title": "\u62a5\u9500\u52a9\u624b",
@@ -713,6 +714,7 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "attention_missing_details": "\u7f3a\u5c11\u660e\u7ec6",
         "attention_missing_date_amount": "\u7f3a\u5c11\u65e5\u671f/\u91d1\u989d",
         "attention_wrong_year": "\u68c0\u67e5\u5e74\u4efd",
+        "attention_multiple_matches": "\u6709\u591a\u4e2a\u53ef\u80fd\u5339\u914d",
     },
     "ko": {
         "app_title": "\ud658\uae09 \ub3c4\uc6b0\ubbf8",
@@ -801,6 +803,7 @@ UI_TEXT: Dict[str, Dict[str, str]] = {
         "attention_missing_details": "\uc138\ubd80 \ub0b4\uc6a9 \ub204\ub77d",
         "attention_missing_date_amount": "\ub0a0\uc9dc/\uae08\uc561 \ub204\ub77d",
         "attention_wrong_year": "\uc5f0\ub3c4 \ud655\uc778",
+        "attention_multiple_matches": "\uc77c\uce58 \ud6c4\ubcf4\uac00 \uc5ec\ub7ec \uac1c\uc785\ub2c8\ub2e4",
     },
 }
 
@@ -826,6 +829,12 @@ class ReceiptItem:
     receipt_label: str = ""
     document_type: str = "receipt"
     locked_document_type: str = ""
+    document_evidence: str = ""
+    transaction_date: str = ""
+    posted_date: str = ""
+    bank_name: str = ""
+    card_last4: str = ""
+    transaction_reference: str = ""
     matched_receipt_id: str = ""
     status: str = "Empty"
     crop_box: Optional[List[float]] = None
@@ -851,6 +860,19 @@ class BankStatementItem:
     rotation_locked: bool = False
 
 
+def normalize_support_role(value: Any) -> str:
+    raw = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if raw in {"receipt", "merchant_receipt", "invoice"}:
+        return "receipt"
+    if raw in {"companion_ticket", "ticket", "support_ticket"}:
+        return "companion_ticket"
+    if raw in {"payment_proof", "bank_proof", "card_proof", "proof"}:
+        return "payment_proof"
+    if raw in {"ignore", "ignored"}:
+        return "ignore"
+    return "unknown"
+
+
 def attachment_from_item(item: Any) -> Dict[str, Any]:
     return {
         "id": getattr(item, "item_id", uuid.uuid4().hex),
@@ -861,6 +883,14 @@ def attachment_from_item(item: Any) -> Dict[str, Any]:
         "crop_box": copy.deepcopy(getattr(item, "crop_box", None)),
         "rotation_degrees": normalize_rotation(getattr(item, "rotation_degrees", 0)),
         "rotation_locked": bool(getattr(item, "rotation_locked", False)),
+        "support_role": normalize_support_role(getattr(item, "document_type", "unknown")),
+        "role_source": "manual" if getattr(item, "locked_document_type", "") else "",
+        "document_evidence": str(getattr(item, "document_evidence", "") or ""),
+        "transaction_date": str(getattr(item, "transaction_date", "") or ""),
+        "posted_date": str(getattr(item, "posted_date", "") or ""),
+        "bank_name": str(getattr(item, "bank_name", "") or ""),
+        "card_last4": str(getattr(item, "card_last4", "") or ""),
+        "transaction_reference": str(getattr(item, "transaction_reference", "") or ""),
     }
 
 
@@ -879,6 +909,14 @@ def normalize_attachment(raw: Any) -> Optional[Dict[str, Any]]:
         "crop_box": raw.get("crop_box") if isinstance(raw.get("crop_box"), list) else None,
         "rotation_degrees": normalize_rotation(raw.get("rotation_degrees", 0)),
         "rotation_locked": bool(raw.get("rotation_locked", False)),
+        "support_role": normalize_support_role(raw.get("support_role")),
+        "role_source": str(raw.get("role_source") or ""),
+        "document_evidence": str(raw.get("document_evidence") or ""),
+        "transaction_date": str(raw.get("transaction_date") or ""),
+        "posted_date": str(raw.get("posted_date") or ""),
+        "bank_name": str(raw.get("bank_name") or ""),
+        "card_last4": re.sub(r"\D", "", str(raw.get("card_last4") or ""))[-4:],
+        "transaction_reference": str(raw.get("transaction_reference") or ""),
     }
 
 
@@ -1048,24 +1086,29 @@ def image_data_url(path: Path) -> str:
     return f"data:{image_mime_for_path(path)};base64,{base64.b64encode(raw).decode('ascii')}"
 
 
-def ai_receipt_image_variants(prepared_path: Path, label: str) -> List[Tuple[Path, str]]:
+def ai_receipt_image_variants(prepared_path: Path, label: str) -> List[Tuple[Path, str, int]]:
     if Image is None:
-        return [(prepared_path, label)]
+        return [(prepared_path, label, 0)]
     try:
         with Image.open(prepared_path) as source:
             width, height = source.size
-            if width <= max(1, int(height * AI_AUTO_ROTATE_LANDSCAPE_RATIO)):
-                return [(prepared_path, label)]
             image = source.copy()
     except Exception:
-        return [(prepared_path, label)]
+        return [(prepared_path, label, 0)]
     target_dir = WORK_DIR / "prepared_images"
     target_dir.mkdir(parents=True, exist_ok=True)
-    variants: List[Tuple[Path, str]] = []
-    for degrees, suffix in ((90, "rotated left"), (-90, "rotated right")):
-        target = target_dir / f"{uuid.uuid4().hex}_ai_{suffix.replace(' ', '_')}.png"
-        image.rotate(degrees, expand=True).save(target, "PNG")
-        variants.append((target, f"{label} ({suffix})"))
+    variants: List[Tuple[Path, str, int]] = [(prepared_path, f"{label} (candidate clockwise rotation 0)", 0)]
+    candidate_rotations = (90, 270) if width > max(1, int(height * AI_AUTO_ROTATE_LANDSCAPE_RATIO)) else (180,)
+    for clockwise_degrees in candidate_rotations:
+        target = target_dir / f"{uuid.uuid4().hex}_ai_clockwise_{clockwise_degrees}.png"
+        image.rotate(-clockwise_degrees, expand=True).save(target, "PNG")
+        variants.append(
+            (
+                target,
+                f"{label} (candidate clockwise rotation {clockwise_degrees})",
+                clockwise_degrees,
+            )
+        )
     return variants
 
 
@@ -1084,25 +1127,49 @@ def receipt_ai_image_parts(image_path: Path, existing: ReceiptItem) -> List[Dict
             }
         ]
     parts: List[Dict[str, Any]] = []
-    for attachment in attachments:
+    for attachment_index, attachment in enumerate(attachments, start=1):
         if len(parts) >= MAX_AI_RECEIPT_IMAGES:
             break
         path = Path(str(attachment.get("path") or ""))
         if not path.exists():
             continue
-        prepared = prepare_attachment_image_file(attachment)
+        ai_attachment = attachment
+        if not bool(attachment.get("rotation_locked", False)):
+            ai_attachment = dict(attachment)
+            ai_attachment["rotation_degrees"] = 0
+        prepared = prepare_attachment_image_file(ai_attachment)
         label = str(attachment.get("filename") or path.name)
         source_page = str(attachment.get("source_page") or "").strip()
         if source_page and f"page {source_page}" not in label.lower():
             label = f"{label} (page {source_page})"
-        for variant_path, variant_label in ai_receipt_image_variants(prepared, label):
+        if bool(attachment.get("rotation_locked", False)):
+            variants = [(prepared, f"{label} (manual rotation locked)", 0)]
+        else:
+            variants = ai_receipt_image_variants(prepared, label)
+        for variant_path, variant_label, candidate_rotation in variants:
             if len(parts) >= MAX_AI_RECEIPT_IMAGES:
                 break
-            parts.append({"label": variant_label, "path": variant_path, "index": len(parts) + 1})
+            parts.append(
+                {
+                    "label": variant_label,
+                    "path": variant_path,
+                    "index": len(parts) + 1,
+                    "page_index": attachment_index,
+                    "candidate_rotation": candidate_rotation,
+                }
+            )
     if parts:
         return parts
     prepared_image = prepare_receipt_image_file(image_path, existing.crop_box, existing.rotation_degrees)
-    return [{"label": existing.filename or image_path.name, "path": prepared_image, "index": 1}]
+    return [
+        {
+            "label": existing.filename or image_path.name,
+            "path": prepared_image,
+            "index": 1,
+            "page_index": 1,
+            "candidate_rotation": 0,
+        }
+    ]
 
 
 def extract_json_object(text: str) -> Dict[str, Any]:
@@ -1147,28 +1214,34 @@ def call_openai_receipt_extraction(
     notify("Reading receipt image")
     image_parts = receipt_ai_image_parts(image_path, existing)
     form_hint = "USA VisionNav reimbursement form" if form_version == "USA" else "Korea VisionNav reimbursement form"
-    page_count_hint = len(image_parts)
+    page_count_hint = max((int(part.get("page_index") or 1) for part in image_parts), default=1)
     prompt = f"""
 Extract reimbursement fields from the attached receipt image(s) for a {form_hint}.
 Return only compact JSON with these keys:
 date, place, amount, currency, krw_amount, rmb_amount, purpose, details,
 project_number, category, payment_method, receipt_label, document_type,
-rotation_degrees, confidence_notes.
+rotation_degrees, document_evidence, transaction_date, posted_date, bank_name,
+card_last4, transaction_reference, page_results, confidence_notes.
+
+page_results must be a JSON array with exactly one object for every original page:
+{{"page_index": 1, "role": "receipt", "rotation_degrees": 0,
+  "evidence": "photographed_paper", "transaction_date": "", "posted_date": "",
+  "bank_name": "", "card_last4": "", "transaction_reference": ""}}.
 
 Rules:
 - date must be yyyy-mm-dd when visible, otherwise empty string.
 - amount should be the paid total. Preserve cents when visible.
 - If the receipt text is sideways or upside down, mentally rotate the image upright
   before reading the fields.
-- rotation_degrees should be 0, 90, 180, or 270 clockwise degrees needed to rotate
-  the original primary image upright. If you used a candidate labeled rotated right,
-  return 90. If you used a candidate labeled rotated left, return 270.
-- Some uploads are multi-page PDFs. Review all {page_count_hint} attached image(s);
+- For every original page, choose the candidate where text is upright and return that
+  candidate's clockwise rotation in page_results. rotation_degrees is the result for
+  original page 1 for backward compatibility.
+- Some uploads are multi-page PDFs. Review all {page_count_hint} original page(s);
   the paid total may be on a later page, payment info panel, or receipt summary page.
   Use the page that contains the final Total/Payment info/Paid amount. Ignore page
   numbers, rewards points, ticket numbers, order IDs, and QR-code values.
-- If an image label says rotated left or rotated right, it is an orientation candidate
-  for the same page. Use the candidate where text is upright and readable; do not
+- Several attached images may be orientation candidates for the same original page.
+  Use the page_index in each label to group them. Do not
   treat orientation candidates as separate receipts.
 - For USA bank/card payment proof screenshots, date should be the Transaction date
   line and amount should be the Sale/charge amount. Ignore print/export time and
@@ -1192,25 +1265,43 @@ Rules:
 - details should be a natural one-line description.
 - receipt_label should be short enough to fit above a receipt image in Excel.
 - For USA, document_type must be receipt, payment_proof, or unknown. Use payment_proof
-  only for bank/card transaction screenshots or statements, not merchant receipts.
+  only for bank/card portal transaction screenshots or statements, not merchant receipts.
+  A photographed or scanned paper document is normally receipt, even when it records
+  a card payment. A digital merchant booking, invoice, or email is also receipt.
   A merchant receipt that says Credit Card Receipt, Payment Method, Card Type,
   authorization, terminal ID, total, or receipt number is still a receipt.
+- page_results role must be receipt, companion_ticket, payment_proof, or ignore.
+  Use companion_ticket for an entry/exit/QR ticket that supports another receipt but
+  is not itself proof of a separate charge.
+- document_evidence and page_results evidence must be photographed_paper,
+  merchant_document, bank_portal, or unknown.
+- transaction_date is the bank transaction date or merchant service/purchase date.
+  posted_date is only the bank posted date. bank_name, card_last4, and
+  transaction_reference should be empty unless visibly supported.
   If the attached images include both a merchant receipt/ticket and a bank/card
   transaction screenshot, classify the entry as receipt and extract the merchant
   receipt/ticket details.
 - For Korea, use receipt unless the image is clearly not reimbursement support.
 - If a field is unclear, use an empty string rather than guessing.
 - Image labels or filenames may contain an app memory marker beginning with __RH1_.
-  Treat that marker as prior reimbursement memory. Prefer manual-reviewed marker values
-  for document_type, date, amount, currency, category, and vendor unless the visible
-  receipt clearly contradicts them.
+  Treat AI-reviewed marker values only as hints and classify from the current page.
+  Manual-reviewed values are enforced by the app after extraction and must not be
+  replaced by filename guesses.
 
 Current editable row values, to keep if they look more specific than the image:
 {json.dumps(asdict(existing), ensure_ascii=False)}
 """.strip()
     user_content: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
     for part in image_parts:
-        user_content.append({"type": "text", "text": f"Image {part['index']}: {part['label']}"})
+        user_content.append(
+            {
+                "type": "text",
+                "text": (
+                    f"Original page {part.get('page_index', 1)}, candidate image {part['index']}: "
+                    f"{part['label']}"
+                ),
+            }
+        )
         user_content.append({"type": "image_url", "image_url": {"url": image_data_url(Path(part["path"]))}})
     payload = json.dumps(
         {
@@ -1547,7 +1638,7 @@ def normalized_category(category: str, form_version: str) -> str:
 
 
 RECEIPT_MEMORY_MARKER_RE = re.compile(r"__RH1_[A-Za-z0-9._~-]+__")
-RECEIPT_MEMORY_SCHEMA_VERSION = 1
+RECEIPT_MEMORY_SCHEMA_VERSION = 2
 
 
 def strip_receipt_memory_marker(value: str) -> str:
@@ -1633,6 +1724,27 @@ def save_receipt_memory(data: Dict[str, Any]) -> None:
 def receipt_memory_record_from_item(item: Any, form_version: str, reviewed_source: str) -> Dict[str, Any]:
     document_type = normalize_document_type(getattr(item, "document_type", "unknown"), "unknown")
     currency = normalize_currency(getattr(item, "currency", ""), "USD" if normalized_form_version(form_version) == "USA" else "KRW")
+    page_states = []
+    for index, raw in enumerate(getattr(item, "receipt_images", []) or []):
+        attachment = normalize_attachment(raw)
+        if attachment is None:
+            continue
+        page_states.append(
+            {
+                "index": index,
+                "source_page": str(attachment.get("source_page") or ""),
+                "support_role": normalize_support_role(attachment.get("support_role")),
+                "role_source": str(attachment.get("role_source") or ""),
+                "rotation_degrees": normalize_rotation(attachment.get("rotation_degrees", 0)),
+                "rotation_locked": bool(attachment.get("rotation_locked", False)),
+                "document_evidence": str(attachment.get("document_evidence") or ""),
+                "transaction_date": str(attachment.get("transaction_date") or ""),
+                "posted_date": str(attachment.get("posted_date") or ""),
+                "bank_name": str(attachment.get("bank_name") or ""),
+                "card_last4": str(attachment.get("card_last4") or ""),
+                "transaction_reference": str(attachment.get("transaction_reference") or ""),
+            }
+        )
     return {
         "version": RECEIPT_MEMORY_SCHEMA_VERSION,
         "reviewed_source": "manual" if reviewed_source == "manual" else "ai",
@@ -1651,6 +1763,13 @@ def receipt_memory_record_from_item(item: Any, form_version: str, reviewed_sourc
         "category": normalized_category(str(getattr(item, "category", "") or ""), normalized_form_version(form_version)),
         "payment_method": str(getattr(item, "payment_method", "") or "").strip(),
         "receipt_label": str(getattr(item, "receipt_label", "") or "").strip(),
+        "document_evidence": str(getattr(item, "document_evidence", "") or "").strip(),
+        "transaction_date": str(getattr(item, "transaction_date", "") or "").strip(),
+        "posted_date": str(getattr(item, "posted_date", "") or "").strip(),
+        "bank_name": str(getattr(item, "bank_name", "") or "").strip(),
+        "card_last4": str(getattr(item, "card_last4", "") or "").strip(),
+        "transaction_reference": str(getattr(item, "transaction_reference", "") or "").strip(),
+        "page_states": page_states,
     }
 
 
@@ -1740,6 +1859,12 @@ def apply_receipt_memory_record_to_item(item: Any, record: Dict[str, Any], form_
         "payment_method": "payment_method",
         "receipt_label": "receipt_label",
         "document_type": "document_type",
+        "document_evidence": "document_evidence",
+        "transaction_date": "transaction_date",
+        "posted_date": "posted_date",
+        "bank_name": "bank_name",
+        "card_last4": "card_last4",
+        "transaction_reference": "transaction_reference",
     }
     for source, dest in field_map.items():
         value = record.get(source)
@@ -1757,9 +1882,53 @@ def apply_receipt_memory_record_to_item(item: Any, record: Dict[str, Any], form_
         if getattr(item, dest, "") != text:
             setattr(item, dest, text)
             changed = True
+    page_states = record.get("page_states")
+    if isinstance(page_states, list):
+        attachments = ensure_receipt_images(item)
+        by_page = {
+            str(state.get("source_page") or ""): state
+            for state in page_states
+            if isinstance(state, dict) and str(state.get("source_page") or "")
+        }
+        for index, attachment in enumerate(attachments):
+            state = by_page.get(str(attachment.get("source_page") or ""))
+            if state is None and index < len(page_states) and isinstance(page_states[index], dict):
+                state = page_states[index]
+            if not isinstance(state, dict):
+                continue
+            for key in (
+                "support_role",
+                "role_source",
+                "document_evidence",
+                "transaction_date",
+                "posted_date",
+                "bank_name",
+                "card_last4",
+                "transaction_reference",
+            ):
+                if key in state:
+                    attachment[key] = state.get(key)
+            if not bool(attachment.get("rotation_locked", False)):
+                attachment["rotation_degrees"] = normalize_rotation(state.get("rotation_degrees", 0))
+            attachment["rotation_locked"] = bool(
+                attachment.get("rotation_locked", False) or state.get("rotation_locked", False)
+            )
     if full_record:
         reviewed = str(record.get("reviewed_source") or "").strip()
-        item.status = "Manual remembered" if reviewed == "manual" else "Remembered"
+        record_version = int(record.get("version") or 1)
+        if reviewed == "manual":
+            document_type = normalize_document_type(record.get("document_type"), "unknown")
+            item.locked_document_type = document_type if document_type != "unknown" else ""
+            for attachment in ensure_receipt_images(item):
+                if item.locked_document_type:
+                    attachment["support_role"] = item.locked_document_type
+                    attachment["role_source"] = "manual"
+            item.status = "Manual remembered"
+        else:
+            item.status = "Remembered" if record_version >= RECEIPT_MEMORY_SCHEMA_VERSION else "Needs regen"
+    elif str(record.get("reviewed_source") or "").strip() == "manual":
+        document_type = normalize_document_type(record.get("document_type"), "unknown")
+        item.locked_document_type = document_type if document_type != "unknown" else ""
     return changed
 
 
@@ -1900,7 +2069,18 @@ def is_korea_other_text(value: str) -> bool:
 def item_search_text(item: Any) -> str:
     return " ".join(
         str(getattr(item, attr, "") or "")
-        for attr in ("category", "purpose", "details", "receipt_label", "place", "filename", "payment_method")
+        for attr in (
+            "category",
+            "purpose",
+            "details",
+            "receipt_label",
+            "place",
+            "filename",
+            "payment_method",
+            "bank_name",
+            "card_last4",
+            "transaction_reference",
+        )
     ).lower()
 
 
@@ -2236,6 +2416,30 @@ def usa_receipt_support_without_amount(item: "ReceiptItem") -> bool:
 
 def auto_classify_usa_document_type(item: "ReceiptItem", *extra_values: Any) -> None:
     current = normalize_document_type(item.document_type, "unknown")
+    locked = normalize_document_type(item.locked_document_type, "unknown")
+    if locked != "unknown":
+        item.document_type = locked
+        for attachment in ensure_receipt_images(item):
+            attachment["support_role"] = locked
+            attachment["role_source"] = "manual"
+        return
+    attachments = ensure_receipt_images(item)
+    page_roles = [normalize_support_role(attachment.get("support_role")) for attachment in attachments]
+    if any(role in {"receipt", "companion_ticket"} for role in page_roles):
+        item.document_type = "receipt"
+        return
+    if page_roles and all(role in {"payment_proof", "ignore"} for role in page_roles) and any(
+        role == "payment_proof" for role in page_roles
+    ):
+        item.document_type = "payment_proof"
+        return
+    evidence = str(item.document_evidence or "").strip().lower()
+    if evidence in {"photographed_paper", "merchant_document"}:
+        item.document_type = "receipt"
+        return
+    if evidence == "bank_portal":
+        item.document_type = "payment_proof"
+        return
     values = (
         item.filename,
         item.place,
@@ -2266,6 +2470,8 @@ def receipt_attention_reasons(item: "ReceiptItem", form_version: str) -> List[st
     reasons: List[str] = []
     if item.status == "Failed":
         reasons.append("AI failed")
+    if version == "USA" and item.status == "Multiple possible matches":
+        reasons.append("Multiple possible matches")
     if version == "USA" and normalize_document_type(item.document_type, "unknown") == "unknown":
         reasons.append("Unknown document type")
     if not item.date.strip():
@@ -2379,6 +2585,14 @@ def perceptual_hash_distance(left: Optional[int], right: Optional[int]) -> Optio
     return int((left ^ right).bit_count())
 
 
+def item_has_support_role(item: "ReceiptItem", role: str) -> bool:
+    expected = normalize_support_role(role)
+    return any(
+        normalize_support_role(attachment.get("support_role")) == expected
+        for attachment in ensure_receipt_images(item)
+    )
+
+
 def usa_receipts_are_same_transaction(left: "ReceiptItem", right: "ReceiptItem") -> bool:
     if usa_receipt_merge_key(left) != usa_receipt_merge_key(right):
         return False
@@ -2399,6 +2613,11 @@ def usa_receipts_are_same_transaction(left: "ReceiptItem", right: "ReceiptItem")
     left_vendor = normalized_usa_vendor(left.place)
     right_vendor = normalized_usa_vendor(right.place)
     shared_tokens = usa_match_tokens(left) & usa_match_tokens(right)
+    if (
+        item_has_support_role(left, "companion_ticket")
+        or item_has_support_role(right, "companion_ticket")
+    ):
+        return bool(shared_tokens and (not left_vendor or not right_vendor or left_vendor == right_vendor))
     return bool(left_vendor and left_vendor == right_vendor and len(shared_tokens) >= 2)
 
 
@@ -2589,17 +2808,36 @@ def usa_amountless_receipt_match(item: "ReceiptItem", candidates: List["ReceiptI
 
 
 def attachment_looks_like_usa_payment_proof(attachment: Dict[str, Any]) -> bool:
+    role = normalize_support_role(attachment.get("support_role"))
+    role_source = str(attachment.get("role_source") or "").strip().lower()
+    if role in {"receipt", "companion_ticket"} and role_source in {"manual", "ai"}:
+        return False
+    if role == "payment_proof" and role_source in {"manual", "ai"}:
+        return True
+    evidence = str(attachment.get("document_evidence") or "").strip().lower()
+    if evidence in {"photographed_paper", "merchant_document"}:
+        return False
+    if evidence == "bank_portal":
+        return True
     values = (
         attachment.get("filename", ""),
         attachment.get("path", ""),
         attachment.get("source_path", ""),
         attachment.get("source_page", ""),
     )
+    memory_hint = "unknown"
     for value in values:
         marker = parse_receipt_memory_marker(str(value or ""))
-        if normalize_document_type(marker.get("document_type"), "unknown") == "payment_proof":
+        marker_type = normalize_document_type(marker.get("document_type"), "unknown")
+        if str(marker.get("reviewed_source") or "") == "manual" and marker_type == "payment_proof":
             return True
-    return looks_like_usa_workbook_proof_name(*values) or looks_like_usa_payment_proof_text(*values)
+        if str(marker.get("reviewed_source") or "") == "manual" and marker_type == "receipt":
+            return False
+        if marker_type != "unknown" and memory_hint == "unknown":
+            memory_hint = marker_type
+    if looks_like_usa_workbook_proof_name(*values) or looks_like_usa_payment_proof_text(*values):
+        return True
+    return memory_hint == "payment_proof"
 
 
 def attachment_memory_document_type(attachment: Dict[str, Any]) -> str:
@@ -2647,7 +2885,19 @@ def receipt_item_from_payment_proof_attachment(
         payment_method=getattr(parent, "payment_method", ""),
         receipt_label=filename,
         document_type="payment_proof",
-        locked_document_type="payment_proof",
+        locked_document_type=(
+            "payment_proof"
+            if str(attachment.get("role_source") or "").strip().lower() == "manual"
+            else ""
+        ),
+        document_evidence=str(attachment.get("document_evidence") or parent.document_evidence or ""),
+        transaction_date=str(attachment.get("transaction_date") or parent.transaction_date or parsed_date),
+        posted_date=str(attachment.get("posted_date") or parent.posted_date or ""),
+        bank_name=str(attachment.get("bank_name") or parent.bank_name or ""),
+        card_last4=str(attachment.get("card_last4") or parent.card_last4 or ""),
+        transaction_reference=str(
+            attachment.get("transaction_reference") or parent.transaction_reference or ""
+        ),
         matched_receipt_id=parent.item_id,
         status="Matched",
         crop_box=copy.deepcopy(attachment.get("crop_box")),
@@ -2791,8 +3041,20 @@ def usa_payment_proofs_are_duplicates(left: "ReceiptItem", right: "ReceiptItem")
     right_amount = safe_float(right.amount)
     if left_amount is None or right_amount is None or abs(left_amount - right_amount) > 0.01:
         return False
-    if not same_expense_date_values(left.date, right.date):
+    left_date = left.transaction_date or left.date
+    right_date = right.transaction_date or right.date
+    if not same_expense_date_values(left_date, right_date):
         return False
+    left_reference = re.sub(r"[^a-z0-9]+", "", str(left.transaction_reference or "").lower())
+    right_reference = re.sub(r"[^a-z0-9]+", "", str(right.transaction_reference or "").lower())
+    if left_reference and right_reference:
+        return left_reference == right_reference
+    left_bank = normalized_usa_vendor(left.bank_name)
+    right_bank = normalized_usa_vendor(right.bank_name)
+    left_card = re.sub(r"\D", "", str(left.card_last4 or ""))[-4:]
+    right_card = re.sub(r"\D", "", str(right.card_last4 or ""))[-4:]
+    left_vendor = normalized_usa_vendor(left.place)
+    right_vendor = normalized_usa_vendor(right.place)
     left_images = ensure_receipt_images(left)
     right_images = ensure_receipt_images(right)
     if not left_images or not right_images:
@@ -2803,8 +3065,10 @@ def usa_payment_proofs_are_duplicates(left: "ReceiptItem", right: "ReceiptItem")
     )
     if distance is None or distance > 24:
         return False
-    left_vendor = normalized_usa_vendor(left.place)
-    right_vendor = normalized_usa_vendor(right.place)
+    if left_bank and right_bank and left_bank != right_bank:
+        return False
+    if left_card and right_card and left_card != right_card:
+        return False
     if left_vendor and right_vendor and left_vendor != right_vendor:
         return False
     return True
@@ -2842,11 +3106,17 @@ def match_usa_payment_proof_items(items: List["ReceiptItem"]) -> None:
                 continue
             if abs(receipt_amount - proof_amount) > 0.01:
                 continue
-            day_distance = report_date_day_distance(receipt.date, proof_item.date)
+            receipt_date = receipt.transaction_date or receipt.date
+            proof_date = proof_item.transaction_date or proof_item.date
+            day_distance = report_date_day_distance(receipt_date, proof_date)
             if day_distance is None or day_distance > 1:
                 continue
             overlap = len(usa_match_tokens(receipt) & usa_match_tokens(proof_item))
             score = (100 if day_distance == 0 else 70) + min(overlap, 5) * 5
+            receipt_reference = re.sub(r"[^a-z0-9]+", "", str(receipt.transaction_reference or "").lower())
+            proof_reference = re.sub(r"[^a-z0-9]+", "", str(proof_item.transaction_reference or "").lower())
+            if receipt_reference and proof_reference and receipt_reference == proof_reference:
+                score += 100
             scored_matches.append((score, receipt))
         scored_matches.sort(key=lambda entry: entry[0], reverse=True)
         best_matches = [
@@ -2861,6 +3131,48 @@ def match_usa_payment_proof_items(items: List["ReceiptItem"]) -> None:
             proof_item.matched_receipt_id = ""
             proof_item.status = "Multiple possible matches" if len(best_matches) > 1 else "Payment proof"
     mark_duplicate_usa_payment_proofs(items)
+    matched_groups: Dict[str, List[ReceiptItem]] = {}
+    for proof in items:
+        if (
+            is_usa_payment_proof_item(proof)
+            and proof.matched_receipt_id
+            and proof.status != "Duplicate proof"
+        ):
+            matched_groups.setdefault(proof.matched_receipt_id, []).append(proof)
+    for proofs in matched_groups.values():
+        if len(proofs) <= 1:
+            continue
+        keeper = proofs[0]
+        for proof in proofs[1:]:
+            if usa_payment_proofs_are_duplicates(keeper, proof):
+                proof.status = "Duplicate proof"
+                continue
+            proof.matched_receipt_id = ""
+            proof.status = "Multiple possible matches"
+
+
+def usa_export_audit_issues(items: List["ReceiptItem"]) -> List[Tuple["ReceiptItem", str]]:
+    issues: List[Tuple[ReceiptItem, str]] = []
+    attachment_owners: Dict[Tuple[str, str], ReceiptItem] = {}
+    for item in items:
+        if is_usa_payment_proof_item(item) and item.status == "Multiple possible matches":
+            issues.append((item, "Multiple possible matches"))
+        roles = {
+            normalize_support_role(attachment.get("support_role"))
+            for attachment in ensure_receipt_images(item)
+        }
+        if item.status == "Needs regen" and not roles & {"receipt", "companion_ticket", "payment_proof"}:
+            issues.append((item, "Pages need AI review"))
+        if "unknown" in roles and roles & {"receipt", "companion_ticket", "payment_proof"}:
+            issues.append((item, "Unresolved page role"))
+        for attachment in ensure_receipt_images(item):
+            key = attachment_file_key(attachment)
+            owner = attachment_owners.get(key)
+            if owner is not None and owner.item_id != item.item_id:
+                issues.append((item, "Duplicate support page"))
+                continue
+            attachment_owners[key] = item
+    return issues
 
 
 def match_bank_statement_to_receipt(bank_item: "BankStatementItem", receipts: List["ReceiptItem"]) -> None:
@@ -3041,6 +3353,97 @@ def normalize_rotation(value: Any) -> int:
     except (TypeError, ValueError):
         degrees = 0
     return degrees % 360 // 90 * 90
+
+
+def ai_page_results(value: Any, max_pages: int) -> List[Dict[str, Any]]:
+    raw = value
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = []
+    if not isinstance(raw, list):
+        return []
+    results: Dict[int, Dict[str, Any]] = {}
+    for fallback_index, entry in enumerate(raw, start=1):
+        if not isinstance(entry, dict):
+            continue
+        try:
+            page_index = int(entry.get("page_index") or entry.get("index") or fallback_index)
+        except (TypeError, ValueError):
+            continue
+        if page_index < 1 or page_index > max_pages:
+            continue
+        results[page_index] = entry
+    return [results[index] for index in sorted(results)]
+
+
+def apply_ai_page_results(item: "ReceiptItem", value: Any) -> bool:
+    attachments = ensure_receipt_images(item)
+    results = ai_page_results(value, len(attachments))
+    if not results:
+        return False
+    locked_document_type = normalize_document_type(item.locked_document_type, "unknown")
+    changed = False
+    for fallback_index, result in enumerate(results, start=1):
+        try:
+            page_index = int(result.get("page_index") or result.get("index") or fallback_index)
+        except (TypeError, ValueError):
+            continue
+        attachment = attachments[page_index - 1]
+        role = normalize_support_role(result.get("role"))
+        if locked_document_type != "unknown":
+            role = locked_document_type
+            attachment["support_role"] = locked_document_type
+            attachment["role_source"] = "manual"
+        elif str(attachment.get("role_source") or "") != "manual" and role != "unknown":
+            if attachment.get("support_role") != role:
+                changed = True
+            attachment["support_role"] = role
+            attachment["role_source"] = "ai"
+        if not bool(attachment.get("rotation_locked", False)):
+            rotation = normalize_rotation(result.get("rotation_degrees", 0))
+            if normalize_rotation(attachment.get("rotation_degrees", 0)) != rotation:
+                changed = True
+            attachment["rotation_degrees"] = rotation
+        evidence = str(result.get("evidence") or result.get("document_evidence") or "").strip().lower()
+        if evidence:
+            attachment["document_evidence"] = evidence
+        for key in ("transaction_date", "posted_date", "bank_name", "transaction_reference"):
+            text = str(result.get(key) or "").strip()
+            if text:
+                attachment[key] = text
+        card_last4 = re.sub(r"\D", "", str(result.get("card_last4") or ""))[-4:]
+        if card_last4:
+            attachment["card_last4"] = card_last4
+    ensure_receipt_images(item)
+    roles = [normalize_support_role(attachment.get("support_role")) for attachment in attachments]
+    if locked_document_type != "unknown":
+        item.document_type = locked_document_type
+    elif any(role in {"receipt", "companion_ticket"} for role in roles):
+        item.document_type = "receipt"
+    elif roles and all(role in {"payment_proof", "ignore"} for role in roles) and any(
+        role == "payment_proof" for role in roles
+    ):
+        item.document_type = "payment_proof"
+    primary = attachments[0]
+    item.rotation_degrees = normalize_rotation(primary.get("rotation_degrees", 0))
+    item.rotation_locked = bool(primary.get("rotation_locked", False))
+    for attr in (
+        "document_evidence",
+        "transaction_date",
+        "posted_date",
+        "bank_name",
+        "card_last4",
+        "transaction_reference",
+    ):
+        value_text = next(
+            (str(attachment.get(attr) or "").strip() for attachment in attachments if str(attachment.get(attr) or "").strip()),
+            "",
+        )
+        if value_text:
+            setattr(item, attr, value_text)
+    return bool(results)
 
 
 def apply_primary_receipt_rotation_hint(item: "ReceiptItem", value: Any) -> bool:
@@ -3342,10 +3745,28 @@ def attachment_group_filename(item: ReceiptItem, attachments: List[Dict[str, Any
     return str(attachments[0].get("filename") or item.filename or Path(str(attachments[0].get("path") or "")).name)
 
 
+def sort_attachments_by_source_page(attachments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    source_order: Dict[str, int] = {}
+    indexed = []
+    for index, attachment in enumerate(attachments):
+        source = str(attachment.get("source_path") or "").strip().lower()
+        group_key = source or f"attachment:{index}"
+        if group_key not in source_order:
+            source_order[group_key] = len(source_order)
+        page_text = str(attachment.get("source_page") or "").strip()
+        try:
+            page_number = int(page_text)
+        except (TypeError, ValueError):
+            page_number = index + 1
+        indexed.append((source_order[group_key], page_number, index, attachment))
+    return [entry[3] for entry in sorted(indexed, key=lambda entry: (entry[0], entry[1], entry[2]))]
+
+
 def ensure_receipt_images(item: ReceiptItem) -> List[Dict[str, Any]]:
     normalized = [attachment for attachment in (normalize_attachment(raw) for raw in item.receipt_images) if attachment]
     if not normalized and item.path:
         normalized = [attachment_from_item(item)]
+    normalized = sort_attachments_by_source_page(normalized)
     item.receipt_images = normalized
     if normalized:
         primary = normalized[0]
@@ -5366,6 +5787,7 @@ class ReimbursementHelperApp:
             "Missing details": "attention_missing_details",
             "Missing date/amount": "attention_missing_date_amount",
             "Wrong year": "attention_wrong_year",
+            "Multiple possible matches": "attention_multiple_matches",
         }
         key = mapping.get(reason or "")
         return self.tr(key) if key else str(reason or "")
@@ -5451,6 +5873,12 @@ class ReimbursementHelperApp:
             "payment_method": "payment_method",
             "receipt_label": "receipt_label",
             "document_type": "document_type",
+            "document_evidence": "document_evidence",
+            "transaction_date": "transaction_date",
+            "posted_date": "posted_date",
+            "bank_name": "bank_name",
+            "card_last4": "card_last4",
+            "transaction_reference": "transaction_reference",
         }.items():
             label = self.field_labels.get(key)
             if label is not None:
@@ -6035,7 +6463,11 @@ class ReimbursementHelperApp:
             changed = apply_receipt_memory_record_to_item(item, marker_record, self.form_version.get(), full_record=False)
             self.update_item_amount_fields(item, "amount")
             if item.status == "Empty":
-                item.status = "Filename hint"
+                item.status = (
+                    "Manual remembered"
+                    if str(marker_record.get("reviewed_source") or "") == "manual"
+                    else "Needs regen"
+                )
             return changed
         return False
 
@@ -7983,7 +8415,9 @@ class ReimbursementHelperApp:
         if self.form_version.get() == "USA":
             item.currency = "USD"
             item.document_type = normalize_document_type(item.document_type, "unknown")
-            apply_primary_receipt_rotation_hint(item, data.get("rotation_degrees"))
+            page_results_applied = apply_ai_page_results(item, data.get("page_results"))
+            if not page_results_applied:
+                apply_primary_receipt_rotation_hint(item, data.get("rotation_degrees"))
             locked_document_type = normalize_document_type(item.locked_document_type, "unknown")
             if locked_document_type != "unknown":
                 item.document_type = locked_document_type
@@ -8015,7 +8449,8 @@ class ReimbursementHelperApp:
             item.currency = normalize_currency(item.currency, "KRW")
             item.document_type = "receipt"
             item.matched_receipt_id = ""
-            apply_primary_receipt_rotation_hint(item, data.get("rotation_degrees"))
+            if not apply_ai_page_results(item, data.get("page_results")):
+                apply_primary_receipt_rotation_hint(item, data.get("rotation_degrees"))
         self.update_item_amount_fields(item, "amount")
         item.status = "AI filled"
 
@@ -8623,6 +9058,9 @@ class ReimbursementHelperApp:
         if form_version == "USA":
             for item in self.items:
                 auto_classify_usa_document_type(item)
+            self.merge_same_usa_receipts()
+            match_usa_payment_proof_items(self.items)
+            self.refresh_tree()
             unknown_items = [
                 item
                 for item in self.items
@@ -8657,6 +9095,29 @@ class ReimbursementHelperApp:
                         ),
                     )
                 return
+            audit_issues = usa_export_audit_issues(self.items)
+            if audit_issues:
+                first_item, first_reason = audit_issues[0]
+                first_item.status = first_reason
+                self.refresh_tree()
+                try:
+                    first_index = self.items.index(first_item)
+                    self.select_index(first_index)
+                except Exception:
+                    pass
+                files = "\n".join(
+                    f"{item.filename}: {reason}"
+                    for item, reason in audit_issues[:10]
+                )
+                self.status_text.set(
+                    f"Resolve {len(audit_issues)} payment-proof issue(s) before exporting."
+                )
+                if messagebox:
+                    messagebox.showwarning(
+                        self.tr("manual_review_title"),
+                        "Resolve these payment-proof matches before generating Excel:\n\n" + files,
+                    )
+                return
         if filedialog is None:
             return
         default_name = f"reimbursement_{self.form_version.get().lower()}_{date.today().strftime('%Y%m%d')}.xlsx"
@@ -8671,10 +9132,6 @@ class ReimbursementHelperApp:
             return
         output_path = Path(output)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        if form_version == "USA":
-            self.merge_same_usa_receipts()
-            match_usa_payment_proof_items(self.items)
-            self.refresh_tree()
         items_snapshot = copy.deepcopy(self.items)
         bank_snapshot = copy.deepcopy(self.bank_items)
         exchange_snapshot = copy.deepcopy(self.exchange_rate_items)
@@ -8852,7 +9309,13 @@ class ReimbursementHelperApp:
             values["locked_document_type"] = locked if locked != "unknown" else ""
             values["matched_receipt_id"] = str(values.get("matched_receipt_id") or "")
             item = ReceiptItem(**values)
-            ensure_receipt_images(item)
+            attachments = ensure_receipt_images(item)
+            marker = parse_receipt_memory_marker(item.filename)
+            if (
+                str(marker.get("reviewed_source") or "") == "ai"
+                and all(normalize_support_role(attachment.get("support_role")) == "unknown" for attachment in attachments)
+            ):
+                item.status = "Needs regen"
             restored.append(item)
         if not restored:
             restored = []

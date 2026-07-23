@@ -115,6 +115,102 @@ class UsaWorkflowTests(unittest.TestCase):
         self.assertFalse(changed)
         self.assertEqual(0, item.rotation_degrees)
 
+    def test_page_results_classify_bank_portal_and_keep_pdf_page_order(self) -> None:
+        item = receipt("chase", "ITR Concession Company", amount="2.50")
+        item.document_type = "unknown"
+        item.receipt_images = [
+            {"id": "page-2", "path": "page-2.png", "filename": "page-2.png", "source_path": "proof.pdf", "source_page": "2"},
+            {"id": "page-1", "path": "page-1.png", "filename": "page-1.png", "source_path": "proof.pdf", "source_page": "1"},
+        ]
+
+        changed = rh.apply_ai_page_results(
+            item,
+            [
+                {
+                    "page_index": 1,
+                    "role": "payment_proof",
+                    "rotation_degrees": 0,
+                    "evidence": "bank_portal",
+                    "transaction_date": "2026-07-20",
+                    "bank_name": "Chase",
+                    "card_last4": "6954",
+                },
+                {
+                    "page_index": 2,
+                    "role": "payment_proof",
+                    "rotation_degrees": 0,
+                    "evidence": "bank_portal",
+                    "transaction_date": "2026-07-20",
+                    "bank_name": "Chase",
+                    "card_last4": "6954",
+                },
+            ],
+        )
+
+        self.assertTrue(changed)
+        self.assertEqual("payment_proof", item.document_type)
+        self.assertEqual(["1", "2"], [image["source_page"] for image in rh.ensure_receipt_images(item)])
+        self.assertTrue(all(image["support_role"] == "payment_proof" for image in item.receipt_images))
+
+    def test_manual_document_type_and_page_rotation_override_ai(self) -> None:
+        item = receipt("paper", "Indiana Toll Road", amount="2.50")
+        item.locked_document_type = "receipt"
+        item.receipt_images[0].update(
+            support_role="receipt",
+            role_source="manual",
+            rotation_degrees=270,
+            rotation_locked=True,
+        )
+
+        rh.apply_ai_page_results(
+            item,
+            [
+                {
+                    "page_index": 1,
+                    "role": "payment_proof",
+                    "rotation_degrees": 90,
+                    "evidence": "bank_portal",
+                }
+            ],
+        )
+
+        self.assertEqual("receipt", item.document_type)
+        self.assertEqual("receipt", item.receipt_images[0]["support_role"])
+        self.assertEqual(270, item.receipt_images[0]["rotation_degrees"])
+        self.assertEqual("manual", item.receipt_images[0]["role_source"])
+
+    def test_companion_ticket_merges_with_same_toll_transaction(self) -> None:
+        ticket = receipt("ticket", "Indiana Toll Road", amount="2.50", details="Entry Portage ticket")
+        ticket.receipt_images[0]["support_role"] = "companion_ticket"
+        paid = receipt("paid", "Indiana Toll Road", amount="2.50", details="Toll from Portage to LaPorte")
+
+        merged, mapping, count = rh.merge_same_usa_receipt_items([ticket, paid])
+
+        self.assertEqual(1, count)
+        self.assertEqual(1, len(merged))
+        self.assertEqual(2, len(rh.ensure_receipt_images(merged[0])))
+        self.assertEqual(ticket.item_id, mapping[paid.item_id])
+
+    def test_ambiguous_payment_proof_is_blocked_by_export_audit(self) -> None:
+        first = receipt("first", "North Garage", amount="30.00")
+        second = receipt("second", "South Garage", amount="30.00")
+        proof = rh.ReceiptItem(
+            item_id="proof",
+            path="proof.png",
+            filename="Chase proof.png",
+            date="2026-07-20",
+            amount="30.00",
+            document_type="payment_proof",
+            document_evidence="bank_portal",
+        )
+        items = [first, second, proof]
+
+        rh.match_usa_payment_proof_items(items)
+        issues = rh.usa_export_audit_issues(items)
+
+        self.assertEqual("Multiple possible matches", proof.status)
+        self.assertTrue(any(item is proof for item, _reason in issues))
+
     @unittest.skipIf(rh.Image is None, "Pillow is unavailable")
     def test_legacy_landscape_auto_rotation_is_reset(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

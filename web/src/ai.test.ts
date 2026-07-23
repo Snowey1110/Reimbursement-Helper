@@ -341,4 +341,102 @@ describe("OpenAI extraction", () => {
       ["receipt-page", "receipt"]
     ]);
   });
+
+  it("applies page-level bank evidence and per-page rotation", () => {
+    const result = applyExtraction(
+      receipt({
+        filename: "Toll250.pdf",
+        documentType: "unknown",
+        images: [
+          image({ id: "page-1", sourceName: "Toll250.pdf", sourcePage: 1 }),
+          image({ id: "page-2", sourceName: "Toll250.pdf", sourcePage: 2 })
+        ]
+      }),
+      {
+        date: "2026-06-26",
+        amount: "2.50",
+        currency: "USD",
+        document_type: "receipt",
+        page_results: [
+          {
+            page_index: 1,
+            role: "payment_proof",
+            rotation_degrees: 0,
+            evidence: "bank_portal",
+            transaction_date: "2026-06-26",
+            posted_date: "2026-06-28",
+            amount: "2.50",
+            vendor: "ITR Concession Company",
+            bank_name: "Chase",
+            card_last4: "6954",
+            transaction_reference: ""
+          },
+          {
+            page_index: 2,
+            role: "payment_proof",
+            rotation_degrees: 180,
+            evidence: "bank_portal",
+            transaction_date: "2026-06-26",
+            posted_date: "2026-06-28",
+            amount: "2.50",
+            vendor: "ITR Concession Company",
+            bank_name: "Chase",
+            card_last4: "6954",
+            transaction_reference: ""
+          }
+        ]
+      },
+      "USA"
+    );
+
+    expect(result.documentType).toBe("payment_proof");
+    expect(result.documentEvidence).toBe("bank_portal");
+    expect(result.images.map((entry) => entry.supportRole)).toEqual(["payment_proof", "payment_proof"]);
+    expect(result.images.map((entry) => entry.rotationDegrees)).toEqual([0, 180]);
+  });
+
+  it("keeps manually selected role and rotation over page-level AI", () => {
+    const result = applyExtraction(
+      receipt({
+        documentType: "receipt",
+        lockedDocumentType: "receipt",
+        images: [
+          image({
+            id: "paper",
+            supportRole: "receipt",
+            roleSource: "manual",
+            rotationDegrees: 270,
+            rotationLocked: true
+          })
+        ]
+      }),
+      {
+        date: "2026-06-26",
+        amount: "2.50",
+        currency: "USD",
+        document_type: "payment_proof",
+        page_results: [
+          {
+            page_index: 1,
+            role: "payment_proof",
+            rotation_degrees: 90,
+            evidence: "bank_portal",
+            transaction_date: "2026-06-26",
+            posted_date: "",
+            amount: "2.50",
+            vendor: "Indiana Toll Road",
+            bank_name: "Chase",
+            card_last4: "6954",
+            transaction_reference: ""
+          }
+        ]
+      },
+      "USA"
+    );
+
+    expect(result.documentType).toBe("receipt");
+    expect(result.images[0].supportRole).toBe("receipt");
+    expect(result.images[0].roleSource).toBe("manual");
+    expect(result.images[0].rotationDegrees).toBe(270);
+  });
 });

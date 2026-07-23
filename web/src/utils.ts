@@ -112,7 +112,18 @@ export function isKoreaOtherText(value: string): boolean {
 }
 
 export function itemSearchText(item: ReceiptItem): string {
-  return [item.category, item.purpose, item.details, item.receiptLabel, item.place, item.filename, item.paymentMethod].join(" ").toLowerCase();
+  return [
+    item.category,
+    item.purpose,
+    item.details,
+    item.receiptLabel,
+    item.place,
+    item.filename,
+    item.paymentMethod,
+    item.bankName,
+    item.cardLast4,
+    item.transactionReference
+  ].join(" ").toLowerCase();
 }
 
 export function looksLikeUsaParkingReceipt(item: ReceiptItem): boolean {
@@ -327,17 +338,39 @@ export function isUsaPaymentProofItem(item: ReceiptItem): boolean {
 
 function receiptSideImages(item: ReceiptItem): ImageAttachment[] {
   if (item.documentType === "payment_proof") return [];
-  const receiptImages = item.images.filter((image) => image.supportRole !== "payment_proof");
-  return receiptImages.length ? receiptImages : [...item.images];
+  const receiptImages = item.images.filter((image) => image.supportRole !== "payment_proof" && image.supportRole !== "ignore");
+  return sortSourcePages(receiptImages.length ? receiptImages : [...item.images]);
 }
 
 function proofSideImages(item: ReceiptItem): ImageAttachment[] {
-  if (item.documentType === "payment_proof") return [...item.images];
-  return item.images.filter((image) => image.supportRole === "payment_proof");
+  if (item.documentType === "payment_proof") {
+    return sortSourcePages(item.images.filter((image) => image.supportRole !== "ignore"));
+  }
+  return sortSourcePages(item.images.filter((image) => image.supportRole === "payment_proof"));
+}
+
+function sortSourcePages(images: ImageAttachment[]): ImageAttachment[] {
+  const sourceOrder = new Map<string, number>();
+  for (const image of images) {
+    const source = image.sourceName.trim().toLowerCase();
+    if (!sourceOrder.has(source)) sourceOrder.set(source, sourceOrder.size);
+  }
+  return images
+    .map((image, index) => ({ image, index }))
+    .sort((left, right) => {
+      const sourceDiff =
+        (sourceOrder.get(left.image.sourceName.trim().toLowerCase()) ?? Number.MAX_SAFE_INTEGER) -
+        (sourceOrder.get(right.image.sourceName.trim().toLowerCase()) ?? Number.MAX_SAFE_INTEGER);
+      if (sourceDiff) return sourceDiff;
+      const pageDiff = (left.image.sourcePage ?? Number.MAX_SAFE_INTEGER) - (right.image.sourcePage ?? Number.MAX_SAFE_INTEGER);
+      return pageDiff || left.index - right.index;
+    })
+    .map(({ image }) => image);
 }
 
 export function receiptAttentionReason(item: ReceiptItem, formVersion: "USA" | "Korea"): string | undefined {
   if (item.status === "Failed") return "AI failed";
+  if (item.status === "Multiple possible matches") return "Multiple possible matches";
   if (formVersion === "USA" && item.documentType === "unknown") return "Unknown document type";
   if (!item.date.trim()) return "Missing date";
   if (dateYearNeedsReview(item.date)) return "Wrong year";
@@ -356,8 +389,50 @@ export function receiptNeedsAi(item: ReceiptItem, formVersion: "USA" | "Korea"):
   return false;
 }
 
+function normalizedTextTokens(value: string): Set<string> {
+  const stopWords = new Set([
+    "receipt", "invoice", "ticket", "payment", "proof", "transaction", "details",
+    "total", "card", "credit", "debit", "visa", "mastercard", "page", "jpg", "jpeg", "png", "pdf"
+  ]);
+  return new Set(
+    (value.toLowerCase().match(/[a-z0-9]+/g) ?? [])
+      .filter((token) => token.length >= 3 && !stopWords.has(token))
+  );
+}
+
+function tokenOverlap(left: ReceiptItem, right: ReceiptItem): number {
+  const leftTokens = normalizedTextTokens(itemSearchText(left));
+  const rightTokens = normalizedTextTokens(itemSearchText(right));
+  return [...leftTokens].filter((token) => rightTokens.has(token)).length;
+}
+
+function sameSourceFile(left: ReceiptItem, right: ReceiptItem): boolean {
+  const leftSources = new Set(left.images.map((image) => image.sourceName.trim().toLowerCase()).filter(Boolean));
+  return right.images.some((image) => leftSources.has(image.sourceName.trim().toLowerCase()));
+}
+
+function itemHasSupportRole(item: ReceiptItem, role: ImageAttachment["supportRole"]): boolean {
+  return item.images.some((image) => image.supportRole === role);
+}
+
+function sameReceiptTransaction(left: ReceiptItem, right: ReceiptItem): boolean {
+  const leftAmount = safeNumber(left.amount);
+  const rightAmount = safeNumber(right.amount);
+  if (leftAmount === undefined || rightAmount === undefined || Math.abs(leftAmount - rightAmount) >= 0.01) return false;
+  if (!sameMonthDay(left.transactionDate || left.date, right.transactionDate || right.date)) return false;
+  if (left.transactionReference && right.transactionReference) {
+    return left.transactionReference.trim().toLowerCase() === right.transactionReference.trim().toLowerCase();
+  }
+  if (sameSourceFile(left, right)) return true;
+  const overlap = tokenOverlap(left, right);
+  const companion = itemHasSupportRole(left, "companion_ticket") || itemHasSupportRole(right, "companion_ticket");
+  if (companion) return overlap >= 1;
+  const leftVendor = left.place.trim().toLowerCase().replace(/[^a-z0-9]+/g, " ");
+  const rightVendor = right.place.trim().toLowerCase().replace(/[^a-z0-9]+/g, " ");
+  return Boolean(leftVendor && leftVendor === rightVendor && overlap >= 2);
+}
+
 export function mergeSameUsaReceipts(items: ReceiptItem[]): ReceiptItem[] {
-  const seen = new Map<string, ReceiptItem>();
   const merged: ReceiptItem[] = [];
   for (const item of items) {
     const normalizedItem = normalizeUsaTransportationFields(item);
@@ -365,14 +440,12 @@ export function mergeSameUsaReceipts(items: ReceiptItem[]): ReceiptItem[] {
       merged.push({ ...normalizedItem, images: [...normalizedItem.images] });
       continue;
     }
-    const key = receiptMergeKey(normalizedItem);
-    if (!key || !seen.has(key)) {
-      const copy = { ...normalizedItem, images: [...normalizedItem.images] };
-      if (key) seen.set(key, copy);
+    const target = merged.find((candidate) => isUsaReceiptItem(candidate) && sameReceiptTransaction(candidate, normalizedItem));
+    if (!target) {
+      const copy = { ...normalizedItem, images: sortSourcePages([...normalizedItem.images]) };
       merged.push(copy);
       continue;
     }
-    const target = seen.get(key)!;
     const existing = new Set(target.images.map((image) => `${image.sourceName}|${image.filename}|${image.dataUrl.slice(0, 64)}`));
     for (const image of normalizedItem.images) {
       const imageKey = `${image.sourceName}|${image.filename}|${image.dataUrl.slice(0, 64)}`;
@@ -381,6 +454,7 @@ export function mergeSameUsaReceipts(items: ReceiptItem[]): ReceiptItem[] {
         existing.add(imageKey);
       }
     }
+    target.images = sortSourcePages(target.images);
     for (const keyName of ["place", "purpose", "details", "projectNumber", "paymentMethod", "receiptLabel"] as const) {
       if (!target[keyName] && normalizedItem[keyName]) {
         target[keyName] = normalizedItem[keyName];
@@ -393,28 +467,79 @@ export function mergeSameUsaReceipts(items: ReceiptItem[]): ReceiptItem[] {
 
 export function matchUsaPaymentProofItems(items: ReceiptItem[]): ReceiptItem[] {
   const receipts = items.filter(isUsaReceiptItem);
-  return items.map((item) => {
+  const seenProofKeys = new Map<string, string>();
+  const matched = items.map((item) => {
     if (!isUsaPaymentProofItem(item)) return item;
     const proofAmount = safeNumber(item.amount);
-    const proofDate = parseDateKey(item.date);
+    const proofDate = item.transactionDate || item.date;
     if (proofAmount === undefined || !proofDate) {
       return { ...item, matchedReceiptId: "", status: "Missing date/amount" };
     }
-    const matches = receipts.filter((receipt) => {
-      const itemAmount = safeNumber(receipt.amount);
-      return Boolean(
-        proofDate &&
-          sameMonthDay(receipt.date, item.date) &&
-          proofAmount !== undefined &&
-          itemAmount !== undefined &&
-          Math.abs(itemAmount - proofAmount) < 0.01
-      );
-    });
-    if (matches.length === 1) {
-      return { ...item, matchedReceiptId: matches[0].id, status: "Matched" };
+    const proofKey = paymentProofTransactionKey(item);
+    if (proofKey && seenProofKeys.has(proofKey)) {
+      return { ...item, matchedReceiptId: "", status: "Duplicate proof" };
     }
-    return { ...item, matchedReceiptId: "", status: matches.length > 1 ? "Multiple possible matches" : "Payment proof" };
+    if (proofKey) seenProofKeys.set(proofKey, item.id);
+    const candidates = receipts.map((receipt) => {
+      const itemAmount = safeNumber(receipt.amount);
+      if (itemAmount === undefined || Math.abs(itemAmount - proofAmount) >= 0.01) return undefined;
+      const days = dateDistanceDays(proofDate, receipt.transactionDate || receipt.date);
+      if (days === undefined || days > 1) return undefined;
+      let score = days === 0 ? 4 : 2;
+      if (
+        item.transactionReference &&
+        receipt.transactionReference &&
+        item.transactionReference.trim().toLowerCase() === receipt.transactionReference.trim().toLowerCase()
+      ) score += 8;
+      if (item.cardLast4 && receipt.cardLast4 && item.cardLast4 === receipt.cardLast4) score += 2;
+      score += Math.min(4, tokenOverlap(item, receipt));
+      return { receipt, score };
+    }).filter((candidate): candidate is { receipt: ReceiptItem; score: number } => Boolean(candidate));
+    candidates.sort((left, right) => right.score - left.score);
+    if (candidates.length === 1 || (candidates.length > 1 && candidates[0].score > candidates[1].score)) {
+      return { ...item, matchedReceiptId: candidates[0].receipt.id, status: "Matched" };
+    }
+    return { ...item, matchedReceiptId: "", status: candidates.length > 1 ? "Multiple possible matches" : "Payment proof" };
   });
+  const assignmentCounts = new Map<string, number>();
+  for (const item of matched) {
+    if (isUsaPaymentProofItem(item) && item.status === "Matched" && item.matchedReceiptId) {
+      assignmentCounts.set(item.matchedReceiptId, (assignmentCounts.get(item.matchedReceiptId) ?? 0) + 1);
+    }
+  }
+  return matched.map((item) =>
+    isUsaPaymentProofItem(item) &&
+    item.status === "Matched" &&
+    item.matchedReceiptId &&
+    (assignmentCounts.get(item.matchedReceiptId) ?? 0) > 1
+      ? { ...item, matchedReceiptId: "", status: "Multiple possible matches" }
+      : item
+  );
+}
+
+function dateDistanceDays(left: string, right: string): number | undefined {
+  const leftKey = parseDateKey(left);
+  const rightKey = parseDateKey(right);
+  if (!leftKey || !rightKey) return undefined;
+  const leftDate = new Date(/^\d{4}-\d{2}-\d{2}$/.test(leftKey) ? `${leftKey}T00:00:00` : leftKey);
+  const rightDate = new Date(/^\d{4}-\d{2}-\d{2}$/.test(rightKey) ? `${rightKey}T00:00:00` : rightKey);
+  if (Number.isNaN(leftDate.getTime()) || Number.isNaN(rightDate.getTime())) return undefined;
+  leftDate.setFullYear(new Date().getFullYear());
+  rightDate.setFullYear(new Date().getFullYear());
+  return Math.round(Math.abs(leftDate.getTime() - rightDate.getTime()) / 86_400_000);
+}
+
+function paymentProofTransactionKey(item: ReceiptItem): string | undefined {
+  const amount = safeNumber(item.amount);
+  const date = parseDateKey(item.transactionDate || item.date);
+  if (amount === undefined || !date) return undefined;
+  const bank = (item.bankName ?? "").trim().toLowerCase();
+  const card = (item.cardLast4 ?? "").trim().toLowerCase();
+  const reference = (item.transactionReference ?? "").trim().toLowerCase();
+  const vendor = [...normalizedTextTokens(item.place)].slice(0, 4).join("-");
+  const fingerprint = item.images.map((image) => image.fingerprint || "").filter(Boolean).sort().join("-");
+  if (reference) return `${date}|${amount.toFixed(2)}|${bank}|${card}|${reference}`;
+  return `${date}|${amount.toFixed(2)}|${bank}|${card}|${vendor}|${fingerprint}`;
 }
 
 export interface UsaReportRow {
@@ -515,7 +640,7 @@ export function buildUsaReportRows(items: ReceiptItem[], proofs: PaymentProof[] 
   }));
   const rowByReceiptId = new Map(rows.map((row) => [row.id, row]));
   const proofCandidates = [
-    ...mergedItems.filter(isUsaPaymentProofItem).map((item) => ({
+    ...mergedItems.filter((item) => isUsaPaymentProofItem(item) && item.status !== "Duplicate proof").map((item) => ({
       id: item.id,
       date: item.date,
       amount: item.amount,
@@ -561,7 +686,7 @@ export function buildUsaReportRows(items: ReceiptItem[], proofs: PaymentProof[] 
       if (matches.length === 1) target = matches[0];
     }
     if (target) {
-      target.proofImages.push(...proof.images);
+      target.proofImages = sortSourcePages([...target.proofImages, ...proof.images]);
     } else {
       proofOnlyRows.push({
         id: proof.id,
@@ -580,6 +705,32 @@ export function buildUsaReportRows(items: ReceiptItem[], proofs: PaymentProof[] 
       return left.index - right.index;
     })
     .map(({ row }) => row);
+}
+
+export function usaExportAuditIssues(items: ReceiptItem[]): Array<{ item: ReceiptItem; reason: string }> {
+  const issues: Array<{ item: ReceiptItem; reason: string }> = [];
+  const seenImageIds = new Map<string, ReceiptItem>();
+  for (const item of items) {
+    if (item.status === "Multiple possible matches") {
+      issues.push({ item, reason: "Multiple possible matches" });
+    }
+    const roles = new Set(item.images.map((image) => image.supportRole ?? "unknown"));
+    if (item.status === "Filename hint" && ![...roles].some((role) => role === "receipt" || role === "companion_ticket" || role === "payment_proof")) {
+      issues.push({ item, reason: "Pages need AI review" });
+    }
+    if (roles.has("unknown") && (roles.has("receipt") || roles.has("payment_proof"))) {
+      issues.push({ item, reason: "Unresolved page role" });
+    }
+    for (const image of item.images) {
+      const previous = seenImageIds.get(image.id);
+      if (previous && previous.id !== item.id) {
+        issues.push({ item, reason: "Support page appears in multiple entries" });
+      } else {
+        seenImageIds.set(image.id, item);
+      }
+    }
+  }
+  return issues;
 }
 
 export function matchPaymentProofs(proofs: PaymentProof[], items: ReceiptItem[]): PaymentProof[] {

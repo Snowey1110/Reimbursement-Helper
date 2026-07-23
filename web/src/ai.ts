@@ -1,4 +1,13 @@
-import type { FormVersion, ImageAttachment, ReceiptExtraction, ReceiptItem } from "./types";
+import type {
+  DocumentEvidence,
+  FormVersion,
+  ImageAttachment,
+  PageExtraction,
+  ReceiptExtraction,
+  ReceiptItem,
+  SupportRole
+} from "./types";
+import { orientedImageDataUrl } from "./imageUtils";
 import {
   looksLikeUsaFuelReceipt,
   looksLikeUsaParkingReceipt,
@@ -31,7 +40,46 @@ const RECEIPT_SCHEMA = {
     document_type: { type: "string" },
     receipt_image_indexes: { type: "string" },
     payment_proof_image_indexes: { type: "string" },
-    image_roles: { type: "string" }
+    image_roles: { type: "string" },
+    document_evidence: { type: "string" },
+    transaction_date: { type: "string" },
+    posted_date: { type: "string" },
+    bank_name: { type: "string" },
+    card_last4: { type: "string" },
+    transaction_reference: { type: "string" },
+    page_results: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          page_index: { type: "number" },
+          role: { type: "string" },
+          rotation_degrees: { type: "number" },
+          evidence: { type: "string" },
+          transaction_date: { type: "string" },
+          posted_date: { type: "string" },
+          amount: { type: "string" },
+          vendor: { type: "string" },
+          bank_name: { type: "string" },
+          card_last4: { type: "string" },
+          transaction_reference: { type: "string" }
+        },
+        required: [
+          "page_index",
+          "role",
+          "rotation_degrees",
+          "evidence",
+          "transaction_date",
+          "posted_date",
+          "amount",
+          "vendor",
+          "bank_name",
+          "card_last4",
+          "transaction_reference"
+        ]
+      }
+    }
   },
   required: [
     "date",
@@ -50,7 +98,14 @@ const RECEIPT_SCHEMA = {
     "document_type",
     "receipt_image_indexes",
     "payment_proof_image_indexes",
-    "image_roles"
+    "image_roles",
+    "document_evidence",
+    "transaction_date",
+    "posted_date",
+    "bank_name",
+    "card_last4",
+    "transaction_reference",
+    "page_results"
   ]
 };
 
@@ -132,9 +187,50 @@ function normalizeImageRole(value: unknown): ImageSupportRole | undefined {
   const raw = String(value ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
   if (!raw) return undefined;
   if (raw.includes("payment_proof") || raw.includes("bank_proof") || raw.includes("card_proof") || raw === "proof") return "payment_proof";
-  if (raw.includes("receipt") || raw.includes("invoice") || raw.includes("ticket")) return "receipt";
-  if (raw.includes("unknown") || raw.includes("ignore") || raw.includes("unclear")) return "unknown";
+  if (raw.includes("companion") || raw === "ticket") return "companion_ticket";
+  if (raw.includes("receipt") || raw.includes("invoice")) return "receipt";
+  if (raw.includes("ignore")) return "ignore";
+  if (raw.includes("unknown") || raw.includes("unclear")) return "unknown";
   return undefined;
+}
+
+function normalizeEvidence(value: unknown): DocumentEvidence {
+  const raw = String(value ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (raw.includes("bank") || raw.includes("card_portal") || raw.includes("statement")) return "bank_portal";
+  if (raw.includes("photo") || raw.includes("paper") || raw.includes("scan")) return "photographed_paper";
+  if (raw.includes("merchant") || raw.includes("invoice") || raw.includes("document")) return "merchant_document";
+  return "unknown";
+}
+
+function normalizeRotationDelta(value: unknown): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0;
+  const rounded = Math.round(numeric / 90) * 90;
+  return ((rounded % 360) + 360) % 360;
+}
+
+function validPageResults(value: unknown, max: number): PageExtraction[] {
+  if (!Array.isArray(value)) return [];
+  const result: PageExtraction[] = [];
+  const seen = new Set<number>();
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object") continue;
+    const candidate = raw as PageExtraction;
+    const index = Math.round(Number(candidate.page_index));
+    if (!Number.isFinite(index) || index < 1 || index > max || seen.has(index)) continue;
+    seen.add(index);
+    result.push({ ...candidate, page_index: index });
+  }
+  return result.sort((left, right) => left.page_index - right.page_index);
+}
+
+async function aiImageDataUrl(attachment: ImageAttachment, maxWidth: number, maxHeight: number): Promise<string> {
+  if (((attachment.rotationDegrees % 360) + 360) % 360 === 0) return attachment.dataUrl;
+  try {
+    return (await orientedImageDataUrl(attachment, maxWidth, maxHeight)).dataUrl;
+  } catch {
+    return attachment.dataUrl;
+  }
 }
 
 function parseImageRoleMap(value: unknown, max: number): Map<number, ImageSupportRole> {
@@ -148,7 +244,7 @@ function parseImageRoleMap(value: unknown, max: number): Map<number, ImageSuppor
       result.set(index, role);
     }
   }
-  const roleListPattern = /\b(payment[_\s-]*proof|bank[_\s-]*proof|card[_\s-]*proof|proof|receipt|invoice|ticket|unknown|ignore)\b\s*[:=]\s*([0-9,\s]+)/gi;
+  const roleListPattern = /\b(payment[_\s-]*proof|bank[_\s-]*proof|card[_\s-]*proof|proof|companion[_\s-]*ticket|receipt|invoice|ticket|unknown|ignore)\b\s*[:=]\s*([0-9,\s]+)/gi;
   for (const match of text.matchAll(roleListPattern)) {
     const role = normalizeImageRole(match[1]);
     if (!role) continue;
@@ -185,6 +281,7 @@ async function readJsonText(response: Response): Promise<string> {
 }
 
 async function extractImageRolesWithOpenAI(apiKey: string, model: string, item: ReceiptItem): Promise<string> {
+  const aiImages = await Promise.all(item.images.map((entry) => aiImageDataUrl(entry, 1800, 3000)));
   const prompt = [
     "Classify each attached USA reimbursement image/page.",
     "Return every image number exactly once in image_roles, like: 1:payment_proof, 2:receipt, 3:ignore.",
@@ -210,7 +307,7 @@ async function extractImageRolesWithOpenAI(apiKey: string, model: string, item: 
             { type: "input_text", text: prompt },
             ...item.images.flatMap((entry, index) => [
               { type: "input_text", text: `Image ${index + 1}: ${entry.filename || entry.sourceName || item.filename}` },
-              { type: "input_image", image_url: entry.dataUrl }
+              { type: "input_image", image_url: aiImages[index] }
             ])
           ]
         }
@@ -230,14 +327,21 @@ async function extractImageRolesWithOpenAI(apiKey: string, model: string, item: 
 }
 
 export async function extractReceiptWithOpenAI(apiKey: string, model: string, formVersion: FormVersion, item: ReceiptItem): Promise<ReceiptExtraction> {
+  const aiImages = await Promise.all(item.images.map((entry) => aiImageDataUrl(entry, 2200, 3600)));
   const prompt = [
     `Extract reimbursement details for the ${formVersion} form.`,
     "Return dates as YYYY-MM-DD when possible.",
     "Use the actual receipt currency. If the receipt is USD, currency must be USD even on the Korea form.",
     "Prefer charged/paid total amount over subtotal, tax-only, or authorization metadata.",
     "Choose category from transportation, lodging, meals, advertising, office, entertainment, materials, consumables, physical_exam, nucleic_test, courier, welfare, other.",
-    "For USA uploads, classify document_type as receipt, payment_proof, or unknown. Payment proof means a bank/card transaction screenshot or statement, not the merchant receipt.",
-    "A merchant receipt paid by credit card is still document_type receipt, not payment_proof.",
+    "For USA uploads, classify each page before classifying the whole item.",
+    "For every original page, return one page_results object with its 1-based page_index, role, clockwise rotation needed from the supplied image, evidence, dates, amount, vendor, bank, card last four digits, and transaction reference.",
+    "Use page role receipt, companion_ticket, payment_proof, or ignore.",
+    "Use evidence photographed_paper, merchant_document, bank_portal, or unknown.",
+    "Payment proof means a digital bank/card portal or statement such as Chase transaction details.",
+    "A photographed or scanned paper is a receipt even when it says Credit Card Receipt, paid by card, Visa, Mastercard, authorization, or terminal.",
+    "A merchant entry/exit ticket or QR ticket without its own paid amount is companion_ticket.",
+    "rotation_degrees is the clockwise correction still needed for the supplied page: 0, 90, 180, or 270.",
     "If the attached entry has multiple pages/images, review every image before choosing document_type.",
     "If an entry includes both a merchant receipt/ticket and a bank/card transaction screenshot, classify it as receipt and extract the merchant receipt/ticket details.",
     "Return receipt_image_indexes as comma-separated 1-based image numbers for merchant receipt/ticket pages.",
@@ -247,7 +351,7 @@ export async function extractReceiptWithOpenAI(apiKey: string, model: string, fo
     "Parking, parking lots and garages, toll, bridge, fuel, gas, rideshare, taxi, airfare, airline, car rental, and baggage fees are transportation, never meals.",
     "For Korea uploads, document_type should normally be receipt unless the image is clearly not reimbursement support.",
     "Keep applicant/personal identity fields blank.",
-    "Filenames may contain an app memory marker beginning with __RH1_. Treat it as prior reimbursement memory, especially when it says r-manual.",
+    "Filenames may contain an app memory marker beginning with __RH1_. It is only a hint. Classify from the current page content; explicit user choices are applied by the app after your response.",
     `Current editable row values: ${JSON.stringify({
       filename: item.filename,
       date: item.date,
@@ -277,7 +381,7 @@ export async function extractReceiptWithOpenAI(apiKey: string, model: string, fo
             { type: "input_text", text: prompt },
             ...item.images.flatMap((entry, index) => [
               { type: "input_text", text: `Image ${index + 1}: ${entry.filename || entry.sourceName || item.filename}` },
-              { type: "input_image", image_url: entry.dataUrl }
+              { type: "input_image", image_url: aiImages[index] }
             ])
           ]
         }
@@ -404,9 +508,25 @@ export function applyExtraction(item: ReceiptItem, extraction: ReceiptExtraction
   if (formVersion === "USA" && documentType === "payment_proof" && strongReceipt) {
     documentType = "receipt";
   }
+  const pageResults = validPageResults(extraction.page_results, item.images.length);
+  const pageResultByIndex = new Map(pageResults.map((result) => [result.page_index - 1, result]));
   const roleMap = parseImageRoleMap(extraction.image_roles, item.images.length);
   const receiptImageIndexes = parseImageIndexes(extraction.receipt_image_indexes, item.images.length);
   const paymentProofImageIndexes = parseImageIndexes(extraction.payment_proof_image_indexes, item.images.length);
+  for (const result of pageResults) {
+    const index = result.page_index - 1;
+    const role = normalizeImageRole(result.role);
+    if (role === "payment_proof") {
+      paymentProofImageIndexes.add(index);
+      receiptImageIndexes.delete(index);
+    } else if (role === "receipt" || role === "companion_ticket") {
+      receiptImageIndexes.add(index);
+      paymentProofImageIndexes.delete(index);
+    } else if (role === "ignore") {
+      receiptImageIndexes.delete(index);
+      paymentProofImageIndexes.delete(index);
+    }
+  }
   for (const [index, role] of roleMap) {
     if (role === "payment_proof") {
       paymentProofImageIndexes.add(index);
@@ -440,18 +560,63 @@ export function applyExtraction(item: ReceiptItem, extraction: ReceiptExtraction
   } else if (paymentProofImageIndexes.size === item.images.length && item.images.length > 0) {
     documentType = "payment_proof";
   }
+  if (pageResults.length && lockedDocumentType === "unknown") {
+    const pageRoles = pageResults.map((result) => normalizeImageRole(result.role));
+    if (pageRoles.some((role) => role === "receipt" || role === "companion_ticket")) {
+      documentType = "receipt";
+    } else if (pageRoles.some((role) => role === "payment_proof")) {
+      documentType = "payment_proof";
+    }
+  }
+  const firstPageEvidence = pageResults
+    .map((result) => normalizeEvidence(result.evidence))
+    .find((evidence) => evidence !== "unknown");
+  const firstPageValue = (key: keyof PageExtraction): string =>
+    String(pageResults.map((result) => result[key]).find((value) => String(value ?? "").trim()) ?? "");
   let next: ReceiptItem = {
     ...item,
     images:
       formVersion === "USA"
-        ? item.images.map((image, index) => ({
-            ...image,
-            supportRole: paymentProofImageIndexes.has(index)
-              ? "payment_proof"
-              : receiptImageIndexes.has(index)
-                ? "receipt"
-                : roleMap.get(index) ?? image.supportRole ?? "unknown"
-          }))
+        ? item.images.map((image, index) => {
+            const pageResult = pageResultByIndex.get(index);
+            const pageRole = pageResult ? normalizeImageRole(pageResult.role) : undefined;
+            const manualRole = image.roleSource === "manual" ? image.supportRole : undefined;
+            const lockedRole: SupportRole | undefined =
+              lockedDocumentType === "payment_proof"
+                ? "payment_proof"
+                : lockedDocumentType === "receipt"
+                  ? pageRole === "companion_ticket"
+                    ? "companion_ticket"
+                    : "receipt"
+                  : undefined;
+            const supportRole =
+              manualRole ??
+              lockedRole ??
+              pageRole ??
+              (paymentProofImageIndexes.has(index)
+                ? "payment_proof"
+                : receiptImageIndexes.has(index)
+                  ? "receipt"
+                  : roleMap.get(index) ?? image.supportRole ?? "unknown");
+            const rotationDelta =
+              pageResult && !image.rotationLocked
+                ? normalizeRotationDelta(pageResult.rotation_degrees)
+                : 0;
+            return {
+              ...image,
+              supportRole,
+              roleSource: manualRole ? "manual" : pageResult || roleMap.has(index) ? "ai" : image.roleSource ?? "",
+              documentEvidence: pageResult ? normalizeEvidence(pageResult.evidence) : image.documentEvidence ?? "unknown",
+              transactionDate: String(pageResult?.transaction_date ?? image.transactionDate ?? ""),
+              postedDate: String(pageResult?.posted_date ?? image.postedDate ?? ""),
+              bankName: String(pageResult?.bank_name ?? image.bankName ?? ""),
+              cardLast4: String(pageResult?.card_last4 ?? image.cardLast4 ?? ""),
+              transactionReference: String(pageResult?.transaction_reference ?? image.transactionReference ?? ""),
+              rotationDegrees: image.rotationLocked
+                ? image.rotationDegrees
+                : (image.rotationDegrees + rotationDelta) % 360
+            };
+          })
         : item.images,
     date: String(extraction.date ?? item.date ?? ""),
     place: String(extraction.place ?? extraction.vendor ?? item.place ?? ""),
@@ -467,12 +632,23 @@ export function applyExtraction(item: ReceiptItem, extraction: ReceiptExtraction
     receiptLabel: String(extraction.receipt_label ?? item.receiptLabel ?? item.filename),
     documentType,
     lockedDocumentType: item.lockedDocumentType,
+    documentEvidence: normalizeEvidence(extraction.document_evidence) !== "unknown"
+      ? normalizeEvidence(extraction.document_evidence)
+      : firstPageEvidence ?? item.documentEvidence ?? "unknown",
+    transactionDate: String(extraction.transaction_date || firstPageValue("transaction_date") || item.transactionDate || ""),
+    postedDate: String(extraction.posted_date || firstPageValue("posted_date") || item.postedDate || ""),
+    bankName: String(extraction.bank_name || firstPageValue("bank_name") || item.bankName || ""),
+    cardLast4: String(extraction.card_last4 || firstPageValue("card_last4") || item.cardLast4 || ""),
+    transactionReference: String(
+      extraction.transaction_reference || firstPageValue("transaction_reference") || item.transactionReference || ""
+    ),
     status: "AI filled"
   };
   const paymentProofShouldBeReceipt =
     formVersion === "USA" &&
     next.documentType === "payment_proof" &&
     lockedDocumentType !== "payment_proof" &&
+    !pageResults.length &&
     !strongProof &&
     (looksLikeMerchantReceipt(classificationValues) || looksLikeUsaParkingReceipt(next) || looksLikeUsaTollReceipt(next) || looksLikeUsaFuelReceipt(next));
   if (paymentProofShouldBeReceipt) {

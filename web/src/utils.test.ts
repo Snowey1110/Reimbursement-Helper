@@ -10,7 +10,8 @@ import {
   reportCategoryForItem,
   swapProofForReceipt,
   sortReceiptsForReport,
-  updateAmounts
+  updateAmounts,
+  usaExportAuditIssues
 } from "./utils";
 
 describe("currency conversion", () => {
@@ -119,6 +120,79 @@ describe("payment proof matching", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].receiptImages.map((entry) => entry.id)).toEqual(["receipt-img"]);
     expect(rows[0].proofImages.map((entry) => entry.id)).toEqual(["proof-img"]);
+  });
+
+  it("does not merge same-date same-amount receipts without shared transaction evidence", () => {
+    const merged = mergeSameUsaReceipts([
+      receipt({ id: "north", date: "2026-06-19", amount: "27", place: "North Garage", details: "North entrance" }),
+      receipt({ id: "south", date: "2026-06-19", amount: "27", place: "South Garage", details: "South entrance" })
+    ]);
+
+    expect(merged.map((item) => item.id)).toEqual(["north", "south"]);
+  });
+
+  it("merges a companion ticket into its paid toll receipt", () => {
+    const merged = mergeSameUsaReceipts([
+      receipt({
+        id: "ticket",
+        date: "2026-06-26",
+        amount: "2.50",
+        place: "Indiana Toll Road",
+        details: "Entry Portage ticket",
+        images: [image({ id: "ticket-image", supportRole: "companion_ticket" })]
+      }),
+      receipt({
+        id: "paid",
+        date: "2026-06-26",
+        amount: "2.50",
+        place: "Indiana Toll Road",
+        details: "Toll from Portage to LaPorte",
+        images: [image({ id: "paid-image", supportRole: "receipt" })]
+      })
+    ]);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0].images.map((entry) => entry.id)).toEqual(["ticket-image", "paid-image"]);
+  });
+
+  it("orders multipage proof images top-to-bottom by source page", () => {
+    const rows = buildUsaReportRows([
+      receipt({
+        id: "proof",
+        documentType: "payment_proof",
+        date: "2026-06-26",
+        amount: "2.50",
+        images: [
+          image({ id: "page-2", sourceName: "proof.pdf", sourcePage: 2, supportRole: "payment_proof" }),
+          image({ id: "page-1", sourceName: "proof.pdf", sourcePage: 1, supportRole: "payment_proof" })
+        ]
+      })
+    ]);
+
+    expect(rows[0].proofImages.map((entry) => entry.id)).toEqual(["page-1", "page-2"]);
+  });
+
+  it("blocks an ambiguous proof match instead of guessing", () => {
+    const proofItem = receipt({
+      id: "proof",
+      documentType: "payment_proof",
+      date: "2026-06-19",
+      amount: "30",
+      place: "Chase"
+    });
+    const matched = buildUsaReportRows([
+      receipt({ id: "north", date: "2026-06-19", amount: "30", place: "North Garage" }),
+      receipt({ id: "south", date: "2026-06-19", amount: "30", place: "South Garage" }),
+      proofItem
+    ]);
+    const itemsForAudit = [
+      receipt({ id: "north", date: "2026-06-19", amount: "30", place: "North Garage" }),
+      receipt({ id: "south", date: "2026-06-19", amount: "30", place: "South Garage" }),
+      { ...proofItem, status: "Multiple possible matches" }
+    ];
+
+    expect(matched).toHaveLength(3);
+    expect(usaExportAuditIssues(itemsForAudit)[0].reason).toBe("Multiple possible matches");
   });
 
   it("splits mixed receipt entries into receipt and proof columns by page role", () => {

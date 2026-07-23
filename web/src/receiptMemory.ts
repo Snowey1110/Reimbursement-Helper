@@ -13,6 +13,7 @@ interface ReceiptMemoryRecord {
   updatedAt: string;
   formVersion: FormVersion;
   documentType: string;
+  lockedDocumentType?: string;
   date: string;
   place: string;
   amount: string;
@@ -25,10 +26,29 @@ interface ReceiptMemoryRecord {
   category: string;
   paymentMethod: string;
   receiptLabel: string;
+  documentEvidence?: string;
+  transactionDate?: string;
+  postedDate?: string;
+  bankName?: string;
+  cardLast4?: string;
+  transactionReference?: string;
+  pageStates?: Array<{
+    sourcePage?: number;
+    supportRole?: string;
+    roleSource?: string;
+    rotationDegrees?: number;
+    rotationLocked?: boolean;
+    documentEvidence?: string;
+    transactionDate?: string;
+    postedDate?: string;
+    bankName?: string;
+    cardLast4?: string;
+    transactionReference?: string;
+  }>;
 }
 
 interface ReceiptMemoryStore {
-  version: 1;
+  version: 2;
   records: Record<string, ReceiptMemoryRecord>;
 }
 
@@ -36,12 +56,12 @@ function loadStore(): ReceiptMemoryStore {
   try {
     const parsed = JSON.parse(localStorage.getItem(RECEIPT_MEMORY_STORAGE_KEY) || "");
     if (parsed && typeof parsed === "object" && parsed.records && typeof parsed.records === "object") {
-      return { version: 1, records: parsed.records };
+      return { version: 2, records: parsed.records };
     }
   } catch {
     // Storage can be disabled in private browsing; ignore and behave as no memory.
   }
-  return { version: 1, records: {} };
+  return { version: 2, records: {} };
 }
 
 function saveStore(store: ReceiptMemoryStore) {
@@ -132,6 +152,10 @@ function parseMarker(value: string): Partial<ReceiptMemoryRecord> | undefined {
 }
 
 function applyRecord(item: ReceiptItem, record: Partial<ReceiptMemoryRecord>, formVersion: FormVersion, fullRecord: boolean): ReceiptItem {
+  const manual = record.reviewedSource === "manual";
+  const lockedType = normalizeDocumentType(record.lockedDocumentType, "unknown");
+  const rememberedType = normalizeDocumentType(record.documentType, "unknown");
+  const pageStates = Array.isArray(record.pageStates) ? record.pageStates : [];
   const next: ReceiptItem = {
     ...item,
     date: record.date ?? item.date,
@@ -147,7 +171,42 @@ function applyRecord(item: ReceiptItem, record: Partial<ReceiptMemoryRecord>, fo
     paymentMethod: record.paymentMethod ?? item.paymentMethod,
     receiptLabel: record.receiptLabel ?? item.receiptLabel,
     documentType: formVersion === "USA" ? normalizeDocumentType(record.documentType, item.documentType) : item.documentType,
-    status: fullRecord ? (record.reviewedSource === "manual" ? "Manual remembered" : "Remembered") : item.status === "Empty" ? "Filename hint" : item.status
+    lockedDocumentType:
+      formVersion === "USA" && (lockedType !== "unknown" || (manual && rememberedType !== "unknown"))
+        ? lockedType !== "unknown" ? lockedType : rememberedType
+        : item.lockedDocumentType,
+    documentEvidence: (record.documentEvidence as ReceiptItem["documentEvidence"]) ?? item.documentEvidence,
+    transactionDate: record.transactionDate ?? item.transactionDate,
+    postedDate: record.postedDate ?? item.postedDate,
+    bankName: record.bankName ?? item.bankName,
+    cardLast4: record.cardLast4 ?? item.cardLast4,
+    transactionReference: record.transactionReference ?? item.transactionReference,
+    images: item.images.map((image, index) => {
+      const state =
+        pageStates.find((candidate) => candidate.sourcePage !== undefined && candidate.sourcePage === image.sourcePage) ??
+        pageStates[index];
+      if (!state) {
+        return manual && rememberedType !== "unknown"
+          ? { ...image, supportRole: rememberedType, roleSource: "manual" }
+          : image;
+      }
+      return {
+        ...image,
+        supportRole: (state.supportRole as typeof image.supportRole) ?? image.supportRole,
+        roleSource: (state.roleSource as typeof image.roleSource) ?? (manual ? "memory" : image.roleSource),
+        rotationDegrees: state.rotationDegrees ?? image.rotationDegrees,
+        rotationLocked: state.rotationLocked ?? image.rotationLocked,
+        documentEvidence: (state.documentEvidence as typeof image.documentEvidence) ?? image.documentEvidence,
+        transactionDate: state.transactionDate ?? image.transactionDate,
+        postedDate: state.postedDate ?? image.postedDate,
+        bankName: state.bankName ?? image.bankName,
+        cardLast4: state.cardLast4 ?? image.cardLast4,
+        transactionReference: state.transactionReference ?? image.transactionReference
+      };
+    }),
+    status: fullRecord
+      ? manual ? "Manual remembered" : "Remembered"
+      : manual ? "Manual remembered" : item.status === "Empty" ? "Filename hint" : item.status
   };
   return updateAmounts(next, { usdToRmb: DEFAULT_USD_TO_RMB, usdToKrw: DEFAULT_USD_TO_KRW, krwToRmb: DEFAULT_KRW_TO_RMB }, "amount");
 }
@@ -172,6 +231,7 @@ export function receiptMemoryRecordFromItem(item: ReceiptItem, formVersion: Form
     updatedAt: new Date().toISOString(),
     formVersion,
     documentType: normalizeDocumentType(item.documentType, "unknown"),
+    lockedDocumentType: item.lockedDocumentType,
     date: item.date.trim(),
     place: item.place.trim(),
     amount: item.amount.trim(),
@@ -183,7 +243,26 @@ export function receiptMemoryRecordFromItem(item: ReceiptItem, formVersion: Form
     projectNumber: item.projectNumber.trim(),
     category: normalizeCategory(item.category),
     paymentMethod: item.paymentMethod.trim(),
-    receiptLabel: item.receiptLabel.trim()
+    receiptLabel: item.receiptLabel.trim(),
+    documentEvidence: item.documentEvidence,
+    transactionDate: item.transactionDate?.trim(),
+    postedDate: item.postedDate?.trim(),
+    bankName: item.bankName?.trim(),
+    cardLast4: item.cardLast4?.trim(),
+    transactionReference: item.transactionReference?.trim(),
+    pageStates: item.images.map((image) => ({
+      sourcePage: image.sourcePage,
+      supportRole: image.supportRole,
+      roleSource: image.roleSource,
+      rotationDegrees: image.rotationDegrees,
+      rotationLocked: image.rotationLocked,
+      documentEvidence: image.documentEvidence,
+      transactionDate: image.transactionDate,
+      postedDate: image.postedDate,
+      bankName: image.bankName,
+      cardLast4: image.cardLast4,
+      transactionReference: image.transactionReference
+    }))
   };
 }
 

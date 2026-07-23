@@ -61,7 +61,10 @@ describe("receipt memory", () => {
       "USA"
     );
 
-    expect(hinted.status).toBe("Filename hint");
+    expect(hinted.status).toBe("Manual remembered");
     expect(hinted.amount).toBe("40.00");
+    expect(hinted.documentType).toBe("receipt");
+    expect(hinted.lockedDocumentType).toBe("receipt");
+    expect(hinted.images[0]?.roleSource).toBe("manual");
   });
 });
