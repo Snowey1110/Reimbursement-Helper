@@ -479,6 +479,9 @@ export async function extractKoreaExchangeRatesWithOpenAI(
 }
 
 export function applyExtraction(item: ReceiptItem, extraction: ReceiptExtraction, formVersion: FormVersion): ReceiptItem {
+  const manualFields = new Set(item.manualFields ?? []);
+  const keepManual = (field: string, extracted: unknown, current: string): string =>
+    manualFields.has(field) ? current : String(extracted ?? current ?? "");
   const currency = normalizeCurrency(extraction.currency, formVersion === "USA" ? "USD" : item.currency);
   let documentType = formVersion === "USA" ? normalizeDocumentType(extraction.document_type, item.documentType) : item.documentType;
   const lockedDocumentType = formVersion === "USA" ? normalizeDocumentType(item.lockedDocumentType, "unknown") : "unknown";
@@ -609,6 +612,8 @@ export function applyExtraction(item: ReceiptItem, extraction: ReceiptExtraction
               documentEvidence: pageResult ? normalizeEvidence(pageResult.evidence) : image.documentEvidence ?? "unknown",
               transactionDate: String(pageResult?.transaction_date ?? image.transactionDate ?? ""),
               postedDate: String(pageResult?.posted_date ?? image.postedDate ?? ""),
+              pageAmount: String(pageResult?.amount ?? image.pageAmount ?? ""),
+              pageVendor: String(pageResult?.vendor ?? image.pageVendor ?? ""),
               bankName: String(pageResult?.bank_name ?? image.bankName ?? ""),
               cardLast4: String(pageResult?.card_last4 ?? image.cardLast4 ?? ""),
               transactionReference: String(pageResult?.transaction_reference ?? image.transactionReference ?? ""),
@@ -618,18 +623,18 @@ export function applyExtraction(item: ReceiptItem, extraction: ReceiptExtraction
             };
           })
         : item.images,
-    date: String(extraction.date ?? item.date ?? ""),
-    place: String(extraction.place ?? extraction.vendor ?? item.place ?? ""),
-    amount: String(extraction.amount ?? item.amount ?? ""),
-    currency: formVersion === "USA" ? "USD" : currency,
-    krwAmount: String(extraction.krw_amount ?? item.krwAmount ?? ""),
-    rmbAmount: String(extraction.rmb_amount ?? item.rmbAmount ?? ""),
-    purpose: String(extraction.purpose ?? item.purpose ?? ""),
-    details: String(extraction.details ?? item.details ?? ""),
-    projectNumber: String(extraction.project_number ?? item.projectNumber ?? ""),
-    category: normalizeCategory(extraction.category ?? item.category),
-    paymentMethod: String(extraction.payment_method ?? item.paymentMethod ?? ""),
-    receiptLabel: String(extraction.receipt_label ?? item.receiptLabel ?? item.filename),
+    date: keepManual("date", extraction.date, item.date),
+    place: keepManual("place", extraction.place || extraction.vendor, item.place),
+    amount: keepManual("amount", extraction.amount, item.amount),
+    currency: manualFields.has("currency") ? item.currency : formVersion === "USA" ? "USD" : currency,
+    krwAmount: keepManual("krwAmount", extraction.krw_amount, item.krwAmount),
+    rmbAmount: keepManual("rmbAmount", extraction.rmb_amount, item.rmbAmount),
+    purpose: keepManual("purpose", extraction.purpose, item.purpose),
+    details: keepManual("details", extraction.details, item.details),
+    projectNumber: keepManual("projectNumber", extraction.project_number, item.projectNumber),
+    category: manualFields.has("category") ? item.category : normalizeCategory(extraction.category ?? item.category),
+    paymentMethod: keepManual("paymentMethod", extraction.payment_method, item.paymentMethod),
+    receiptLabel: keepManual("receiptLabel", extraction.receipt_label, item.receiptLabel || item.filename),
     documentType,
     lockedDocumentType: item.lockedDocumentType,
     documentEvidence: normalizeEvidence(extraction.document_evidence) !== "unknown"
@@ -644,6 +649,19 @@ export function applyExtraction(item: ReceiptItem, extraction: ReceiptExtraction
     ),
     status: "AI filled"
   };
+  const identityRoles: SupportRole[] =
+    next.documentType === "payment_proof"
+      ? ["payment_proof"]
+      : ["receipt", "companion_ticket"];
+  const identityImages = identityRoles.flatMap((role) =>
+    next.images.filter((image) => image.supportRole === role)
+  );
+  const pageIdentityDate = identityImages.find((image) => image.transactionDate?.trim())?.transactionDate?.trim();
+  const pageIdentityAmount = identityImages.find((image) => image.pageAmount?.trim())?.pageAmount?.trim();
+  const pageIdentityVendor = identityImages.find((image) => image.pageVendor?.trim())?.pageVendor?.trim();
+  if (pageIdentityDate && !manualFields.has("date")) next.date = pageIdentityDate;
+  if (pageIdentityAmount && !manualFields.has("amount")) next.amount = pageIdentityAmount;
+  if (pageIdentityVendor && !manualFields.has("place")) next.place = pageIdentityVendor;
   const paymentProofShouldBeReceipt =
     formVersion === "USA" &&
     next.documentType === "payment_proof" &&

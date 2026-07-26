@@ -15,6 +15,8 @@ export function image(overrides: Partial<ImageAttachment> = {}): ImageAttachment
     documentEvidence: overrides.documentEvidence,
     transactionDate: overrides.transactionDate,
     postedDate: overrides.postedDate,
+    pageAmount: overrides.pageAmount,
+    pageVendor: overrides.pageVendor,
     bankName: overrides.bankName,
     cardLast4: overrides.cardLast4,
     transactionReference: overrides.transactionReference,
@@ -53,6 +55,7 @@ export function receipt(overrides: Partial<ReceiptItem> = {}): ReceiptItem {
     bankName: overrides.bankName,
     cardLast4: overrides.cardLast4,
     transactionReference: overrides.transactionReference,
+    manualFields: overrides.manualFields,
     matchedReceiptId: overrides.matchedReceiptId ?? "",
     images: overrides.images ?? [image({ id: `${id}-image` })]
   };

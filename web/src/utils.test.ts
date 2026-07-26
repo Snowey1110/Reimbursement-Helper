@@ -192,7 +192,7 @@ describe("payment proof matching", () => {
     ];
 
     expect(matched).toHaveLength(3);
-    expect(usaExportAuditIssues(itemsForAudit)[0].reason).toBe("Multiple possible matches");
+    expect(usaExportAuditIssues(itemsForAudit).map(({ reason }) => reason)).toContain("Multiple possible matches");
   });
 
   it("splits mixed receipt entries into receipt and proof columns by page role", () => {
@@ -245,6 +245,42 @@ describe("payment proof matching", () => {
     expect(receiptNeedsAi(receipt({ status: "AI filled", documentType: "receipt" }), "USA")).toBe(false);
     expect(receiptNeedsAi(receipt({ status: "AI filled", documentType: "unknown" }), "USA")).toBe(true);
     expect(receiptNeedsAi(receipt({ status: "Empty", documentType: "receipt" }), "USA")).toBe(true);
+    expect(receiptNeedsAi(receipt({ status: "Needs regen", documentType: "receipt" }), "USA")).toBe(true);
+  });
+
+  it("blocks unknown pages and page identity mismatches before USA export", () => {
+    const unknown = receipt({
+      id: "unknown",
+      images: [image({ id: "unknown-page", supportRole: "unknown" })]
+    });
+    const legacyKnown = receipt({
+      id: "legacy-known",
+      images: [image({ id: "legacy-page", supportRole: "receipt" })]
+    });
+    const mismatch = receipt({
+      id: "mismatch",
+      date: "2026-07-06",
+      amount: "9.00",
+      images: [
+        image({
+          id: "fuel-page",
+          supportRole: "receipt",
+          transactionDate: "2026-06-29",
+          pageAmount: "48.18"
+        })
+      ]
+    });
+
+    const issues = usaExportAuditIssues([unknown, legacyKnown, mismatch]);
+
+    expect(issues.filter(({ item }) => item.id === "unknown").map(({ reason }) => reason)).toContain("Pages need AI review");
+    expect(issues.filter(({ item }) => item.id === "legacy-known").map(({ reason }) => reason)).toContain("Pages need AI review");
+    expect(issues.filter(({ item }) => item.id === "mismatch").map(({ reason }) => reason)).toContain("Page amount does not match row");
+    expect(issues.filter(({ item }) => item.id === "mismatch").map(({ reason }) => reason)).toContain("Page date does not match row");
+
+    const manualIssues = usaExportAuditIssues([{ ...mismatch, manualFields: ["amount", "date"] }]);
+    expect(manualIssues.map(({ reason }) => reason)).not.toContain("Page amount does not match row");
+    expect(manualIssues.map(({ reason }) => reason)).not.toContain("Page date does not match row");
   });
 });
 

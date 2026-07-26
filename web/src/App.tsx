@@ -244,7 +244,11 @@ export default function App() {
   const selectedItem = selectedIds.length ? items.find((item) => item.id === selectedIds[selectedIds.length - 1]) ?? null : null;
   const selectedProofs = selectedItem ? proofs.filter((proof) => proof.matchedReceiptId === selectedItem.id) : [];
   const t = (key: Parameters<typeof text>[1], values?: Record<string, string | number>) => text(language, key, values);
-  const attentionLabel = (reason: string | undefined) => (reason === "Wrong year" ? t("attentionWrongYear") : reason);
+  const attentionLabel = (reason: string | undefined) => {
+    if (reason === "Wrong year") return t("attentionWrongYear");
+    if (reason === "Needs AI review") return t("attentionNeedsAiReview");
+    return reason;
+  };
   const categoryLabels = CATEGORY_LABELS[language];
   const suggestedAction = useMemo<SuggestedAction | undefined>(() => {
     if (busy) return undefined;
@@ -336,10 +340,37 @@ export default function App() {
   }, [formVersion, rates]);
 
   function updateItem(id: string, patch: Partial<ReceiptItem>, amountSource: "amount" | "krw" | "rmb" | "currency" = "amount") {
+    const editableFields = new Set([
+      "date",
+      "place",
+      "amount",
+      "currency",
+      "krwAmount",
+      "rmbAmount",
+      "purpose",
+      "details",
+      "projectNumber",
+      "category",
+      "paymentMethod",
+      "receiptLabel"
+    ]);
+    const changedManualFields = Object.keys(patch).filter((key) => editableFields.has(key));
     setItems((current) =>
       current.map((item) => {
         if (!selectedIds.includes(item.id) && item.id !== id) return item;
-        const updated = rememberReceiptItem(updateAmounts({ ...item, ...patch }, rates, amountSource), formVersion, "manual");
+        const updated = rememberReceiptItem(
+          updateAmounts(
+            {
+              ...item,
+              ...patch,
+              manualFields: [...new Set([...(item.manualFields ?? []), ...changedManualFields])]
+            },
+            rates,
+            amountSource
+          ),
+          formVersion,
+          "manual"
+        );
         if (!receiptAttentionReason(updated, formVersion) && ["Empty", "Failed", "Missing date/amount"].includes(updated.status)) {
           return { ...updated, status: updated.documentType === "payment_proof" ? "Payment proof" : "Manual filled" };
         }

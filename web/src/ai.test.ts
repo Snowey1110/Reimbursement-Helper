@@ -439,4 +439,81 @@ describe("OpenAI extraction", () => {
     expect(result.images[0].roleSource).toBe("manual");
     expect(result.images[0].rotationDegrees).toBe(270);
   });
+
+  it("uses current page identity instead of stale filename metadata", () => {
+    const result = applyExtraction(
+      receipt({
+        filename: "scan__RH1_t-payment_proof_d-2026-07-06_a-9p00USD_r-manual__.png",
+        documentType: "payment_proof",
+        date: "2026-07-06",
+        amount: "9.00",
+        place: "Stale vendor",
+        images: [image({ id: "fuel-paper" })]
+      }),
+      {
+        date: "2026-07-06",
+        place: "Stale vendor",
+        amount: "9.00",
+        currency: "USD",
+        document_type: "payment_proof",
+        page_results: [
+          {
+            page_index: 1,
+            role: "receipt",
+            rotation_degrees: 0,
+            evidence: "photographed_paper",
+            transaction_date: "2026-06-29",
+            posted_date: "",
+            amount: "48.18",
+            vendor: "BP",
+            bank_name: "",
+            card_last4: "",
+            transaction_reference: ""
+          }
+        ]
+      },
+      "USA"
+    );
+
+    expect(result.documentType).toBe("receipt");
+    expect(result.date).toBe("2026-06-29");
+    expect(result.amount).toBe("48.18");
+    expect(result.place).toBe("BP");
+    expect(result.images[0].supportRole).toBe("receipt");
+  });
+
+  it("does not overwrite manually edited fields with page identity", () => {
+    const result = applyExtraction(
+      receipt({
+        amount: "40.00",
+        manualFields: ["amount"],
+        images: [image({ id: "fuel-paper" })]
+      }),
+      {
+        date: "2026-06-29",
+        place: "BP",
+        amount: "48.18",
+        currency: "USD",
+        document_type: "receipt",
+        page_results: [
+          {
+            page_index: 1,
+            role: "receipt",
+            rotation_degrees: 0,
+            evidence: "photographed_paper",
+            transaction_date: "2026-06-29",
+            posted_date: "",
+            amount: "48.18",
+            vendor: "BP",
+            bank_name: "",
+            card_last4: "",
+            transaction_reference: ""
+          }
+        ]
+      },
+      "USA"
+    );
+
+    expect(result.amount).toBe("40.00");
+  });
 });

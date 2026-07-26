@@ -9,6 +9,7 @@ const MAX_MEMORY_RECORDS = 2000;
 type ReviewedSource = "ai" | "manual";
 
 interface ReceiptMemoryRecord {
+  version?: number;
   reviewedSource: ReviewedSource;
   updatedAt: string;
   formVersion: FormVersion;
@@ -32,6 +33,7 @@ interface ReceiptMemoryRecord {
   bankName?: string;
   cardLast4?: string;
   transactionReference?: string;
+  manualFields?: string[];
   pageStates?: Array<{
     sourcePage?: number;
     supportRole?: string;
@@ -44,6 +46,8 @@ interface ReceiptMemoryRecord {
     bankName?: string;
     cardLast4?: string;
     transactionReference?: string;
+    pageAmount?: string;
+    pageVendor?: string;
   }>;
 }
 
@@ -153,8 +157,8 @@ function parseMarker(value: string): Partial<ReceiptMemoryRecord> | undefined {
 
 function applyRecord(item: ReceiptItem, record: Partial<ReceiptMemoryRecord>, formVersion: FormVersion, fullRecord: boolean): ReceiptItem {
   const manual = record.reviewedSource === "manual";
+  const currentRecord = fullRecord && Number(record.version ?? 1) >= 2;
   const lockedType = normalizeDocumentType(record.lockedDocumentType, "unknown");
-  const rememberedType = normalizeDocumentType(record.documentType, "unknown");
   const pageStates = Array.isArray(record.pageStates) ? record.pageStates : [];
   const next: ReceiptItem = {
     ...item,
@@ -172,9 +176,10 @@ function applyRecord(item: ReceiptItem, record: Partial<ReceiptMemoryRecord>, fo
     receiptLabel: record.receiptLabel ?? item.receiptLabel,
     documentType: formVersion === "USA" ? normalizeDocumentType(record.documentType, item.documentType) : item.documentType,
     lockedDocumentType:
-      formVersion === "USA" && (lockedType !== "unknown" || (manual && rememberedType !== "unknown"))
-        ? lockedType !== "unknown" ? lockedType : rememberedType
-        : item.lockedDocumentType,
+      formVersion === "USA" && currentRecord && lockedType !== "unknown"
+        ? lockedType
+        : undefined,
+    manualFields: currentRecord ? record.manualFields ?? item.manualFields : [],
     documentEvidence: (record.documentEvidence as ReceiptItem["documentEvidence"]) ?? item.documentEvidence,
     transactionDate: record.transactionDate ?? item.transactionDate,
     postedDate: record.postedDate ?? item.postedDate,
@@ -186,27 +191,31 @@ function applyRecord(item: ReceiptItem, record: Partial<ReceiptMemoryRecord>, fo
         pageStates.find((candidate) => candidate.sourcePage !== undefined && candidate.sourcePage === image.sourcePage) ??
         pageStates[index];
       if (!state) {
-        return manual && rememberedType !== "unknown"
-          ? { ...image, supportRole: rememberedType, roleSource: "manual" }
-          : image;
+        return image;
       }
       return {
         ...image,
-        supportRole: (state.supportRole as typeof image.supportRole) ?? image.supportRole,
-        roleSource: (state.roleSource as typeof image.roleSource) ?? (manual ? "memory" : image.roleSource),
+        supportRole: currentRecord ? (state.supportRole as typeof image.supportRole) ?? image.supportRole : image.supportRole,
+        roleSource: currentRecord
+          ? (state.roleSource as typeof image.roleSource) ?? (manual ? "memory" : image.roleSource)
+          : image.roleSource,
         rotationDegrees: state.rotationDegrees ?? image.rotationDegrees,
         rotationLocked: state.rotationLocked ?? image.rotationLocked,
-        documentEvidence: (state.documentEvidence as typeof image.documentEvidence) ?? image.documentEvidence,
-        transactionDate: state.transactionDate ?? image.transactionDate,
-        postedDate: state.postedDate ?? image.postedDate,
-        bankName: state.bankName ?? image.bankName,
-        cardLast4: state.cardLast4 ?? image.cardLast4,
-        transactionReference: state.transactionReference ?? image.transactionReference
+        documentEvidence: currentRecord
+          ? (state.documentEvidence as typeof image.documentEvidence) ?? image.documentEvidence
+          : image.documentEvidence,
+        transactionDate: currentRecord ? state.transactionDate ?? image.transactionDate : image.transactionDate,
+        postedDate: currentRecord ? state.postedDate ?? image.postedDate : image.postedDate,
+        bankName: currentRecord ? state.bankName ?? image.bankName : image.bankName,
+        cardLast4: currentRecord ? state.cardLast4 ?? image.cardLast4 : image.cardLast4,
+        transactionReference: currentRecord ? state.transactionReference ?? image.transactionReference : image.transactionReference,
+        pageAmount: currentRecord ? state.pageAmount ?? image.pageAmount : image.pageAmount,
+        pageVendor: currentRecord ? state.pageVendor ?? image.pageVendor : image.pageVendor
       };
     }),
-    status: fullRecord
+    status: currentRecord
       ? manual ? "Manual remembered" : "Remembered"
-      : manual ? "Manual remembered" : item.status === "Empty" ? "Filename hint" : item.status
+      : "Needs regen"
   };
   return updateAmounts(next, { usdToRmb: DEFAULT_USD_TO_RMB, usdToKrw: DEFAULT_USD_TO_KRW, krwToRmb: DEFAULT_KRW_TO_RMB }, "amount");
 }
@@ -227,6 +236,7 @@ export function applyStoredReceiptMemory(item: ReceiptItem, formVersion: FormVer
 
 export function receiptMemoryRecordFromItem(item: ReceiptItem, formVersion: FormVersion, reviewedSource: ReviewedSource): ReceiptMemoryRecord {
   return {
+    version: 2,
     reviewedSource,
     updatedAt: new Date().toISOString(),
     formVersion,
@@ -250,6 +260,7 @@ export function receiptMemoryRecordFromItem(item: ReceiptItem, formVersion: Form
     bankName: item.bankName?.trim(),
     cardLast4: item.cardLast4?.trim(),
     transactionReference: item.transactionReference?.trim(),
+    manualFields: item.manualFields ?? [],
     pageStates: item.images.map((image) => ({
       sourcePage: image.sourcePage,
       supportRole: image.supportRole,
@@ -261,7 +272,9 @@ export function receiptMemoryRecordFromItem(item: ReceiptItem, formVersion: Form
       postedDate: image.postedDate,
       bankName: image.bankName,
       cardLast4: image.cardLast4,
-      transactionReference: image.transactionReference
+      transactionReference: image.transactionReference,
+      pageAmount: image.pageAmount,
+      pageVendor: image.pageVendor
     }))
   };
 }

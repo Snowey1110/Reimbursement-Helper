@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import tempfile
 from pathlib import Path
 
 import reimbursement_helper as rh
@@ -178,6 +179,105 @@ class UsaWorkflowTests(unittest.TestCase):
         self.assertEqual("receipt", item.receipt_images[0]["support_role"])
         self.assertEqual(270, item.receipt_images[0]["rotation_degrees"])
         self.assertEqual("manual", item.receipt_images[0]["role_source"])
+
+    def test_legacy_manual_memory_is_a_regeneration_hint_not_a_lock(self) -> None:
+        item = receipt("legacy", "BP", amount="9.00", item_date="2026-07-06")
+        item.document_type = "payment_proof"
+
+        rh.apply_receipt_memory_record_to_item(
+            item,
+            {
+                "version": 1,
+                "reviewed_source": "manual",
+                "document_type": "payment_proof",
+                "date": "2026-07-06",
+                "amount": "9.00",
+                "page_states": [
+                    {
+                        "source_page": "",
+                        "support_role": "payment_proof",
+                        "role_source": "manual",
+                        "page_amount": "9.00",
+                    }
+                ],
+            },
+            "USA",
+            full_record=True,
+        )
+
+        self.assertEqual("Needs regen", item.status)
+        self.assertEqual("", item.locked_document_type)
+        self.assertEqual([], item.manual_fields)
+        self.assertEqual("unknown", item.receipt_images[0]["support_role"])
+        self.assertEqual("", item.receipt_images[0]["role_source"])
+
+    def test_current_page_identity_replaces_stale_filename_metadata(self) -> None:
+        item = receipt("fuel", "Stale vendor", amount="9.00", item_date="2026-07-06")
+        item.document_type = "payment_proof"
+
+        rh.apply_ai_page_results(
+            item,
+            [
+                {
+                    "page_index": 1,
+                    "role": "receipt",
+                    "rotation_degrees": 0,
+                    "evidence": "photographed_paper",
+                    "transaction_date": "2026-06-29",
+                    "amount": "48.18",
+                    "vendor": "BP",
+                }
+            ],
+        )
+
+        self.assertEqual("receipt", item.document_type)
+        self.assertEqual("2026-06-29", item.date)
+        self.assertEqual("48.18", item.amount)
+        self.assertEqual("BP", item.place)
+        self.assertEqual("receipt", item.receipt_images[0]["support_role"])
+
+    def test_page_identity_does_not_overwrite_a_manually_edited_amount(self) -> None:
+        item = receipt("manual-amount", "BP", amount="40.00", item_date="2026-06-29")
+        item.manual_fields = ["amount"]
+
+        rh.apply_ai_page_results(
+            item,
+            [
+                {
+                    "page_index": 1,
+                    "role": "receipt",
+                    "transaction_date": "2026-06-29",
+                    "amount": "48.18",
+                    "vendor": "BP",
+                }
+            ],
+        )
+
+        self.assertEqual("40.00", item.amount)
+
+    def test_export_audit_blocks_unreviewed_and_mismatched_page_identity(self) -> None:
+        unknown = receipt("unknown-page", "Vendor")
+        unknown.receipt_images[0]["support_role"] = "unknown"
+        legacy_known = receipt("legacy-known", "Vendor")
+        legacy_known.receipt_images[0]["support_role"] = "receipt"
+        mismatch = receipt("mismatch", "BP", amount="9.00", item_date="2026-07-06")
+        mismatch.receipt_images[0].update(
+            support_role="receipt",
+            page_amount="48.18",
+            transaction_date="2026-06-29",
+        )
+
+        issues = rh.usa_export_audit_issues([unknown, legacy_known, mismatch])
+
+        self.assertIn("Pages need AI review", [reason for item, reason in issues if item is unknown])
+        self.assertIn("Pages need AI review", [reason for item, reason in issues if item is legacy_known])
+        self.assertIn("Page amount does not match row", [reason for item, reason in issues if item is mismatch])
+        self.assertIn("Page date does not match row", [reason for item, reason in issues if item is mismatch])
+
+        mismatch.manual_fields = ["amount", "date"]
+        manual_issues = rh.usa_export_audit_issues([mismatch])
+        self.assertNotIn("Page amount does not match row", [reason for _item, reason in manual_issues])
+        self.assertNotIn("Page date does not match row", [reason for _item, reason in manual_issues])
 
     def test_companion_ticket_merges_with_same_toll_transaction(self) -> None:
         ticket = receipt("ticket", "Indiana Toll Road", amount="2.50", details="Entry Portage ticket")

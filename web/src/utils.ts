@@ -370,6 +370,7 @@ function sortSourcePages(images: ImageAttachment[]): ImageAttachment[] {
 
 export function receiptAttentionReason(item: ReceiptItem, formVersion: "USA" | "Korea"): string | undefined {
   if (item.status === "Failed") return "AI failed";
+  if (item.status === "Needs regen" || item.status === "Filename hint") return "Needs AI review";
   if (item.status === "Multiple possible matches") return "Multiple possible matches";
   if (formVersion === "USA" && item.documentType === "unknown") return "Unknown document type";
   if (!item.date.trim()) return "Missing date";
@@ -380,7 +381,7 @@ export function receiptAttentionReason(item: ReceiptItem, formVersion: "USA" | "
 
 export function receiptNeedsAi(item: ReceiptItem, formVersion: "USA" | "Korea"): boolean {
   if (item.status === "Remembered" || item.status === "Manual remembered") return false;
-  if (item.status === "Empty" || item.status === "Failed") return true;
+  if (item.status === "Empty" || item.status === "Failed" || item.status === "Needs regen" || item.status === "Filename hint") return true;
   if (!item.date.trim() || !item.amount.trim()) return true;
   if (formVersion === "USA") {
     if (item.documentType === "unknown") return true;
@@ -715,11 +716,41 @@ export function usaExportAuditIssues(items: ReceiptItem[]): Array<{ item: Receip
       issues.push({ item, reason: "Multiple possible matches" });
     }
     const roles = new Set(item.images.map((image) => image.supportRole ?? "unknown"));
-    if (item.status === "Filename hint" && ![...roles].some((role) => role === "receipt" || role === "companion_ticket" || role === "payment_proof")) {
+    const explicitlyLocked = normalizeDocumentType(item.lockedDocumentType, "unknown") !== "unknown";
+    const pageIdentityReviewed = item.images.some(
+      (image) =>
+        ["receipt", "companion_ticket", "payment_proof"].includes(image.supportRole ?? "unknown") &&
+        Boolean(image.pageAmount?.trim() || image.pageVendor?.trim() || image.transactionDate?.trim())
+    );
+    if (
+      !explicitlyLocked &&
+      (
+        ![...roles].some((role) => role === "receipt" || role === "companion_ticket" || role === "payment_proof") ||
+        !pageIdentityReviewed
+      )
+    ) {
       issues.push({ item, reason: "Pages need AI review" });
     }
-    if (roles.has("unknown") && (roles.has("receipt") || roles.has("payment_proof"))) {
+    if (!explicitlyLocked && roles.has("unknown")) {
       issues.push({ item, reason: "Unresolved page role" });
+    }
+    const identityRoles = item.documentType === "payment_proof"
+      ? new Set(["payment_proof"])
+      : new Set(["receipt", "companion_ticket"]);
+    const identityImages = item.images.filter((image) => identityRoles.has(image.supportRole ?? "unknown"));
+    const pageAmount = identityImages.map((image) => safeNumber(image.pageAmount)).find((value) => value !== undefined);
+    const itemAmount = safeNumber(item.amount);
+    if (
+      pageAmount !== undefined &&
+      itemAmount !== undefined &&
+      !(item.manualFields ?? []).includes("amount") &&
+      Math.abs(pageAmount - itemAmount) > 0.01
+    ) {
+      issues.push({ item, reason: "Page amount does not match row" });
+    }
+    const pageDate = identityImages.find((image) => image.transactionDate?.trim())?.transactionDate?.trim();
+    if (pageDate && item.date && !(item.manualFields ?? []).includes("date") && !sameMonthDay(pageDate, item.date)) {
+      issues.push({ item, reason: "Page date does not match row" });
     }
     for (const image of item.images) {
       const previous = seenImageIds.get(image.id);

@@ -41,6 +41,8 @@ export interface ImageAttachment {
   bankName?: string;
   cardLast4?: string;
   transactionReference?: string;
+  pageAmount?: string;
+  pageVendor?: string;
   cropPoints?: CropPoint[];
   rotationDegrees: number;
   rotationLocked?: boolean;
@@ -73,6 +75,7 @@ export interface ReceiptItem {
   bankName?: string;
   cardLast4?: string;
   transactionReference?: string;
+  manualFields?: string[];
   matchedReceiptId: string;
   images: ImageAttachment[];
 }
