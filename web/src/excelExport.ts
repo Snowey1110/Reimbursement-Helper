@@ -38,6 +38,8 @@ const USA_RECEIPT_IMAGE_MAX_HEIGHT = 720;
 const USA_PROOF_IMAGE_MAX_WIDTH = 590;
 const USA_PROOF_IMAGE_MAX_HEIGHT = 720;
 const USA_SUPPORT_IMAGE_PADDING = 12;
+const USA_EXPENSE_TOTAL_ROW = 70;
+const USA_EXPENSE_MERGES = ["A47:C47", "A52:C52", "A55:C55", "A58:C58", "A65:C65", "A69:C69", "A70:C70", "H5:H62"];
 const SPREADSHEET_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 const OFFICE_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 const PACKAGE_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships";
@@ -85,6 +87,11 @@ interface CleanDrawingPackage {
   drawingXml: string;
   relsXml: string;
   mediaNames: string[];
+}
+
+interface UsaExpenseInsertion {
+  row: number;
+  count: number;
 }
 
 function parseXml(xml: string): Document {
@@ -328,6 +335,61 @@ function patchWorksheetValues(
   return serializeXml(doc);
 }
 
+function shiftRangeRows(ref: string, insertAt: number, count: number): string {
+  const [startRef, endRef = startRef] = ref.split(":");
+  const shiftRef = (cellRef: string): string => {
+    const match = /^(\$?[A-Z]+)(\$?)(\d+)$/.exec(cellRef);
+    if (!match) return cellRef;
+    const row = Number(match[3]);
+    return `${match[1]}${match[2]}${row >= insertAt ? row + count : row}`;
+  };
+  const shiftedStart = shiftRef(startRef);
+  const shiftedEnd = shiftRef(endRef);
+  return endRef === startRef ? shiftedStart : `${shiftedStart}:${shiftedEnd}`;
+}
+
+function expandUsaExpenseTemplateXml(templateXml: string, insertions: UsaExpenseInsertion[]): string {
+  if (!insertions.length) return templateXml;
+  const doc = parseXml(templateXml);
+  const sheetData = firstChild(doc, "sheetData");
+  if (!sheetData) return templateXml;
+
+  for (const insertion of insertions) {
+    const sourceRow = elementChildren(sheetData, "row").find((row) => Number(row.getAttribute("r")) === insertion.row - 1);
+    const sourceTemplate = sourceRow?.cloneNode(true) as Element | undefined;
+    for (const row of elementChildren(sheetData, "row")) {
+      const rowNumber = Number(row.getAttribute("r") ?? 0);
+      if (rowNumber < insertion.row) continue;
+      const shiftedRow = rowNumber + insertion.count;
+      row.setAttribute("r", String(shiftedRow));
+      for (const cell of elementChildren(row, "c")) {
+        const column = columnNameFromRef(cell.getAttribute("r") ?? "");
+        if (column) cell.setAttribute("r", `${column}${shiftedRow}`);
+      }
+    }
+    const mergeCells = firstChild(doc, "mergeCells");
+    if (mergeCells) {
+      for (const mergeCell of elementChildren(mergeCells, "mergeCell")) {
+        const ref = mergeCell.getAttribute("ref");
+        if (ref) mergeCell.setAttribute("ref", shiftRangeRows(ref, insertion.row, insertion.count));
+      }
+    }
+    if (!sourceTemplate) continue;
+    for (let offset = 0; offset < insertion.count; offset += 1) {
+      const rowNumber = insertion.row + offset;
+      const row = sourceTemplate.cloneNode(true) as Element;
+      row.setAttribute("r", String(rowNumber));
+      for (const cell of elementChildren(row, "c")) {
+        const column = columnNameFromRef(cell.getAttribute("r") ?? "");
+        if (column) cell.setAttribute("r", `${column}${rowNumber}`);
+      }
+      const nextRow = elementChildren(sheetData, "row").find((candidate) => Number(candidate.getAttribute("r")) > rowNumber);
+      sheetData.insertBefore(row, nextRow ?? null);
+    }
+  }
+  return serializeXml(doc);
+}
+
 function normalizePackagePath(baseFolder: string, target: string): string {
   if (target.startsWith("/")) return target.slice(1);
   const parts = [...baseFolder.split("/"), ...target.split("/")];
@@ -428,7 +490,11 @@ function patchContentTypes(xml: string, mediaNames: string[], hasDrawing: boolea
   return serializeXml(doc);
 }
 
-export async function sanitizeUsaWorkbookBuffer(buffer: ExcelJS.Buffer, templateBuffer: ArrayBuffer): Promise<ArrayBuffer> {
+export async function sanitizeUsaWorkbookBuffer(
+  buffer: ExcelJS.Buffer,
+  templateBuffer: ArrayBuffer,
+  expenseInsertions: UsaExpenseInsertion[] = []
+): Promise<ArrayBuffer> {
   const [generatedZip, outputZip] = await Promise.all([JSZip.loadAsync(zipInput(buffer)), JSZip.loadAsync(zipInput(templateBuffer))]);
   const [templateSheet1, templateSheet2, generatedSheet1, generatedSheet2] = await Promise.all([
     outputZip.file("xl/worksheets/sheet1.xml")?.async("string"),
@@ -440,13 +506,17 @@ export async function sanitizeUsaWorkbookBuffer(buffer: ExcelJS.Buffer, template
   const drawing = await buildCleanDrawingPackage(generatedZip);
   const maxReceiptRow = Math.max(55, ...Array.from(generatedSheet2.cells.keys()).map(rowNumberFromRef).filter(Boolean));
   const expenseRows = Array.from(new Set(Object.values(USA_CATEGORY_ROWS).flat()));
+  const expenseLastRow = USA_EXPENSE_TOTAL_ROW + expenseInsertions.reduce((total, insertion) => total + insertion.count, 0);
+  const expenseTemplate = expandUsaExpenseTemplateXml(templateSheet1, expenseInsertions);
 
   outputZip.file(
     "xl/worksheets/sheet1.xml",
-    patchWorksheetValues(templateSheet1, generatedSheet1, {
+    patchWorksheetValues(expenseTemplate, generatedSheet1, {
       staticRefs: ["A3", "A4", "J1"],
-      rowRanges: [{ start: Math.min(...expenseRows), end: Math.max(...expenseRows), cols: "ABCDEFGH".split(""), templateRow: 7 }],
-      dimensionRef: "A1:J70"
+      rowRanges: expenseInsertions.length
+        ? [{ start: 6, end: expenseLastRow, cols: "ABCDEFGH".split(""), templateRow: 7 }]
+        : [{ start: Math.min(...expenseRows), end: Math.max(...expenseRows), cols: "ABCDEFGH".split(""), templateRow: 7 }],
+      dimensionRef: `A1:J${expenseLastRow}`
     })
   );
   outputZip.file(
@@ -472,7 +542,16 @@ export async function sanitizeUsaWorkbookBuffer(buffer: ExcelJS.Buffer, template
   const contentTypes = outputZip.file("[Content_Types].xml");
   if (contentTypes) outputZip.file("[Content_Types].xml", patchContentTypes(await contentTypes.async("string"), drawing?.mediaNames ?? [], Boolean(drawing)));
   const workbookXml = outputZip.file("xl/workbook.xml");
-  if (workbookXml) outputZip.file("xl/workbook.xml", sanitizeWorkbookXml(await workbookXml.async("string")));
+  if (workbookXml) {
+    let xml = sanitizeWorkbookXml(await workbookXml.async("string"));
+    if (expenseInsertions.length) {
+      xml = xml.replace(
+        /((?:&apos;|')Expense report(?:&apos;|')!\$A\$1:\$J\$)\d+/g,
+        (_match, prefix: string) => `${prefix}${expenseLastRow}`
+      );
+    }
+    outputZip.file("xl/workbook.xml", xml);
+  }
   return outputZip.generateAsync({ type: "arraybuffer", compression: "DEFLATE" });
 }
 
@@ -658,16 +737,112 @@ export interface UsaExpenseRow {
   item: ReceiptItem;
 }
 
-export function mapUsaExpenseRows(items: ReceiptItem[]): UsaExpenseRow[] {
-  const cursors: Record<string, number> = {};
-  return sortReceiptsForReport(items, "USA").map((item) => {
-    const category = categoryForUsa(item);
-    const rows = USA_CATEGORY_ROWS[category] ?? USA_CATEGORY_ROWS.other;
-    const cursor = cursors[category] ?? 0;
-    if (cursor >= rows.length) throw new Error(`Not enough USA rows for ${category}.`);
-    cursors[category] = cursor + 1;
-    return { row: rows[cursor], category, item };
+type UsaExpenseSectionKey = "transportation" | "lodging" | "meals" | "advertising" | "office" | "entertainment";
+
+interface UsaExpenseSectionLayout {
+  key: UsaExpenseSectionKey;
+  headerRow: number;
+  firstDetailRow: number;
+  detailRowCount: number;
+  subtotalRow: number;
+}
+
+interface UsaExpenseLayout {
+  rows: UsaExpenseRow[];
+  sections: UsaExpenseSectionLayout[];
+  insertions: UsaExpenseInsertion[];
+  totalRow: number;
+}
+
+const USA_EXPENSE_SECTIONS: Array<{ key: UsaExpenseSectionKey; categories: string[]; rows: number[] }> = [
+  { key: "transportation", categories: ["transportation"], rows: USA_CATEGORY_ROWS.transportation },
+  { key: "lodging", categories: ["lodging"], rows: USA_CATEGORY_ROWS.lodging },
+  { key: "meals", categories: ["meals"], rows: USA_CATEGORY_ROWS.meals },
+  { key: "advertising", categories: ["advertising"], rows: USA_CATEGORY_ROWS.advertising },
+  { key: "office", categories: ["office", "other"], rows: USA_CATEGORY_ROWS.office },
+  { key: "entertainment", categories: ["entertainment"], rows: USA_CATEGORY_ROWS.entertainment }
+];
+
+function usaExpenseSectionKey(category: string): UsaExpenseSectionKey {
+  return (USA_EXPENSE_SECTIONS.find((section) => section.categories.includes(category))?.key ?? "office") as UsaExpenseSectionKey;
+}
+
+function buildUsaExpenseLayout(items: ReceiptItem[]): UsaExpenseLayout {
+  const categorizedItems = sortReceiptsForReport(items, "USA").map((item) => ({ item, category: categoryForUsa(item) }));
+  const counts = new Map<UsaExpenseSectionKey, number>();
+  for (const { category } of categorizedItems) {
+    const key = usaExpenseSectionKey(category);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+
+  let rowOffset = 0;
+  const insertions: UsaExpenseInsertion[] = [];
+  const sections = USA_EXPENSE_SECTIONS.map((definition) => {
+    const baseCapacity = definition.rows.length;
+    const extraRows = Math.max(0, (counts.get(definition.key) ?? 0) - baseCapacity);
+    const firstDetailRow = definition.rows[0] + rowOffset;
+    const subtotalRow = definition.rows[definition.rows.length - 1] + 1 + rowOffset + extraRows;
+    if (extraRows) insertions.push({ row: subtotalRow - extraRows, count: extraRows });
+    const section: UsaExpenseSectionLayout = {
+      key: definition.key,
+      headerRow: firstDetailRow - 1,
+      firstDetailRow,
+      detailRowCount: baseCapacity + extraRows,
+      subtotalRow
+    };
+    rowOffset += extraRows;
+    return section;
   });
+
+  const sectionByKey = new Map(sections.map((section) => [section.key, section]));
+  const cursors = new Map<UsaExpenseSectionKey, number>();
+  const rows = categorizedItems.map(({ item, category }) => {
+    const key = usaExpenseSectionKey(category);
+    const cursor = cursors.get(key) ?? 0;
+    cursors.set(key, cursor + 1);
+    return { row: sectionByKey.get(key)!.firstDetailRow + cursor, category, item };
+  });
+  return { rows, sections, insertions, totalRow: USA_EXPENSE_TOTAL_ROW + rowOffset };
+}
+
+function applyUsaExpenseLayout(sheet: ExcelJS.Worksheet, layout: UsaExpenseLayout): void {
+  if (!layout.insertions.length) return;
+  for (const ref of USA_EXPENSE_MERGES) sheet.unMergeCells(ref);
+
+  let noteMergeEnd = 62;
+  for (const insertion of layout.insertions) {
+    const sourceRow = sheet.getRow(insertion.row - 1);
+    const sourceHeight = sourceRow.height;
+    const sourceStyles = Array.from({ length: 10 }, (_, index) => sourceRow.getCell(index + 1).style);
+    sheet.spliceRows(insertion.row, 0, ...Array.from({ length: insertion.count }, () => []));
+    for (let offset = 0; offset < insertion.count; offset += 1) {
+      const row = sheet.getRow(insertion.row + offset);
+      row.height = sourceHeight;
+      sourceStyles.forEach((style, index) => {
+        row.getCell(index + 1).style = style;
+      });
+    }
+    if (insertion.row <= noteMergeEnd) noteMergeEnd += insertion.count;
+  }
+
+  for (const section of layout.sections) {
+    sheet.mergeCells(`A${section.subtotalRow}:C${section.subtotalRow}`);
+    sheet.getCell(`G${section.headerRow}`).value = { formula: `F${section.headerRow}*$J$1` };
+    for (let row = section.firstDetailRow; row < section.subtotalRow; row += 1) {
+      sheet.getCell(`G${row}`).value = { formula: `F${row}*$J$1` };
+    }
+    sheet.getCell(`F${section.subtotalRow}`).value = { formula: `SUM(F${section.headerRow}:F${section.subtotalRow - 1})` };
+    sheet.getCell(`G${section.subtotalRow}`).value = { formula: `F${section.subtotalRow}*$J$1` };
+  }
+  sheet.mergeCells(`A${layout.totalRow}:C${layout.totalRow}`);
+  sheet.mergeCells(`H5:H${noteMergeEnd}`);
+  sheet.getCell(`F${layout.totalRow}`).value = { formula: `SUM(${layout.sections.map((section) => `F${section.subtotalRow}`).join(",")})` };
+  sheet.getCell(`G${layout.totalRow}`).value = { formula: `F${layout.totalRow}*$J$1` };
+  sheet.pageSetup.printArea = `A1:J${layout.totalRow}`;
+}
+
+export function mapUsaExpenseRows(items: ReceiptItem[]): UsaExpenseRow[] {
+  return buildUsaExpenseLayout(items).rows;
 }
 
 export interface KoreaDetailRow {
@@ -1014,15 +1189,19 @@ export async function exportUsaWorkbook(items: ReceiptItem[], proofs: PaymentPro
     const item = row.expenseItem ?? row.item;
     return item && row.date.trim() && safeNumber(row.amount) !== undefined ? [item] : [];
   });
+  const expenseLayout = buildUsaExpenseLayout(expenseItems);
+  applyUsaExpenseLayout(expense, expenseLayout);
   expense.getCell("A3").value = `Date / 填表日期： ${new Date().toLocaleDateString("en-US")}`;
   expense.getCell("A4").value = "Employee: / 申请人：";
   expense.getCell("J1").value = rates.usdToRmb;
-  const allRows = Array.from(new Set(Object.values(USA_CATEGORY_ROWS).flat())).sort((a, b) => a - b);
+  const allRows = expenseLayout.sections.flatMap((section) =>
+    Array.from({ length: section.detailRowCount }, (_, index) => section.firstDetailRow + index)
+  );
   clearCells(expense, allRows, ["A", "B", "C", "D", "E", "F", "H"]);
   for (const row of allRows) {
     expense.getCell(`G${row}`).value = { formula: `F${row}*$J$1` };
   }
-  for (const { item, row } of mapUsaExpenseRows(expenseItems)) {
+  for (const { item, row } of expenseLayout.rows) {
     expense.getCell(`A${row}`).value = item.place;
     expense.getCell(`B${row}`).value = item.date;
     expense.getCell(`C${row}`).value = item.details || item.receiptLabel || item.filename;
@@ -1083,7 +1262,7 @@ export async function exportUsaWorkbook(items: ReceiptItem[], proofs: PaymentPro
     );
   }
   const raw = await workbook.xlsx.writeBuffer();
-  const buffer = await sanitizeUsaWorkbookBuffer(raw, templateBuffer);
+  const buffer = await sanitizeUsaWorkbookBuffer(raw, templateBuffer, expenseLayout.insertions);
   if (debug) {
     await downloadWorkbookDebugBundle("usa", raw, buffer, templateBuffer, `reimbursement_usa_debug_${dateStamp()}.zip`);
     return;

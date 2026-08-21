@@ -6,6 +6,7 @@ import { image, receipt } from "./test/factories";
 import {
   buildKoreaReceiptBlocks,
   exportKoreaWorkbook,
+  exportUsaWorkbook,
   koreaDetailContent,
   koreaDetailLocation,
   koreaReceiptFullPageSlot,
@@ -41,6 +42,71 @@ describe("Excel row mapping", () => {
 
     expect(rows.map((row) => row.row)).toEqual([7, 8, 49]);
     expect(rows.map((row) => row.category)).toEqual(["transportation", "transportation", "lodging"]);
+  });
+
+  it("expands a USA category when receipts exceed its template rows", () => {
+    const rows = mapUsaExpenseRows([
+      receipt({ id: "meal-1", category: "meals", purpose: "Dinner", details: "Team dinner" }),
+      receipt({ id: "meal-2", category: "meals", purpose: "Lunch", details: "Team lunch" }),
+      receipt({ id: "meal-3", category: "meals", purpose: "Breakfast", details: "Team breakfast" }),
+      receipt({ id: "ad", category: "advertising", purpose: "Advertising", details: "Advertising fee" }),
+      receipt({ id: "entertainment", category: "entertainment", purpose: "Event", details: "Customer event" })
+    ]);
+
+    expect(rows.map((row) => [row.item.id, row.row])).toEqual([
+      ["meal-1", 54],
+      ["meal-2", 55],
+      ["meal-3", 56],
+      ["ad", 59],
+      ["entertainment", 69]
+    ]);
+  });
+
+  it("exports added USA category rows with shifted subtotals and totals", async () => {
+    const template = readFileSync("public/templates/usa_expense_report_template.xlsx");
+    class TestBlob {
+      parts: Array<ArrayBuffer | ArrayBufferView | string>;
+
+      constructor(parts: Array<ArrayBuffer | ArrayBufferView | string>) {
+        this.parts = parts;
+      }
+
+      async arrayBuffer(): Promise<ArrayBuffer> {
+        const part = this.parts[0];
+        if (part instanceof ArrayBuffer) return part;
+        if (ArrayBuffer.isView(part)) return part.buffer.slice(part.byteOffset, part.byteOffset + part.byteLength) as ArrayBuffer;
+        return new TextEncoder().encode(String(part)).buffer as ArrayBuffer;
+      }
+    }
+    vi.stubGlobal("Blob", TestBlob);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(template)));
+    let downloadedBlob: TestBlob | undefined;
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn((blob: TestBlob) => {
+        downloadedBlob = blob;
+        return "blob:workbook";
+      }),
+      revokeObjectURL: vi.fn()
+    });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+
+    await exportUsaWorkbook(
+      [
+        receipt({ id: "meal-1", category: "meals", purpose: "Dinner", details: "Team dinner", amount: "10", images: [] }),
+        receipt({ id: "meal-2", category: "meals", purpose: "Lunch", details: "Team lunch", amount: "11", images: [] }),
+        receipt({ id: "meal-3", category: "meals", purpose: "Breakfast", details: "Team breakfast", amount: "12", images: [] })
+      ],
+      [],
+      { usdToRmb: 6.8175, usdToKrw: 1548.86, krwToRmb: 0.004402959 }
+    );
+
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(Buffer.from(new Uint8Array(await downloadedBlob!.arrayBuffer())));
+    const expense = workbook.getWorksheet("Expense report")!;
+    expect([expense.getCell("A54").value, expense.getCell("A55").value, expense.getCell("A56").value]).toEqual(["Vendor", "Vendor", "Vendor"]);
+    expect(expense.getCell("F57").value).toEqual({ formula: "SUM(F53:F56)" });
+    expect(expense.getCell("F72").value).toEqual({ formula: "SUM(F47,F52,F57,F60,F67,F71)" });
+    expect(expense.pageSetup.printArea).toBe("A1:J72");
   });
 
   it("maps obvious USA parking expenses to transportation even when AI picked meals", () => {
