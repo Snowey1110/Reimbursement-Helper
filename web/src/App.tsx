@@ -29,6 +29,7 @@ import { exportKoreaWorkbook, exportUsaWorkbook } from "./excelExport";
 import { defaultCropPoints, fileToAttachments, orientedImageDataUrl, orientedImageSize, rotateCropPoints } from "./imageUtils";
 import { CATEGORY_LABELS, LANGUAGE_OPTIONS, normalizeLanguage, text, type AppLanguage } from "./i18n";
 import { applyStoredReceiptMemory, rememberReceiptItem } from "./receiptMemory";
+import { clearReportDraft, loadReportDraft, saveReportDraft } from "./reportDraft";
 import { loadTrackerConfig, loadTrackerStats, trackReportGenerated, type ReportTrackerConfig, type ReportTrackerStats } from "./tracker";
 import type { Category, CropPoint, Currency, DocumentType, ExchangeRates, ImageAttachment, PaymentProof, ReceiptExtraction, ReceiptItem, SelectedTile } from "./types";
 import {
@@ -213,7 +214,7 @@ function readStoredUsaUploadMode(): UsaUploadMode {
 }
 
 export default function App() {
-  const initialUrlSettings = readUrlSettings();
+  const initialUrlSettings = useMemo(() => readUrlSettings(), []);
   const initialLanguage = initialUrlSettings.language ?? readStoredLanguage();
   const excelDebugMode = useMemo(() => readExcelDebugMode(), []);
   const [language, setLanguage] = useState<AppLanguage>(initialLanguage);
@@ -233,6 +234,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
   const [readyForExport, setReadyForExport] = useState(false);
+  const [draftLoaded, setDraftLoaded] = useState(false);
   const [aiConcurrency, setAiConcurrency] = useState(() => clampAiConcurrency(localStorage.getItem(AI_CONCURRENCY_STORAGE_KEY)));
   const [trackerConfig, setTrackerConfig] = useState<ReportTrackerConfig | null>(null);
   const [reportStats, setReportStats] = useState<ReportTrackerStats | null>(null);
@@ -304,6 +306,40 @@ export default function App() {
       // Ignore private browsing or storage-disabled environments.
     }
   }, [aiConcurrency]);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadReportDraft()
+      .then((draft) => {
+        if (cancelled || !draft) return;
+        setItems(draft.items);
+        setProofs(draft.proofs);
+        setExchangeRateImages(draft.exchangeRateImages);
+        setRates(draft.rates);
+        setReadyForExport(draft.readyForExport);
+        if (!initialUrlSettings.formVersion) setFormVersion(draft.formVersion);
+        setStatus(text(initialLanguage, "reportRestored"));
+      })
+      .catch(() => {
+        if (!cancelled) setStatus(text(initialLanguage, "reportRestoreFailed"));
+      })
+      .finally(() => {
+        if (!cancelled) setDraftLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!draftLoaded) return;
+    const timeout = window.setTimeout(() => {
+      saveReportDraft({ formVersion, items, proofs, exchangeRateImages, rates, readyForExport }).catch(() => {
+        setStatus(text(language, "reportSaveFailed"));
+      });
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [draftLoaded, exchangeRateImages, formVersion, items, language, proofs, rates, readyForExport]);
 
   useEffect(() => {
     const readyMessages = LANGUAGE_OPTIONS.map((option) => text(option.value, "ready"));
@@ -637,6 +673,17 @@ export default function App() {
     setSelectedTile(null);
     setReadyForExport(false);
     setStatus(t("removedReceipts", { count: selectedIds.length }));
+  }
+
+  function clearCurrentReport() {
+    setItems([]);
+    setProofs([]);
+    setExchangeRateImages([]);
+    setSelectedIds([]);
+    selectionAnchorIdRef.current = null;
+    setSelectedTile(null);
+    setReadyForExport(false);
+    clearReportDraft().catch(() => setStatus(t("reportSaveFailed")));
   }
 
   function deleteSelectedTile() {
@@ -1110,7 +1157,7 @@ export default function App() {
             <button type="button" onClick={removeSelectedRows} disabled={!selectedIds.length}>
               {t("remove")}
             </button>
-            <button type="button" onClick={() => { setItems([]); setProofs([]); setExchangeRateImages([]); setSelectedIds([]); selectionAnchorIdRef.current = null; setSelectedTile(null); setReadyForExport(false); }}>
+            <button type="button" onClick={clearCurrentReport}>
               {t("clear")}
             </button>
           </div>

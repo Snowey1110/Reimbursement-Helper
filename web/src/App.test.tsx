@@ -1,5 +1,15 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { receipt } from "./test/factories";
+
+const reportDraftMocks = vi.hoisted(() => ({
+  loadReportDraft: vi.fn(),
+  saveReportDraft: vi.fn(),
+  clearReportDraft: vi.fn()
+}));
+
+vi.mock("./reportDraft", () => reportDraftMocks);
+
 import App from "./App";
 import { FORM_VERSION_STORAGE_KEY, LANGUAGE_STORAGE_KEY } from "./constants";
 import type { ImageAttachment } from "./types";
@@ -37,6 +47,12 @@ describe("Reimbursement Helper web app", () => {
     HTMLElement.prototype.releasePointerCapture = vi.fn();
   });
 
+  beforeEach(() => {
+    reportDraftMocks.loadReportDraft.mockReset().mockResolvedValue(undefined);
+    reportDraftMocks.saveReportDraft.mockReset().mockResolvedValue(undefined);
+    reportDraftMocks.clearReportDraft.mockReset().mockResolvedValue(undefined);
+  });
+
   afterEach(() => {
     cleanup();
     localStorage.clear();
@@ -50,6 +66,44 @@ describe("Reimbursement Helper web app", () => {
     render(<App />);
 
     expect(screen.getByLabelText("Form")).toHaveValue("Korea");
+  });
+
+  it("restores a locally saved report after the page reloads", async () => {
+    reportDraftMocks.loadReportDraft.mockResolvedValue({
+      version: 1,
+      savedAt: Date.now(),
+      formVersion: "USA",
+      items: [receipt({ id: "saved", filename: "saved-receipt.png" })],
+      proofs: [],
+      exchangeRateImages: [],
+      rates: { usdToRmb: 6.9, usdToKrw: 1500, krwToRmb: 0.0045 },
+      readyForExport: false
+    });
+
+    render(<App />);
+
+    expect((await screen.findAllByText("saved-receipt.png")).length).toBeGreaterThan(0);
+    expect(screen.getByText("Restored your locally saved report.")).toBeInTheDocument();
+  });
+
+  it("autosaves uploaded receipts and clears the saved report with Clear", async () => {
+    render(<App />);
+    const receiptInput = document.querySelector('input[type="file"][accept="image/*,.pdf"]') as HTMLInputElement;
+    fireEvent.change(receiptInput, {
+      target: { files: [new File(["one"], "saved-on-refresh.png", { type: "image/png" })] }
+    });
+
+    await screen.findAllByText("saved-on-refresh.png");
+    await waitFor(
+      () =>
+        expect(reportDraftMocks.saveReportDraft).toHaveBeenCalledWith(
+          expect.objectContaining({ items: expect.arrayContaining([expect.objectContaining({ filename: "saved-on-refresh.png" })]) })
+        ),
+      { timeout: 2000 }
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    expect(reportDraftMocks.clearReportDraft).toHaveBeenCalledOnce();
   });
 
   it("uses URL form and language settings for shareable links", async () => {
