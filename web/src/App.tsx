@@ -235,6 +235,7 @@ export default function App() {
   const [progress, setProgress] = useState(0);
   const [readyForExport, setReadyForExport] = useState(false);
   const [draftLoaded, setDraftLoaded] = useState(false);
+  const [draftRestoreFailed, setDraftRestoreFailed] = useState(false);
   const [aiConcurrency, setAiConcurrency] = useState(() => clampAiConcurrency(localStorage.getItem(AI_CONCURRENCY_STORAGE_KEY)));
   const [trackerConfig, setTrackerConfig] = useState<ReportTrackerConfig | null>(null);
   const [reportStats, setReportStats] = useState<ReportTrackerStats | null>(null);
@@ -242,6 +243,8 @@ export default function App() {
   const proofInputRef = useRef<HTMLInputElement>(null);
   const exchangeRateInputRef = useRef<HTMLInputElement>(null);
   const selectionAnchorIdRef = useRef<string | null>(null);
+  const draftHasContentRef = useRef(false);
+  const restoringDraftRef = useRef(false);
 
   const selectedItem = selectedIds.length ? items.find((item) => item.id === selectedIds[selectedIds.length - 1]) ?? null : null;
   const selectedProofs = selectedItem ? proofs.filter((proof) => proof.matchedReceiptId === selectedItem.id) : [];
@@ -311,20 +314,26 @@ export default function App() {
     let cancelled = false;
     loadReportDraft()
       .then((draft) => {
-        if (cancelled || !draft) return;
-        setItems(draft.items);
-        setProofs(draft.proofs);
-        setExchangeRateImages(draft.exchangeRateImages);
-        setRates(draft.rates);
-        setReadyForExport(draft.readyForExport);
-        if (!initialUrlSettings.formVersion) setFormVersion(draft.formVersion);
-        setStatus(text(initialLanguage, "reportRestored"));
+        if (cancelled) return;
+        if (draft) {
+          restoringDraftRef.current = true;
+          draftHasContentRef.current = Boolean(draft.items.length || draft.proofs.length || draft.exchangeRateImages.length);
+          setItems(draft.items);
+          setProofs(draft.proofs);
+          setExchangeRateImages(draft.exchangeRateImages);
+          setRates(draft.rates);
+          setReadyForExport(draft.readyForExport);
+          // URL presets apply to new reports; recovery must keep the saved report's form.
+          setFormVersion(draft.formVersion);
+          setStatus(text(initialLanguage, "reportRestored"));
+        }
+        setDraftLoaded(true);
       })
       .catch(() => {
-        if (!cancelled) setStatus(text(initialLanguage, "reportRestoreFailed"));
-      })
-      .finally(() => {
-        if (!cancelled) setDraftLoaded(true);
+        if (cancelled) return;
+        // A failed read must never authorize overwriting a draft we could not recover.
+        setDraftRestoreFailed(true);
+        setStatus(text(initialLanguage, "reportRestoreFailed"));
       });
     return () => {
       cancelled = true;
@@ -333,6 +342,14 @@ export default function App() {
 
   useEffect(() => {
     if (!draftLoaded) return;
+    if (!items.length && !proofs.length && !exchangeRateImages.length) {
+      if (draftHasContentRef.current) {
+        draftHasContentRef.current = false;
+        clearReportDraft().catch(() => setStatus(text(language, "reportSaveFailed")));
+      }
+      return;
+    }
+    draftHasContentRef.current = true;
     const timeout = window.setTimeout(() => {
       saveReportDraft({ formVersion, items, proofs, exchangeRateImages, rates, readyForExport }).catch(() => {
         setStatus(text(language, "reportSaveFailed"));
@@ -361,6 +378,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (restoringDraftRef.current) {
+      restoringDraftRef.current = false;
+      return;
+    }
     setItems((current) =>
       current.map((item) =>
         updateAmounts(
@@ -416,7 +437,7 @@ export default function App() {
   }
 
   async function addReceiptFiles(files: FileList | null) {
-    if (!files?.length) return;
+    if (!draftLoaded || !files?.length) return;
     setBusy(true);
     setReadyForExport(false);
     try {
@@ -446,7 +467,7 @@ export default function App() {
   }
 
   async function addProofFiles(files: FileList | null) {
-    if (!files?.length) return;
+    if (!draftLoaded || !files?.length) return;
     setBusy(true);
     setReadyForExport(false);
     try {
@@ -472,7 +493,7 @@ export default function App() {
   }
 
   async function addExchangeRateFiles(files: FileList | null) {
-    if (!files?.length) return;
+    if (!draftLoaded || !files?.length) return;
     setBusy(true);
     setReadyForExport(false);
     try {
@@ -676,6 +697,10 @@ export default function App() {
   }
 
   function clearCurrentReport() {
+    if (!draftLoaded && !draftRestoreFailed) return;
+    draftHasContentRef.current = false;
+    setDraftRestoreFailed(false);
+    setDraftLoaded(true);
     setItems([]);
     setProofs([]);
     setExchangeRateImages([]);
@@ -683,6 +708,7 @@ export default function App() {
     selectionAnchorIdRef.current = null;
     setSelectedTile(null);
     setReadyForExport(false);
+    setStatus(t("ready"));
     clearReportDraft().catch(() => setStatus(t("reportSaveFailed")));
   }
 
@@ -1070,6 +1096,7 @@ export default function App() {
           {t("form")}
           <select
             value={formVersion}
+            disabled={!draftLoaded}
             onChange={(event) => {
               setFormVersion(event.target.value as FormVersion);
               setReadyForExport(false);
@@ -1098,7 +1125,7 @@ export default function App() {
             </select>
           </label>
         )}
-        <button type="button" className={suggestedAction === "selectFiles" ? "recommended" : ""} onClick={() => receiptInputRef.current?.click()} disabled={busy}>
+        <button type="button" className={suggestedAction === "selectFiles" ? "recommended" : ""} onClick={() => receiptInputRef.current?.click()} disabled={busy || !draftLoaded}>
           <Upload size={17} /> {formVersion === "USA" ? t("selectReceipts") : t("selectFiles")}
         </button>
         {formVersion === "Korea" && (
@@ -1106,7 +1133,7 @@ export default function App() {
             type="button"
             className={suggestedAction === "selectExchangeRate" ? "recommended" : ""}
             onClick={() => exchangeRateInputRef.current?.click()}
-            disabled={busy}
+            disabled={busy || !draftLoaded}
           >
             <Upload size={17} /> {t("selectExchangeRate")}
           </button>
@@ -1157,7 +1184,7 @@ export default function App() {
             <button type="button" onClick={removeSelectedRows} disabled={!selectedIds.length}>
               {t("remove")}
             </button>
-            <button type="button" onClick={clearCurrentReport}>
+            <button type="button" onClick={clearCurrentReport} disabled={!draftLoaded && !draftRestoreFailed}>
               {t("clear")}
             </button>
           </div>
@@ -1169,19 +1196,19 @@ export default function App() {
             {formVersion === "USA" && (
               <label>
                 {t("usdToRmb")}
-                <input type="number" value={rates.usdToRmb} step="0.0001" onChange={(event) => setRates({ ...rates, usdToRmb: Number(event.target.value) })} />
+                <input type="number" value={rates.usdToRmb} disabled={!draftLoaded} step="0.0001" onChange={(event) => setRates({ ...rates, usdToRmb: Number(event.target.value) })} />
               </label>
             )}
             {formVersion === "Korea" && (
               <label>
                 {t("usdToKrw")}
-                <input type="number" value={rates.usdToKrw} step="0.01" onChange={(event) => setRates({ ...rates, usdToKrw: Number(event.target.value) })} />
+                <input type="number" value={rates.usdToKrw} disabled={!draftLoaded} step="0.01" onChange={(event) => setRates({ ...rates, usdToKrw: Number(event.target.value) })} />
               </label>
             )}
             {formVersion === "Korea" && (
               <label>
                 {t("krwToRmb")}
-                <input type="number" value={rates.krwToRmb} step="0.000001" onChange={(event) => setRates({ ...rates, krwToRmb: Number(event.target.value) })} />
+                <input type="number" value={rates.krwToRmb} disabled={!draftLoaded} step="0.000001" onChange={(event) => setRates({ ...rates, krwToRmb: Number(event.target.value) })} />
               </label>
             )}
           </div>

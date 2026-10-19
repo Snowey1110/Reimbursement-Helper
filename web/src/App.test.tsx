@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { receipt } from "./test/factories";
 
@@ -55,15 +55,16 @@ describe("Reimbursement Helper web app", () => {
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     localStorage.clear();
     sessionStorage.clear();
     window.history.pushState({}, "", "/");
   });
 
-  it("starts with the last selected form version", () => {
+  it("starts with the last selected form version", async () => {
     localStorage.setItem(FORM_VERSION_STORAGE_KEY, "Korea");
 
-    render(<App />);
+    await act(async () => { render(<App />); });
 
     expect(screen.getByLabelText("Form")).toHaveValue("Korea");
   });
@@ -80,14 +81,14 @@ describe("Reimbursement Helper web app", () => {
       readyForExport: false
     });
 
-    render(<App />);
+    await act(async () => { render(<App />); });
 
     expect((await screen.findAllByText("saved-receipt.png")).length).toBeGreaterThan(0);
     expect(screen.getByText("Restored your locally saved report.")).toBeInTheDocument();
   });
 
   it("autosaves uploaded receipts and clears the saved report with Clear", async () => {
-    render(<App />);
+    await act(async () => { render(<App />); });
     const receiptInput = document.querySelector('input[type="file"][accept="image/*,.pdf"]') as HTMLInputElement;
     fireEvent.change(receiptInput, {
       target: { files: [new File(["one"], "saved-on-refresh.png", { type: "image/png" })] }
@@ -106,26 +107,123 @@ describe("Reimbursement Helper web app", () => {
     expect(reportDraftMocks.clearReportDraft).toHaveBeenCalledOnce();
   });
 
+  it("waits for draft recovery before enabling report changes", async () => {
+    let resolveDraft!: (draft: undefined) => void;
+    reportDraftMocks.loadReportDraft.mockReturnValue(new Promise((resolve) => { resolveDraft = resolve; }));
+    render(<App />);
+
+    expect(screen.getByRole("button", { name: /Select Receipts/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Clear" })).toBeDisabled();
+    expect(screen.getByLabelText("Form")).toBeDisabled();
+    expect(screen.getByLabelText("USD -> RMB")).toBeDisabled();
+    expect(reportDraftMocks.saveReportDraft).not.toHaveBeenCalled();
+
+    await act(async () => { resolveDraft(undefined); });
+
+    expect(screen.getByRole("button", { name: /Select Receipts/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Clear" })).toBeEnabled();
+  });
+
+  it("preserves the stored draft after failed recovery until Clear starts a new report", async () => {
+    vi.useFakeTimers();
+    reportDraftMocks.loadReportDraft.mockRejectedValue(new Error("Read failed"));
+    await act(async () => { render(<App />); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+
+    expect(screen.getByText(/Could not restore the locally saved report/)).toBeInTheDocument();
+    expect(reportDraftMocks.saveReportDraft).not.toHaveBeenCalled();
+    expect(reportDraftMocks.clearReportDraft).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /Select Receipts/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Clear" })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    expect(reportDraftMocks.clearReportDraft).toHaveBeenCalledOnce();
+    expect(screen.getByRole("button", { name: /Select Receipts/ })).toBeEnabled();
+
+    const receiptInput = document.querySelector('input[type="file"][accept="image/*,.pdf"]') as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(receiptInput, { target: { files: [new File(["new"], "new-report.png", { type: "image/png" })] } });
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(reportDraftMocks.saveReportDraft).toHaveBeenCalledWith(
+      expect.objectContaining({ items: expect.arrayContaining([expect.objectContaining({ filename: "new-report.png" })]) })
+    );
+  });
+
+  it("does not recreate a cleared draft or save an empty report on startup", async () => {
+    vi.useFakeTimers();
+    await act(async () => { render(<App />); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(reportDraftMocks.saveReportDraft).not.toHaveBeenCalled();
+    expect(reportDraftMocks.clearReportDraft).not.toHaveBeenCalled();
+
+    const receiptInput = document.querySelector('input[type="file"][accept="image/*,.pdf"]') as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(receiptInput, { target: { files: [new File(["new"], "clear-me.png", { type: "image/png" })] } });
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    reportDraftMocks.saveReportDraft.mockClear();
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(reportDraftMocks.clearReportDraft).toHaveBeenCalledOnce();
+    expect(reportDraftMocks.saveReportDraft).not.toHaveBeenCalled();
+  });
+
+  it("cancels a pending autosave when Clear is clicked", async () => {
+    vi.useFakeTimers();
+    await act(async () => { render(<App />); });
+    const receiptInput = document.querySelector('input[type="file"][accept="image/*,.pdf"]') as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(receiptInput, { target: { files: [new File(["new"], "pending.png", { type: "image/png" })] } });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+
+    expect(reportDraftMocks.clearReportDraft).toHaveBeenCalledOnce();
+    expect(reportDraftMocks.saveReportDraft).not.toHaveBeenCalled();
+  });
+
+  it("clears the stored draft when the last report content is removed", async () => {
+    vi.useFakeTimers();
+    await act(async () => { render(<App />); });
+    const receiptInput = document.querySelector('input[type="file"][accept="image/*,.pdf"]') as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(receiptInput, { target: { files: [new File(["new"], "remove-last.png", { type: "image/png" })] } });
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    reportDraftMocks.saveReportDraft.mockClear();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove", exact: true }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+
+    expect(reportDraftMocks.clearReportDraft).toHaveBeenCalledOnce();
+    expect(reportDraftMocks.saveReportDraft).not.toHaveBeenCalled();
+    confirm.mockRestore();
+  });
+
   it("uses URL form and language settings for shareable links", async () => {
     localStorage.setItem(FORM_VERSION_STORAGE_KEY, "USA");
     localStorage.setItem(LANGUAGE_STORAGE_KEY, "en");
     window.history.pushState({}, "", "/?form=Korea&lang=zh");
 
-    render(<App />);
+    await act(async () => { render(<App />); });
 
     expect((document.querySelector(".toolbar-control select") as HTMLSelectElement).value).toBe("Korea");
     await waitFor(() => expect(localStorage.getItem(LANGUAGE_STORAGE_KEY)).toBe("zh"));
   });
 
-  it("does not expose the model selector in the web UI", () => {
-    render(<App />);
+  it("does not expose the model selector in the web UI", async () => {
+    await act(async () => { render(<App />); });
 
     expect(screen.queryByLabelText("Model")).not.toBeInTheDocument();
     expect(screen.queryByDisplayValue("gpt-5.4-mini")).not.toBeInTheDocument();
   });
 
-  it("uses one USA receipt upload button and Generate Empty", () => {
-    render(<App />);
+  it("uses one USA receipt upload button and Generate Empty", async () => {
+    await act(async () => { render(<App />); });
 
     expect(screen.getByRole("button", { name: /Select Receipts/ })).toBeInTheDocument();
     expect(screen.getByLabelText("Import as")).toHaveValue("auto");
@@ -134,7 +232,7 @@ describe("Reimbursement Helper web app", () => {
   });
 
   it("can force selected USA uploads to payment proof rows", async () => {
-    render(<App />);
+    await act(async () => { render(<App />); });
 
     fireEvent.change(screen.getByLabelText("Import as"), { target: { value: "payment_proof" } });
     const receiptInput = document.querySelector('input[type="file"][accept="image/*,.pdf"]') as HTMLInputElement;
@@ -151,7 +249,7 @@ describe("Reimbursement Helper web app", () => {
   });
 
   it("recommends Generate All after USA receipt files are selected", async () => {
-    render(<App />);
+    await act(async () => { render(<App />); });
 
     const receiptInput = document.querySelector('input[type="file"][accept="image/*,.pdf"]') as HTMLInputElement;
     fireEvent.change(receiptInput, {
@@ -167,7 +265,7 @@ describe("Reimbursement Helper web app", () => {
 
   it("recommends the Korea exchange-rate image after receipts are selected", async () => {
     localStorage.setItem(FORM_VERSION_STORAGE_KEY, "Korea");
-    render(<App />);
+    await act(async () => { render(<App />); });
 
     const receiptInput = document.querySelector('input[type="file"][accept="image/*,.pdf"]') as HTMLInputElement;
     fireEvent.change(receiptInput, {
@@ -184,11 +282,11 @@ describe("Reimbursement Helper web app", () => {
     expect(screen.queryByLabelText("USD -> RMB")).not.toBeInTheDocument();
   });
 
-  it("persists language and avoids mixed exchange-rate labels", () => {
+  it("persists language and avoids mixed exchange-rate labels", async () => {
     localStorage.setItem(FORM_VERSION_STORAGE_KEY, "Korea");
     localStorage.setItem(LANGUAGE_STORAGE_KEY, "zh");
 
-    render(<App />);
+    await act(async () => { render(<App />); });
 
     expect(screen.getByLabelText("语言")).toHaveValue("zh");
     expect(screen.getByRole("button", { name: /选择汇率图片/ })).toBeInTheDocument();
@@ -196,7 +294,7 @@ describe("Reimbursement Helper web app", () => {
   });
 
   it("selects all receipt rows with Ctrl+A and bulk edits project number", async () => {
-    render(<App />);
+    await act(async () => { render(<App />); });
 
     const receiptInput = document.querySelector('input[type="file"][accept="image/*,.pdf"]') as HTMLInputElement;
     fireEvent.change(receiptInput, {
@@ -222,7 +320,7 @@ describe("Reimbursement Helper web app", () => {
   });
 
   it("selects the receipt range between normal click and Shift-click", async () => {
-    render(<App />);
+    await act(async () => { render(<App />); });
 
     const receiptInput = document.querySelector('input[type="file"][accept="image/*,.pdf"]') as HTMLInputElement;
     fireEvent.change(receiptInput, {
@@ -251,24 +349,24 @@ describe("Reimbursement Helper web app", () => {
     });
   });
 
-  it("shows direct template download links", () => {
-    render(<App />);
+  it("shows direct template download links", async () => {
+    await act(async () => { render(<App />); });
 
     expect(screen.getByRole("link", { name: "USA" })).toHaveAttribute("href", "./templates/usa_expense_report_template.xlsx");
     expect(screen.getByRole("link", { name: "Korea" })).toHaveAttribute("href", "./templates/korea_reimbursement_template.xlsx");
     expect(screen.queryByRole("button", { name: /Debug Excel from template/i })).not.toBeInTheDocument();
   });
 
-  it("shows the debug Excel tool only on the debug URL", () => {
+  it("shows the debug Excel tool only on the debug URL", async () => {
     window.history.pushState({}, "", "/debug");
 
-    render(<App />);
+    await act(async () => { render(<App />); });
 
     expect(screen.getByRole("button", { name: /Debug Excel from template/i })).toBeInTheDocument();
   });
 
   it("shows uploaded receipts in one large editable crop page", async () => {
-    render(<App />);
+    await act(async () => { render(<App />); });
 
     const receiptInput = document.querySelector('input[type="file"][accept="image/*,.pdf"]') as HTMLInputElement;
     fireEvent.change(receiptInput, {
@@ -285,7 +383,7 @@ describe("Reimbursement Helper web app", () => {
   });
 
   it("drags one crop corner without moving the next corner", async () => {
-    render(<App />);
+    await act(async () => { render(<App />); });
 
     const receiptInput = document.querySelector('input[type="file"][accept="image/*,.pdf"]') as HTMLInputElement;
     fireEvent.change(receiptInput, {
@@ -323,7 +421,7 @@ describe("Reimbursement Helper web app", () => {
   });
 
   it("copies a selected receipt row screenshot and pastes it into another receipt", async () => {
-    render(<App />);
+    await act(async () => { render(<App />); });
 
     const receiptInput = document.querySelector('input[type="file"][accept="image/*,.pdf"]') as HTMLInputElement;
     fireEvent.change(receiptInput, {
@@ -346,7 +444,7 @@ describe("Reimbursement Helper web app", () => {
   });
 
   it("cuts a selected receipt row screenshot only after pasting it into another receipt", async () => {
-    render(<App />);
+    await act(async () => { render(<App />); });
 
     const receiptInput = document.querySelector('input[type="file"][accept="image/*,.pdf"]') as HTMLInputElement;
     fireEvent.change(receiptInput, {
@@ -371,7 +469,7 @@ describe("Reimbursement Helper web app", () => {
   });
 
   it("pastes USA payment proof rows as matched proof items instead of receipt screenshots", async () => {
-    render(<App />);
+    await act(async () => { render(<App />); });
 
     const receiptInput = document.querySelector('input[type="file"][accept="image/*,.pdf"]') as HTMLInputElement;
     fireEvent.change(receiptInput, {
